@@ -161,9 +161,9 @@ impl Parser {
                 print!("action = execute\n");
             }
 
-            (State::CsiEntry, '\u{40}'...'\u{7e}') => {
-                self.state = State::Ground;
-                print!("action = csi-dispatch\n");
+            (State::CsiEntry, '\u{20}'...'\u{2f}') => {
+                self.state = State::CsiIntermediate;
+                print!("action = collect\n");
             }
 
             (State::CsiEntry, '\u{30}'...'\u{39}') | (State::CsiEntry, '\u{3b}') => {
@@ -171,18 +171,18 @@ impl Parser {
                 print!("action = param\n");
             }
 
+            (State::CsiEntry, '\u{3a}') => {
+                self.state = State::CsiIgnore;
+            }
+
             (State::CsiEntry, '\u{3c}'...'\u{3f}') => {
                 self.state = State::CsiParam;
                 print!("action = collect\n");
             }
 
-            (State::CsiEntry, '\u{3a}') => {
-                self.state = State::CsiIgnore;
-            }
-
-            (State::CsiEntry, '\u{20}'...'\u{2f}') => {
-                self.state = State::CsiIntermediate;
-                print!("action = collect\n");
+            (State::CsiEntry, '\u{40}'...'\u{7e}') => {
+                self.state = State::Ground;
+                print!("action = csi-dispatch\n");
             }
 
             (State::CsiEntry, '\u{7f}') => {
@@ -198,17 +198,17 @@ impl Parser {
                 print!("action = execute\n");
             }
 
+            (State::CsiParam, '\u{20}'...'\u{2f}') => {
+                self.state = State::CsiIntermediate;
+                print!("action = collect\n");
+            }
+
             (State::CsiParam, '\u{30}'...'\u{39}') | (State::CsiParam, '\u{3b}') => {
                 print!("action = param\n");
             }
 
             (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'...'\u{3f}') => {
                 self.state = State::CsiIgnore;
-            }
-
-            (State::CsiParam, '\u{20}'...'\u{2f}') => {
-                self.state = State::CsiIntermediate;
-                print!("action = collect\n");
             }
 
             (State::CsiParam, '\u{40}'...'\u{7e}') => {
@@ -281,10 +281,6 @@ impl Parser {
                 print!("action = collect\n");
             }
 
-            (State::DcsEntry, '\u{3a}') => {
-                self.state = State::DcsIgnore;
-            }
-
             (State::DcsEntry, '\u{30}'...'\u{39}') | (State::DcsEntry, '\u{3b}') => {
                 self.state = State::DcsParam;
                 print!("action = param\n");
@@ -293,6 +289,10 @@ impl Parser {
             (State::DcsEntry, '\u{3c}'...'\u{3f}') => {
                 self.state = State::DcsParam;
                 print!("action = collect\n");
+            }
+
+            (State::DcsEntry, '\u{3a}') => {
+                self.state = State::DcsIgnore;
             }
 
             (State::DcsEntry, '\u{40}'...'\u{7e}') => {
@@ -398,13 +398,13 @@ impl Parser {
                 print!("action = ignore\n");
             }
 
-            (State::OscString, '\u{20}'...'\u{7f}') => {
-                print!("action = osc-put\n");
-            }
-
             (State::OscString, '\u{07}') => {
                 // 0x07 is xterm non-ANSI variant of transition to ground
                 self.state = State::Ground;
+            }
+
+            (State::OscString, '\u{20}'...'\u{7f}') => {
+                print!("action = osc-put\n");
             }
 
             // SosPmApcString
