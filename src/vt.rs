@@ -35,8 +35,6 @@ impl VT {
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
-            (_, '\u{a0}'...'\u{10ffff}') => {}
-
             // Anywhere
             (_, '\u{18}')
             | (_, '\u{1a}')
