@@ -1,9 +1,9 @@
-mod parser;
+mod vt;
 
 fn main() {
-    let mut parser = parser::Parser::new();
-    parser.feed('\x1b');
-    parser.feed('\x18');
-    parser.feed('\x21');
-    println!("{:?}", parser);
+    let mut vt = vt::VT::new();
+    vt.feed('\x1b');
+    vt.feed('\x18');
+    vt.feed('\x21');
+    println!("{:?}", vt);
 }

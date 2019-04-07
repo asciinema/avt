@@ -20,13 +20,13 @@ enum State {
 }
 
 #[derive(Debug)]
-pub struct Parser {
+pub struct VT {
     state: State,
 }
 
-impl Parser {
-    pub fn new() -> Parser {
-        Parser {
+impl VT {
+    pub fn new() -> Self {
+        VT {
             state: State::Ground,
         }
     }
@@ -45,7 +45,7 @@ impl Parser {
             | (_, '\u{99}')
             | (_, '\u{9a}') => {
                 self.state = State::Ground;
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (_, '\u{1b}') => {
@@ -78,12 +78,12 @@ impl Parser {
             (State::Ground, '\u{00}'...'\u{17}')
             | (State::Ground, '\u{19}')
             | (State::Ground, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::Ground, '\u{20}'...'\u{7f}') => {
                 // (State::Ground, '\u{a0}'...'\u{ff}') => {
-                print!("action = print\n");
+                self.print(input);
             }
 
             // Escape
@@ -92,12 +92,12 @@ impl Parser {
             (State::Escape, '\u{00}'...'\u{17}')
             | (State::Escape, '\u{19}')
             | (State::Escape, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::Escape, '\u{20}'...'\u{2f}') => {
                 self.state = State::EscapeIntermediate;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::Escape, '\u{30}'...'\u{4f}')
@@ -107,7 +107,7 @@ impl Parser {
             | (State::Escape, '\u{5c}')
             | (State::Escape, '\u{60}'...'\u{7e}') => {
                 self.state = State::Ground;
-                print!("action = esc-dispatch\n");
+                self.esc_dispatch(input);
             }
 
             (State::Escape, '\u{50}') => {
@@ -127,7 +127,7 @@ impl Parser {
             }
 
             (State::Escape, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // EscapeIntermediate
@@ -136,20 +136,20 @@ impl Parser {
             (State::EscapeIntermediate, '\u{00}'...'\u{17}')
             | (State::EscapeIntermediate, '\u{19}')
             | (State::EscapeIntermediate, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::EscapeIntermediate, '\u{20}'...'\u{2f}') => {
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::EscapeIntermediate, '\u{30}'...'\u{7e}') => {
                 self.state = State::Ground;
-                print!("action = esc-dispatch\n");
+                self.esc_dispatch(input);
             }
 
             (State::EscapeIntermediate, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // CsiEntry
@@ -158,17 +158,17 @@ impl Parser {
             (State::CsiEntry, '\u{00}'...'\u{17}')
             | (State::CsiEntry, '\u{19}')
             | (State::CsiEntry, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::CsiEntry, '\u{20}'...'\u{2f}') => {
                 self.state = State::CsiIntermediate;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::CsiEntry, '\u{30}'...'\u{39}') | (State::CsiEntry, '\u{3b}') => {
                 self.state = State::CsiParam;
-                print!("action = param\n");
+                self.param(input);
             }
 
             (State::CsiEntry, '\u{3a}') => {
@@ -177,16 +177,16 @@ impl Parser {
 
             (State::CsiEntry, '\u{3c}'...'\u{3f}') => {
                 self.state = State::CsiParam;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::CsiEntry, '\u{40}'...'\u{7e}') => {
                 self.state = State::Ground;
-                print!("action = csi-dispatch\n");
+                self.csi_dispatch(input);
             }
 
             (State::CsiEntry, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // CsiParam
@@ -195,16 +195,16 @@ impl Parser {
             (State::CsiParam, '\u{00}'...'\u{17}')
             | (State::CsiParam, '\u{19}')
             | (State::CsiParam, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::CsiParam, '\u{20}'...'\u{2f}') => {
                 self.state = State::CsiIntermediate;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::CsiParam, '\u{30}'...'\u{39}') | (State::CsiParam, '\u{3b}') => {
-                print!("action = param\n");
+                self.param(input);
             }
 
             (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'...'\u{3f}') => {
@@ -213,11 +213,11 @@ impl Parser {
 
             (State::CsiParam, '\u{40}'...'\u{7e}') => {
                 self.state = State::Ground;
-                print!("action = csi-dispatch\n");
+                self.csi_dispatch(input);
             }
 
             (State::CsiParam, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // CsiIntermediate
@@ -226,11 +226,11 @@ impl Parser {
             (State::CsiIntermediate, '\u{00}'...'\u{17}')
             | (State::CsiIntermediate, '\u{19}')
             | (State::CsiIntermediate, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::CsiIntermediate, '\u{20}'...'\u{2f}') => {
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::CsiIntermediate, '\u{30}'...'\u{3f}') => {
@@ -239,11 +239,11 @@ impl Parser {
 
             (State::CsiIntermediate, '\u{40}'...'\u{7e}') => {
                 self.state = State::Ground;
-                print!("action = csi-dispatch\n");
+                self.csi_dispatch(input);
             }
 
             (State::CsiIntermediate, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // CsiIgnore
@@ -252,11 +252,11 @@ impl Parser {
             (State::CsiIgnore, '\u{00}'...'\u{17}')
             | (State::CsiIgnore, '\u{19}')
             | (State::CsiIgnore, '\u{1c}'...'\u{1f}') => {
-                print!("action = execute\n");
+                self.execute(input);
             }
 
             (State::CsiIgnore, '\u{20}'...'\u{3f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::CsiIgnore, '\u{40}'...'\u{7e}') => {
@@ -264,7 +264,7 @@ impl Parser {
             }
 
             (State::CsiIgnore, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // DcsEntry
@@ -273,22 +273,22 @@ impl Parser {
             (State::DcsEntry, '\u{00}'...'\u{17}')
             | (State::DcsEntry, '\u{19}')
             | (State::DcsEntry, '\u{1c}'...'\u{1f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::DcsEntry, '\u{20}'...'\u{2f}') => {
                 self.state = State::DcsIntermediate;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::DcsEntry, '\u{30}'...'\u{39}') | (State::DcsEntry, '\u{3b}') => {
                 self.state = State::DcsParam;
-                print!("action = param\n");
+                self.param(input);
             }
 
             (State::DcsEntry, '\u{3c}'...'\u{3f}') => {
                 self.state = State::DcsParam;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::DcsEntry, '\u{3a}') => {
@@ -300,7 +300,7 @@ impl Parser {
             }
 
             (State::DcsEntry, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // DcsParam
@@ -309,16 +309,16 @@ impl Parser {
             (State::DcsParam, '\u{00}'...'\u{17}')
             | (State::DcsParam, '\u{19}')
             | (State::DcsParam, '\u{1c}'...'\u{1f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::DcsParam, '\u{20}'...'\u{2f}') => {
                 self.state = State::DcsIntermediate;
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::DcsParam, '\u{30}'...'\u{39}') | (State::DcsParam, '\u{3b}') => {
-                print!("action = param\n");
+                self.param(input);
             }
 
             (State::DcsParam, '\u{3a}') | (State::DcsParam, '\u{3c}'...'\u{3f}') => {
@@ -330,7 +330,7 @@ impl Parser {
             }
 
             (State::DcsParam, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // DcsIntermediate
@@ -339,11 +339,11 @@ impl Parser {
             (State::DcsIntermediate, '\u{00}'...'\u{17}')
             | (State::DcsIntermediate, '\u{19}')
             | (State::DcsIntermediate, '\u{1c}'...'\u{1f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::DcsIntermediate, '\u{20}'...'\u{2f}') => {
-                print!("action = collect\n");
+                self.collect(input);
             }
 
             (State::DcsIntermediate, '\u{30}'...'\u{3f}') => {
@@ -355,7 +355,7 @@ impl Parser {
             }
 
             (State::DcsIntermediate, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // DcsPassthrough
@@ -364,15 +364,15 @@ impl Parser {
             (State::DcsPassthrough, '\u{00}'...'\u{17}')
             | (State::DcsPassthrough, '\u{19}')
             | (State::DcsPassthrough, '\u{1c}'...'\u{1f}') => {
-                print!("action = put\n");
+                self.put(input);
             }
 
             (State::DcsPassthrough, '\u{20}'...'\u{7e}') => {
-                print!("action = put\n");
+                self.put(input);
             }
 
             (State::DcsPassthrough, '\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // DcsIgnore
@@ -381,11 +381,11 @@ impl Parser {
             (State::DcsIgnore, '\u{00}'...'\u{17}')
             | (State::DcsIgnore, '\u{19}')
             | (State::DcsIgnore, '\u{1c}'...'\u{1f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::DcsIgnore, '\u{20}'...'\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             // OscString
@@ -395,7 +395,7 @@ impl Parser {
             | (State::OscString, '\u{08}'...'\u{17}')
             | (State::OscString, '\u{19}')
             | (State::OscString, '\u{1c}'...'\u{1f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::OscString, '\u{07}') => {
@@ -404,7 +404,7 @@ impl Parser {
             }
 
             (State::OscString, '\u{20}'...'\u{7f}') => {
-                print!("action = osc-put\n");
+                self.osc_put(input);
             }
 
             // SosPmApcString
@@ -413,12 +413,48 @@ impl Parser {
             (State::SosPmApcString, '\u{00}'...'\u{17}')
             | (State::SosPmApcString, '\u{19}')
             | (State::SosPmApcString, '\u{1c}'...'\u{1f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
 
             (State::SosPmApcString, '\u{20}'...'\u{7f}') => {
-                print!("action = ignore\n");
+                self.ignore(input);
             }
         }
+    }
+
+    fn execute(&self, input: char) {
+        print!("execute\n");
+    }
+
+    fn print(&self, input: char) {
+        print!("print\n");
+    }
+
+    fn collect(&self, input: char) {
+        print!("collect\n");
+    }
+
+    fn esc_dispatch(&self, input: char) {
+        print!("esc_dispatch\n");
+    }
+
+    fn ignore(&self, input: char) {
+        print!("ignore\n");
+    }
+
+    fn param(&self, input: char) {
+        print!("param\n");
+    }
+
+    fn csi_dispatch(&self, input: char) {
+        print!("csi_dispatch\n");
+    }
+
+    fn put(&self, input: char) {
+        print!("put\n");
+    }
+
+    fn osc_put(&self, input: char) {
+        print!("osc_put\n");
     }
 }
