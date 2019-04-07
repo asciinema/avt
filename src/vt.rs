@@ -131,10 +131,6 @@ impl VT {
                 self.state = State::SosPmApcString;
             }
 
-            (State::Escape, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // EscapeIntermediate
 
             // C0 prime
@@ -151,10 +147,6 @@ impl VT {
             (State::EscapeIntermediate, '\u{30}'...'\u{7e}') => {
                 self.state = State::Ground;
                 self.esc_dispatch(input);
-            }
-
-            (State::EscapeIntermediate, '\u{7f}') => {
-                self.ignore(input);
             }
 
             // CsiEntry
@@ -190,10 +182,6 @@ impl VT {
                 self.csi_dispatch(input);
             }
 
-            (State::CsiEntry, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // CsiParam
 
             // C0 prime
@@ -221,10 +209,6 @@ impl VT {
                 self.csi_dispatch(input);
             }
 
-            (State::CsiParam, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // CsiIntermediate
 
             // C0 prime
@@ -247,10 +231,6 @@ impl VT {
                 self.csi_dispatch(input);
             }
 
-            (State::CsiIntermediate, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // CsiIgnore
 
             // C0 prime
@@ -260,27 +240,11 @@ impl VT {
                 self.execute(input);
             }
 
-            (State::CsiIgnore, '\u{20}'...'\u{3f}') => {
-                self.ignore(input);
-            }
-
             (State::CsiIgnore, '\u{40}'...'\u{7e}') => {
                 self.state = State::Ground;
             }
 
-            (State::CsiIgnore, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // DcsEntry
-
-            // C0 prime
-            (State::DcsEntry, '\u{00}'...'\u{17}')
-            | (State::DcsEntry, '\u{19}')
-            | (State::DcsEntry, '\u{1c}'...'\u{1f}') => {
-                self.ignore(input);
-            }
-
             (State::DcsEntry, '\u{20}'...'\u{2f}') => {
                 self.state = State::DcsIntermediate;
                 self.collect(input);
@@ -304,19 +268,7 @@ impl VT {
                 self.state = State::DcsPassthrough;
             }
 
-            (State::DcsEntry, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // DcsParam
-
-            // C0 prime
-            (State::DcsParam, '\u{00}'...'\u{17}')
-            | (State::DcsParam, '\u{19}')
-            | (State::DcsParam, '\u{1c}'...'\u{1f}') => {
-                self.ignore(input);
-            }
-
             (State::DcsParam, '\u{20}'...'\u{2f}') => {
                 self.state = State::DcsIntermediate;
                 self.collect(input);
@@ -334,19 +286,7 @@ impl VT {
                 self.state = State::DcsPassthrough;
             }
 
-            (State::DcsParam, '\u{7f}') => {
-                self.ignore(input);
-            }
-
             // DcsIntermediate
-
-            // C0 prime
-            (State::DcsIntermediate, '\u{00}'...'\u{17}')
-            | (State::DcsIntermediate, '\u{19}')
-            | (State::DcsIntermediate, '\u{1c}'...'\u{1f}') => {
-                self.ignore(input);
-            }
-
             (State::DcsIntermediate, '\u{20}'...'\u{2f}') => {
                 self.collect(input);
             }
@@ -357,10 +297,6 @@ impl VT {
 
             (State::DcsIntermediate, '\u{40}'...'\u{7e}') => {
                 self.state = State::DcsPassthrough;
-            }
-
-            (State::DcsIntermediate, '\u{7f}') => {
-                self.ignore(input);
             }
 
             // DcsPassthrough
@@ -376,33 +312,7 @@ impl VT {
                 self.put(input);
             }
 
-            (State::DcsPassthrough, '\u{7f}') => {
-                self.ignore(input);
-            }
-
-            // DcsIgnore
-
-            // C0 prime
-            (State::DcsIgnore, '\u{00}'...'\u{17}')
-            | (State::DcsIgnore, '\u{19}')
-            | (State::DcsIgnore, '\u{1c}'...'\u{1f}') => {
-                self.ignore(input);
-            }
-
-            (State::DcsIgnore, '\u{20}'...'\u{7f}') => {
-                self.ignore(input);
-            }
-
             // OscString
-
-            // C0 prime (without 0x07)
-            (State::OscString, '\u{00}'...'\u{06}')
-            | (State::OscString, '\u{08}'...'\u{17}')
-            | (State::OscString, '\u{19}')
-            | (State::OscString, '\u{1c}'...'\u{1f}') => {
-                self.ignore(input);
-            }
-
             (State::OscString, '\u{07}') => {
                 // 0x07 is xterm non-ANSI variant of transition to ground
                 self.state = State::Ground;
@@ -412,18 +322,7 @@ impl VT {
                 self.osc_put(input);
             }
 
-            // SosPmApcString
-
-            // C0 prime
-            (State::SosPmApcString, '\u{00}'...'\u{17}')
-            | (State::SosPmApcString, '\u{19}')
-            | (State::SosPmApcString, '\u{1c}'...'\u{1f}') => {
-                self.ignore(input);
-            }
-
-            (State::SosPmApcString, '\u{20}'...'\u{7f}') => {
-                self.ignore(input);
-            }
+            _ => {}
         }
     }
 
@@ -441,10 +340,6 @@ impl VT {
 
     fn esc_dispatch(&self, input: char) {
         print!("esc_dispatch\n");
-    }
-
-    fn ignore(&self, input: char) {
-        print!("ignore\n");
     }
 
     fn param(&self, input: char) {
