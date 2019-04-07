@@ -50,14 +50,17 @@ impl VT {
 
             (_, '\u{1b}') => {
                 self.state = State::Escape;
+                self.clear();
             }
 
             (_, '\u{90}') => {
                 self.state = State::DcsEntry;
+                self.clear();
             }
 
             (_, '\u{9b}') => {
                 self.state = State::CsiEntry;
+                self.clear();
             }
 
             (_, '\u{9c}') => {
@@ -112,10 +115,12 @@ impl VT {
 
             (State::Escape, '\u{50}') => {
                 self.state = State::DcsEntry;
+                self.clear();
             }
 
             (State::Escape, '\u{5b}') => {
                 self.state = State::CsiEntry;
+                self.clear();
             }
 
             (State::Escape, '\u{5d}') => {
@@ -456,5 +461,9 @@ impl VT {
 
     fn osc_put(&self, input: char) {
         print!("osc_put\n");
+    }
+
+    fn clear(&self) {
+        print!("clear\n");
     }
 }
