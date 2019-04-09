@@ -22,12 +22,16 @@ enum State {
 #[derive(Debug)]
 pub struct VT {
     state: State,
+    params: Vec<char>,
+    intermediates: Vec<char>,
 }
 
 impl VT {
     pub fn new() -> Self {
         VT {
             state: State::Ground,
+            params: Vec::new(),
+            intermediates: Vec::new(),
         }
     }
 
@@ -324,39 +328,120 @@ impl VT {
         }
     }
 
-    fn execute(&self, input: char) {
-        print!("execute\n");
+    fn execute(&mut self, input: char) {
+        match input {
+            '\u{08}' => self.execute_bs(),
+            '\u{09}' => self.execute_ht(),
+            '\u{0a}' => self.execute_lf(),
+            '\u{0b}' => self.execute_lf(),
+            '\u{0c}' => self.execute_lf(),
+            '\u{0d}' => self.execute_cr(),
+            '\u{0e}' => self.execute_so(),
+            '\u{0f}' => self.execute_si(),
+            '\u{84}' => self.execute_lf(),
+            '\u{85}' => self.execute_nel(),
+            '\u{88}' => self.execute_hts(),
+            '\u{8d}' => self.execute_ri(),
+            _ => {}
+        }
     }
 
     fn print(&self, input: char) {
-        print!("print\n");
+        // print!("print\n");
     }
 
-    fn collect(&self, input: char) {
-        print!("collect\n");
+    fn collect(&mut self, input: char) {
+        self.intermediates.push(input);
     }
 
     fn esc_dispatch(&self, input: char) {
-        print!("esc_dispatch\n");
+        // print!("esc_dispatch\n");
     }
 
-    fn param(&self, input: char) {
-        print!("param\n");
+    fn param(&mut self, input: char) {
+        self.params.push(input);
     }
 
-    fn csi_dispatch(&self, input: char) {
-        print!("csi_dispatch\n");
+    fn csi_dispatch(&mut self, input: char) {
+        match input {
+            '\u{40}' => self.execute_ich(),
+            '\u{41}' => self.execute_cuu(),
+            '\u{42}' => self.execute_cud(),
+            '\u{43}' => self.execute_cuf(),
+            '\u{44}' => self.execute_cub(),
+            '\u{45}' => self.execute_cnl(),
+            '\u{46}' => self.execute_cpl(),
+            '\u{47}' => self.execute_cha(),
+            '\u{48}' => self.execute_cup(),
+            '\u{49}' => self.execute_cht(),
+            '\u{4a}' => self.execute_ed(),
+            '\u{4b}' => self.execute_el(),
+            '\u{4c}' => self.execute_il(),
+            '\u{4d}' => self.execute_dl(),
+            '\u{50}' => self.execute_dch(),
+            '\u{53}' => self.execute_su(),
+            '\u{54}' => self.execute_sd(),
+            '\u{57}' => self.execute_ctc(),
+            '\u{58}' => self.execute_ech(),
+            '\u{5a}' => self.execute_cbt(),
+            '\u{60}' => self.execute_cha(),
+            '\u{61}' => self.execute_cuf(),
+            '\u{64}' => self.execute_vpa(),
+            '\u{65}' => self.execute_cuu(),
+            '\u{66}' => self.execute_cup(),
+            '\u{67}' => self.execute_tbc(),
+            '\u{68}' => self.execute_sm(),
+            '\u{6c}' => self.execute_rm(),
+            '\u{6d}' => self.execute_sgr(),
+            '\u{70}' => self.execute_decstr(),
+            '\u{72}' => self.execute_decstbm(),
+            _ => {}
+        }
     }
 
-    fn put(&self, input: char) {
-        print!("put\n");
+    fn put(&self, _input: char) {}
+
+    fn osc_put(&self, _input: char) {}
+
+    fn clear(&mut self) {
+        self.params.clear();
+        self.intermediates.clear();
     }
 
-    fn osc_put(&self, input: char) {
-        print!("osc_put\n");
-    }
-
-    fn clear(&self) {
-        print!("clear\n");
-    }
+    fn execute_bs(&mut self) {}
+    fn execute_ht(&mut self) {}
+    fn execute_lf(&mut self) {}
+    fn execute_cr(&mut self) {}
+    fn execute_so(&mut self) {}
+    fn execute_si(&mut self) {}
+    fn execute_nel(&mut self) {}
+    fn execute_hts(&mut self) {}
+    fn execute_ri(&mut self) {}
+    fn execute_ich(&mut self) {}
+    fn execute_cuu(&mut self) {}
+    fn execute_cud(&mut self) {}
+    fn execute_cuf(&mut self) {}
+    fn execute_cub(&mut self) {}
+    fn execute_cnl(&mut self) {}
+    fn execute_cpl(&mut self) {}
+    fn execute_cha(&mut self) {}
+    fn execute_cup(&mut self) {}
+    fn execute_cht(&mut self) {}
+    fn execute_ed(&mut self) {}
+    fn execute_el(&mut self) {}
+    fn execute_il(&mut self) {}
+    fn execute_dl(&mut self) {}
+    fn execute_dch(&mut self) {}
+    fn execute_su(&mut self) {}
+    fn execute_sd(&mut self) {}
+    fn execute_ctc(&mut self) {}
+    fn execute_ech(&mut self) {}
+    fn execute_cbt(&mut self) {}
+    fn execute_vpa(&mut self) {}
+    fn execute_tbc(&mut self) {}
+    fn execute_sm(&mut self) {}
+    fn execute_rm(&mut self) {}
+    fn execute_sgr(&mut self) {}
+    fn execute_decstr(&mut self) {}
+    fn execute_decstbm(&mut self) {}
 }
