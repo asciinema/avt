@@ -80,7 +80,7 @@ pub struct VT {
     saved_auto_wrap_mode: bool,
 }
 
-const special_gfx_chars: [char; 31] = [
+const SPECIAL_GFX_CHARS: [char; 31] = [
     '♦', '▒', '␉', '␌', '␍', '␊', '°', '±', '␤', '␋',
     '┘', '┐', '┌', '└', '┼', '⎺', '⎻', '─', '⎼', '⎽',
     '├', '┤', '┴', '┬', '│', '≤', '≥', 'π', '≠', '£',
@@ -113,7 +113,7 @@ impl Charset {
         if input >= '\x60' && input < '\x7f' {
             match self {
                 Charset::G0 => input,
-                Charset::G1 => special_gfx_chars[(input as usize) - 0x60],
+                Charset::G1 => SPECIAL_GFX_CHARS[(input as usize) - 0x60],
             }
         } else {
             input
