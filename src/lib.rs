@@ -676,7 +676,7 @@ impl VT {
     }
 
     fn execute_lf(&mut self) {
-        self.move_cursor_down();
+        self.move_cursor_down_with_scroll();
 
         if self.new_line_mode {
             self.do_move_cursor_to_col(0);
@@ -696,7 +696,7 @@ impl VT {
     }
 
     fn execute_nel(&mut self) {
-        self.move_cursor_down();
+        self.move_cursor_down_with_scroll();
         self.do_move_cursor_to_col(0);
     }
 
@@ -725,10 +725,13 @@ impl VT {
     }
 
     fn execute_cuu(&mut self) {
-        self.move_cursor_up(self.get_param(0, 1) as usize);
+        self.cursor_up(self.get_param(0, 1) as usize);
     }
 
-    fn execute_cud(&mut self) {}
+    fn execute_cud(&mut self) {
+        self.cursor_down(self.get_param(0, 1) as usize);
+    }
+
     fn execute_cuf(&mut self) {}
     fn execute_cub(&mut self) {}
     fn execute_cnl(&mut self) {}
@@ -860,7 +863,7 @@ impl VT {
         self.move_cursor_to_col(*next_tab);
     }
 
-    fn move_cursor_down(&mut self) {
+    fn move_cursor_down_with_scroll(&mut self) {
         if self.cursor_y == self.bottom_margin {
             self.scroll_up(1);
         } else if self.cursor_y < self.rows - 1 {
@@ -868,7 +871,17 @@ impl VT {
         }
     }
 
-    fn move_cursor_up(&mut self, n: usize) {
+    fn cursor_down(&mut self, n: usize) {
+        let new_y = if self.cursor_y > self.bottom_margin {
+            (self.rows - 1).min(self.cursor_y + n)
+        } else {
+            self.bottom_margin.min(self.cursor_y + n)
+        };
+
+        self.do_move_cursor_to_row(new_y);
+    }
+
+    fn cursor_up(&mut self, n: usize) {
         let new_y = if self.cursor_y < self.top_margin {
             0.max(self.cursor_y - n)
         } else {
