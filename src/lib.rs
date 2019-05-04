@@ -1,6 +1,8 @@
 // The parser is based on Paul Williams' parser for ANSI-compatible video
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
+use std::ops::Range;
+
 #[derive(Debug)]
 enum State {
     Ground,
@@ -763,8 +765,50 @@ impl VT {
         self.move_cursor_to_next_tab(self.get_param(0, 1) as usize);
     }
 
-    fn execute_ed(&mut self) {}
-    fn execute_el(&mut self) {}
+    fn execute_ed(&mut self) {
+        match self.get_param(0, 0) {
+            0 => {
+                // clear to end of screen
+                self.clear_line(self.cursor_x..self.columns);
+                self.clear_lines((self.cursor_y + 1)..self.rows);
+            }
+
+            1 => {
+                // clear to beginning of screen
+                self.clear_line(0..(self.cursor_x + 1));
+                self.clear_lines(0..self.cursor_y);
+            }
+
+            2 => {
+                // clear whole screen
+                self.clear_lines(0..self.rows);
+            }
+
+            _ => ()
+        }
+    }
+
+    fn execute_el(&mut self) {
+        match self.get_param(0, 0) {
+            0 => {
+                // clear to end of line
+                self.clear_line(self.cursor_x..self.columns);
+            }
+
+            1 => {
+                // clear to begining of line
+                self.clear_line(0..(self.cursor_x + 1));
+            }
+
+            2 => {
+                // clear whole line
+                self.clear_line(0..self.columns);
+            }
+
+            _ => ()
+        }
+    }
+
     fn execute_il(&mut self) {}
     fn execute_dl(&mut self) {}
     fn execute_dch(&mut self) {}
@@ -814,6 +858,22 @@ impl VT {
 
     fn clear_all_tabs(&mut self) {
         self.tabs.clear();
+    }
+
+    fn clear_line(&mut self, range: Range<usize>) {
+        let tpl = Cell(' ', self.pen);
+
+        for cell in &mut self.buffer[self.cursor_y][range] {
+            *cell = tpl.clone();
+        }
+    }
+
+    fn clear_lines(&mut self, range: Range<usize>) {
+        let tpl = self.blank_line();
+
+        for line in &mut self.buffer[range] {
+            *line = tpl.clone();
+        }
     }
 
     fn get_param(&self, n: usize, default: u16) -> u16 {
