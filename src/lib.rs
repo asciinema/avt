@@ -69,6 +69,7 @@ pub struct VT {
     insert_mode: bool,
     origin_mode: bool,
     auto_wrap_mode: bool,
+    new_line_mode: bool,
     next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
@@ -143,6 +144,7 @@ impl VT {
             insert_mode: false,
             origin_mode: false,
             auto_wrap_mode: true,
+            new_line_mode: false,
             next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
@@ -646,6 +648,7 @@ impl VT {
         self.insert_mode = false;
         self.origin_mode = false;
         self.auto_wrap_mode = true;
+        self.new_line_mode = false;
         self.next_print_wraps = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
@@ -654,7 +657,6 @@ impl VT {
         self.saved_pen = Pen::new();
         self.saved_origin_mode = false;
         self.saved_auto_wrap_mode = true;
-        // TODO reset everything else
     }
 
     fn execute_decaln(&mut self) {
