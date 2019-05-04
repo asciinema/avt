@@ -754,7 +754,10 @@ impl VT {
         self.move_cursor_to_col((self.get_param(0, 1) as usize) - 1);
     }
 
-    fn execute_cup(&mut self) {}
+    fn execute_cup(&mut self) {
+        self.move_cursor_to_col((self.get_param(1, 1) as usize) - 1);
+        self.move_cursor_to_row((self.get_param(0, 1) as usize) - 1);
+    }
 
     fn execute_cht(&mut self) {
         self.move_cursor_to_next_tab(self.get_param(0, 1) as usize);
@@ -834,6 +837,22 @@ impl VT {
         if param == 0 { default } else { param }
     }
 
+    fn actual_top_margin(&self) -> usize {
+        if self.origin_mode {
+            self.top_margin
+        } else {
+            0
+        }
+    }
+
+    fn actual_bottom_margin(&self) -> usize {
+        if self.origin_mode {
+            self.bottom_margin
+        } else {
+            self.rows - 1
+        }
+    }
+
     fn move_cursor_to_col(&mut self, col: usize) {
         if col >= self.columns {
             self.do_move_cursor_to_col(self.columns - 1);
@@ -845,6 +864,13 @@ impl VT {
     fn do_move_cursor_to_col(&mut self, col: usize) {
         self.cursor_x = col;
         self.next_print_wraps = false;
+    }
+
+    fn move_cursor_to_row(&mut self, mut row: usize) {
+        let top = self.actual_top_margin();
+        let bottom = self.actual_bottom_margin();
+        row = (top + row).max(top).min(bottom);
+        self.do_move_cursor_to_row(row);
     }
 
     fn do_move_cursor_to_row(&mut self, row: usize) {
