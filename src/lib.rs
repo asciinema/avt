@@ -732,8 +732,14 @@ impl VT {
         self.cursor_down(self.get_param(0, 1) as usize);
     }
 
-    fn execute_cuf(&mut self) {}
-    fn execute_cub(&mut self) {}
+    fn execute_cuf(&mut self) {
+        self.move_cursor_to_rel_col(self.get_param(0, 1) as isize);
+    }
+
+    fn execute_cub(&mut self) {
+        self.move_cursor_to_rel_col(-(self.get_param(0, 1) as isize));
+    }
+
     fn execute_cnl(&mut self) {}
     fn execute_cpl(&mut self) {}
     fn execute_cha(&mut self) {}
@@ -840,14 +846,12 @@ impl VT {
         let new_col = self.cursor_x as isize + rel_col;
 
         if new_col < 0 {
-            self.cursor_x = 0;
+            self.do_move_cursor_to_col(0);
         } else if new_col as usize >= self.columns {
-            self.cursor_x = self.columns - 1;
+            self.do_move_cursor_to_col(self.columns - 1);
         } else {
-            self.cursor_x = new_col as usize;
+            self.do_move_cursor_to_col(new_col as usize);
         }
-
-        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
