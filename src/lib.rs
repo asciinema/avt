@@ -704,7 +704,14 @@ impl VT {
         self.set_tab();
     }
 
-    fn execute_ri(&mut self) {}
+    fn execute_ri(&mut self) {
+        if self.cursor_y == self.top_margin {
+            self.scroll_down(1);
+        } else if self.cursor_y > 0 {
+            self.do_move_cursor_to_row(self.cursor_y - 1);
+        }
+    }
+
     fn execute_ich(&mut self) {}
     fn execute_cuu(&mut self) {}
     fn execute_cud(&mut self) {}
@@ -861,6 +868,21 @@ impl VT {
             *line = filler.clone();
         }
     }
+
+    fn scroll_down(&mut self, n: usize) {
+        let filler = self.blank_line();
+        VT::scroll_down_lines(&mut self.buffer[self.top_margin..=self.bottom_margin], n, &filler);
+    }
+
+    fn scroll_down_lines(lines: &mut [Vec<Cell>], mut n: usize, filler: &Vec<Cell>) {
+        n = n.min(lines.len());
+        lines.rotate_right(n);
+
+        for line in &mut lines[0..n] {
+            *line = filler.clone();
+        }
+    }
+
 }
 
 #[cfg(test)]
