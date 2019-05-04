@@ -683,7 +683,9 @@ impl VT {
         }
     }
 
-    fn execute_cr(&mut self) {}
+    fn execute_cr(&mut self) {
+        self.do_move_cursor_to_col(0);
+    }
 
     fn execute_so(&mut self) {
         self.charset = Charset::G1;
