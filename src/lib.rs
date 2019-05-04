@@ -724,7 +724,10 @@ impl VT {
         }
     }
 
-    fn execute_cuu(&mut self) {}
+    fn execute_cuu(&mut self) {
+        self.move_cursor_up(self.get_param(0, 1) as usize);
+    }
+
     fn execute_cud(&mut self) {}
     fn execute_cuf(&mut self) {}
     fn execute_cub(&mut self) {}
@@ -863,6 +866,16 @@ impl VT {
         } else if self.cursor_y < self.rows - 1 {
             self.do_move_cursor_to_row(self.cursor_y + 1);
         }
+    }
+
+    fn move_cursor_up(&mut self, n: usize) {
+        let new_y = if self.cursor_y < self.top_margin {
+            0.max(self.cursor_y - n)
+        } else {
+            self.top_margin.max(self.cursor_y - n)
+        };
+
+        self.do_move_cursor_to_row(new_y);
     }
 
     fn scroll_up(&mut self, n: usize) {
