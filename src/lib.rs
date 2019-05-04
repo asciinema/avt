@@ -750,7 +750,10 @@ impl VT {
         self.do_move_cursor_to_col(0);
     }
 
-    fn execute_cha(&mut self) {}
+    fn execute_cha(&mut self) {
+        self.move_cursor_to_col((self.get_param(0, 1) as usize) - 1);
+    }
+
     fn execute_cup(&mut self) {}
 
     fn execute_cht(&mut self) {
