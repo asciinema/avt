@@ -740,8 +740,16 @@ impl VT {
         self.move_cursor_to_rel_col(-(self.get_param(0, 1) as isize));
     }
 
-    fn execute_cnl(&mut self) {}
-    fn execute_cpl(&mut self) {}
+    fn execute_cnl(&mut self) {
+        self.cursor_down(self.get_param(0, 1) as usize);
+        self.do_move_cursor_to_col(0);
+    }
+
+    fn execute_cpl(&mut self) {
+        self.cursor_up(self.get_param(0, 1) as usize);
+        self.do_move_cursor_to_col(0);
+    }
+
     fn execute_cha(&mut self) {}
     fn execute_cup(&mut self) {}
 
