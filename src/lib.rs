@@ -840,8 +840,55 @@ impl VT {
 }
 
 #[cfg(test)]
+extern crate quickcheck;
+#[cfg(test)]
+#[macro_use(quickcheck)]
+extern crate quickcheck_macros;
+
+#[cfg(test)]
 mod tests {
     use super::VT;
+    use quickcheck::{TestResult, quickcheck};
+
+    #[quickcheck]
+    fn cursor_position(bytes: Vec<u8>) -> bool {
+        let mut vt = VT::new(10, 4);
+
+        for b in bytes.iter() {
+            vt.feed((*b) as char);
+        }
+
+        vt.cursor_x <= 10 && vt.cursor_y < 4
+    }
+
+    #[quickcheck]
+    fn buffer_size(bytes: Vec<u8>) -> bool {
+        let mut vt = VT::new(10, 4);
+
+        for b in bytes.iter() {
+            vt.feed((*b) as char);
+        }
+
+        vt.buffer.len() == 4 && vt.buffer.iter().all(|line| line.len() == 10)
+    }
+
+    #[quickcheck]
+    fn wrapping(y: u8, bytes: Vec<u8>) -> TestResult {
+        if y >= 5 {
+            return TestResult::discard()
+        }
+
+        let mut vt = VT::new(10, 5);
+
+        vt.cursor_x = 9;
+        vt.cursor_y = y as usize;
+
+        for b in bytes.iter() {
+            vt.feed((*b) as char);
+        }
+
+        TestResult::from_bool(!vt.next_print_wraps || vt.cursor_x == 10)
+    }
 
     #[test]
     fn default_tabs() {
