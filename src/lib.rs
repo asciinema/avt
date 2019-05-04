@@ -712,7 +712,18 @@ impl VT {
         }
     }
 
-    fn execute_ich(&mut self) {}
+    fn execute_ich(&mut self) {
+        let mut n = self.get_param(0, 1) as usize;
+        n = n.min(self.columns - self.cursor_x);
+
+        let cells = &mut self.buffer[self.cursor_y][self.cursor_x..];
+        cells.rotate_right(n);
+
+        for cell in &mut cells[0..n] {
+            *cell = Cell(' ', self.pen);
+        }
+    }
+
     fn execute_cuu(&mut self) {}
     fn execute_cud(&mut self) {}
     fn execute_cuf(&mut self) {}
@@ -894,6 +905,7 @@ extern crate quickcheck_macros;
 #[cfg(test)]
 mod tests {
     use super::VT;
+    use super::Cell;
     use quickcheck::{TestResult, quickcheck};
 
     #[quickcheck]
@@ -957,5 +969,74 @@ mod tests {
         assert_eq!(vt.get_param(3, 999), 23);
         assert_eq!(vt.get_param(4, 999), 456);
         assert_eq!(vt.get_param(5, 999), 999);
+    }
+
+    #[test]
+    fn execute_ich() {
+        let mut vt = build_vt(3, 0, vec![
+            "abcdefgh",
+            "ijklmnop"
+        ]);
+
+        vt.feed_str("\x1b[@");
+
+        assert_eq!(vt.cursor_x, 3);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc defg",
+            "ijklmnop"
+        ]);
+
+        vt.feed_str("\x1b[2@");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc   de",
+            "ijklmnop"
+        ]);
+
+        vt.feed_str("\x1b[10@");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc     ",
+            "ijklmnop"
+        ]);
+
+        let mut vt = build_vt(7, 0, vec![
+            "abcdefgh",
+            "ijklmnop"
+        ]);
+
+        vt.feed_str("\x1b[10@");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abcdefg ",
+            "ijklmnop"
+        ]);
+    }
+
+    fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> VT {
+        let w = lines.get(0).unwrap().len();
+        let h = lines.len();
+        let mut vt = VT::new(w, h);
+
+        for line in lines {
+            vt.feed_str(line);
+        }
+
+        vt.cursor_x = cx;
+        vt.cursor_y = cy;
+
+        vt
+    }
+
+    fn dump_lines(vt: &VT) -> Vec<String> {
+        vt.buffer
+        .iter()
+        .map(|cells| dump_line(cells))
+        .collect()
+    }
+
+    fn dump_line(cells: &[Cell]) -> String {
+        cells.iter().map(|cell| cell.0).collect()
     }
 }
