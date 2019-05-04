@@ -894,13 +894,15 @@ impl VT {
     }
 
     fn cursor_up(&mut self, n: usize) {
-        let new_y = if self.cursor_y < self.top_margin {
-            0.max(self.cursor_y - n)
+        let mut new_y = (self.cursor_y as isize) - (n as isize);
+
+        new_y = if self.cursor_y < self.top_margin {
+            new_y.max(0)
         } else {
-            self.top_margin.max(self.cursor_y - n)
+            new_y.max(self.top_margin as isize)
         };
 
-        self.do_move_cursor_to_row(new_y);
+        self.do_move_cursor_to_row(new_y as usize);
     }
 
     fn scroll_up(&mut self, n: usize) {
