@@ -695,7 +695,10 @@ impl VT {
         self.charset = Charset::G0;
     }
 
-    fn execute_nel(&mut self) {}
+    fn execute_nel(&mut self) {
+        self.move_cursor_down();
+        self.do_move_cursor_to_col(0);
+    }
 
     fn execute_hts(&mut self) {
         self.set_tab();
