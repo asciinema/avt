@@ -675,7 +675,14 @@ impl VT {
         self.move_cursor_to_next_tab(1);
     }
 
-    fn execute_lf(&mut self) {}
+    fn execute_lf(&mut self) {
+        self.move_cursor_down();
+
+        if self.new_line_mode {
+            self.do_move_cursor_to_col(0);
+        }
+    }
+
     fn execute_cr(&mut self) {}
 
     fn execute_so(&mut self) {
@@ -825,6 +832,14 @@ impl VT {
             .unwrap_or(&last_col);
 
         self.move_cursor_to_col(*next_tab);
+    }
+
+    fn move_cursor_down(&mut self) {
+        if self.cursor_y == self.bottom_margin {
+            self.scroll_up(1);
+        } else if self.cursor_y < self.rows - 1 {
+            self.do_move_cursor_to_row(self.cursor_y + 1);
+        }
     }
 
     fn scroll_up(&mut self, n: usize) {
