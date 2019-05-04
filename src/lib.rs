@@ -163,7 +163,11 @@ impl VT {
     }
 
     fn blank_line(&self) -> Vec<Cell> {
-        vec![Cell(' ', self.pen); self.columns]
+        vec![self.blank_cell(); self.columns]
+    }
+
+    fn blank_cell(&self) -> Cell {
+        Cell(' ', self.pen)
     }
 
     fn default_tabs(columns: usize) -> Vec<usize> {
@@ -717,12 +721,12 @@ impl VT {
     fn execute_ich(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.columns - self.cursor_x);
-
+        let tpl = self.blank_cell();
         let cells = &mut self.buffer[self.cursor_y][self.cursor_x..];
         cells.rotate_right(n);
 
         for cell in &mut cells[0..n] {
-            *cell = Cell(' ', self.pen);
+            *cell = tpl;
         }
     }
 
@@ -861,10 +865,10 @@ impl VT {
     }
 
     fn clear_line(&mut self, range: Range<usize>) {
-        let tpl = Cell(' ', self.pen);
+        let tpl = self.blank_cell();
 
         for cell in &mut self.buffer[self.cursor_y][range] {
-            *cell = tpl.clone();
+            *cell = tpl;
         }
     }
 
