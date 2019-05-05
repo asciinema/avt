@@ -813,7 +813,20 @@ impl VT {
         }
     }
 
-    fn execute_il(&mut self) {}
+    fn execute_il(&mut self) {
+        let mut n = self.get_param(0, 1) as usize;
+
+        if self.cursor_y <= self.bottom_margin {
+            n = n.min(self.bottom_margin + 1 - self.cursor_y);
+            &mut self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
+            self.clear_lines(self.cursor_y..(self.cursor_y + n));
+        } else {
+            n = n.min(self.rows - self.cursor_y);
+            &mut self.buffer[self.cursor_y..].rotate_right(n);
+            self.clear_lines(self.cursor_y..(self.cursor_y + n));
+        }
+    }
+
     fn execute_dl(&mut self) {}
     fn execute_dch(&mut self) {}
     fn execute_su(&mut self) {}
@@ -1168,6 +1181,46 @@ mod tests {
         assert_eq!(dump_lines(&vt), vec![
             "abcdefg ",
             "ijklmnop"
+        ]);
+    }
+
+    #[test]
+    fn execute_il() {
+        let mut vt = build_vt(3, 1, vec![
+            "abcdefgh",
+            "ijklmnop",
+            "qrstuwxy"
+        ]);
+
+        vt.feed_str("\x1b[L");
+
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 1);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abcdefgh",
+            "        ",
+            "ijklmnop"
+        ]);
+
+        vt.cursor_y = 0;
+
+        vt.feed_str("\x1b[2L");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "        ",
+            "        ",
+            "abcdefgh"
+        ]);
+
+        vt.cursor_y = 1;
+
+        vt.feed_str("\x1b[100L");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "        ",
+            "        ",
+            "        "
         ]);
     }
 
