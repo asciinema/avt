@@ -779,7 +779,7 @@ impl VT {
 
             1 => {
                 // clear to beginning of screen
-                self.clear_line(0..(self.cursor_x + 1));
+                self.clear_line(0..(self.cursor_x + 1).min(self.columns));
                 self.clear_lines(0..self.cursor_y);
             }
 
@@ -801,7 +801,7 @@ impl VT {
 
             1 => {
                 // clear to begining of line
-                self.clear_line(0..(self.cursor_x + 1));
+                self.clear_line(0..(self.cursor_x + 1).min(self.columns));
             }
 
             2 => {
