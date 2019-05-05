@@ -1013,16 +1013,14 @@ impl VT {
 
     fn scroll_up(&mut self, mut n: usize) {
         let end_index = self.bottom_margin + 1;
-        let line_count = end_index - self.top_margin;
-        n = n.min(line_count);
+        n = n.min(end_index - self.top_margin);
         &mut self.buffer[self.top_margin..end_index].rotate_left(n);
-        self.clear_lines((line_count - n)..end_index);
+        self.clear_lines((end_index - n)..end_index);
     }
 
     fn scroll_down(&mut self, mut n: usize) {
         let end_index = self.bottom_margin + 1;
-        let line_count = end_index - self.top_margin;
-        n = n.min(line_count);
+        n = n.min(end_index - self.top_margin);
         &mut self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(0..n);
     }
