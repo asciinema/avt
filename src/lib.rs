@@ -1076,6 +1076,16 @@ mod tests {
         assert_eq!(VT::default_tabs(17), vec![8, 16]);
     }
 
+    // #[test]
+    // fn failed() {
+    //     let mut vt = VT::new(10, 4);
+    //     let bytes: Vec<u8> = vec![32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 74];
+
+    //     for b in bytes {
+    //         vt.feed(b as char);
+    //     }
+    // }
+
     #[test]
     fn get_param() {
         let mut vt = VT::new(1, 1);
