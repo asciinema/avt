@@ -827,7 +827,21 @@ impl VT {
         }
     }
 
-    fn execute_dl(&mut self) {}
+    fn execute_dl(&mut self) {
+        let mut n = self.get_param(0, 1) as usize;
+
+        if self.cursor_y <= self.bottom_margin {
+            let end_index = self.bottom_margin + 1;
+            n = n.min(end_index - self.cursor_y);
+            &mut self.buffer[self.cursor_y..end_index].rotate_left(n);
+            self.clear_lines((end_index - n)..end_index);
+        } else {
+            n = n.min(self.rows - self.cursor_y);
+            &mut self.buffer[self.cursor_y..self.rows].rotate_left(n);
+            self.clear_lines((self.rows - n)..self.rows);
+        }
+    }
+
     fn execute_dch(&mut self) {}
     fn execute_su(&mut self) {}
     fn execute_sd(&mut self) {}
@@ -1214,6 +1228,36 @@ mod tests {
         vt.cursor_y = 1;
 
         vt.feed_str("\x1b[100L");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "        ",
+            "        ",
+            "        "
+        ]);
+    }
+
+    #[test]
+    fn execute_dl() {
+        let mut vt = build_vt(3, 1, vec![
+            "abcdefgh",
+            "ijklmnop",
+            "qrstuwxy"
+        ]);
+
+        vt.feed_str("\x1b[M");
+
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 1);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abcdefgh",
+            "qrstuwxy",
+            "        "
+        ]);
+
+        vt.cursor_y = 0;
+
+        vt.feed_str("\x1b[5M");
 
         assert_eq!(dump_lines(&vt), vec![
             "        ",
