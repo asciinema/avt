@@ -853,8 +853,13 @@ impl VT {
         self.clear_line((self.columns - n)..self.columns);
     }
 
-    fn execute_su(&mut self) {}
-    fn execute_sd(&mut self) {}
+    fn execute_su(&mut self) {
+        self.scroll_up(self.get_param(0, 1) as usize);
+    }
+
+    fn execute_sd(&mut self) {
+        self.scroll_down(self.get_param(0, 1) as usize);
+    }
 
     fn execute_ctc(&mut self) {
         match self.get_param(0, 0) {
