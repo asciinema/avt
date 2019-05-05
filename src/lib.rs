@@ -886,11 +886,11 @@ impl VT {
             .iter()
             .nth(n)
             .map_or(0, |chars| {
-                let mut number = 0;
-                let mut mult = 1;
+                let mut number: u32 = 0;
+                let mut mult: u32 = 1;
 
                 for c in chars.iter().rev() {
-                    let digit = (*c as u16) - 0x30;
+                    let digit = (*c as u32) - 0x30;
                     number += digit * mult;
                     mult *= 10;
                 }
@@ -898,7 +898,7 @@ impl VT {
                 number
             });
 
-        if param == 0 { default } else { param }
+        if param == 0 { default } else { param as u16 }
     }
 
     fn actual_top_margin(&self) -> usize {
