@@ -870,7 +870,12 @@ impl VT {
         }
     }
 
-    fn execute_ech(&mut self) {}
+    fn execute_ech(&mut self) {
+        let mut n = self.get_param(0, 1) as usize;
+        n = n.min(self.columns - self.cursor_x);
+        self.clear_line(self.cursor_x..(self.cursor_x + n));
+    }
+
     fn execute_cbt(&mut self) {}
     fn execute_vpa(&mut self) {}
     fn execute_tbc(&mut self) {}
@@ -1302,6 +1307,33 @@ mod tests {
         ]);
 
         vt.feed_str("\x1b[10P");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc     "
+        ]);
+    }
+
+    #[test]
+    fn execute_ech() {
+        let mut vt = build_vt(3, 0, vec![
+            "abcdefgh"
+        ]);
+
+        vt.feed_str("\x1b[X");
+
+        assert_eq!(vt.cursor_x, 3);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc efgh"
+        ]);
+
+        vt.feed_str("\x1b[2X");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc  fgh"
+        ]);
+
+        vt.feed_str("\x1b[10X");
 
         assert_eq!(dump_lines(&vt), vec![
             "abc     "
