@@ -842,7 +842,17 @@ impl VT {
         }
     }
 
-    fn execute_dch(&mut self) {}
+    fn execute_dch(&mut self) {
+        if self.cursor_x >= self.columns {
+            self.move_cursor_to_col(self.columns - 1);
+        }
+
+        let mut n = self.get_param(0, 1) as usize;
+        n = n.min(self.columns - self.cursor_x);
+        &mut self.buffer[self.cursor_y][self.cursor_x..].rotate_left(n);
+        self.clear_line((self.columns - n)..self.columns);
+    }
+
     fn execute_su(&mut self) {}
     fn execute_sd(&mut self) {}
 
@@ -1263,6 +1273,33 @@ mod tests {
             "        ",
             "        ",
             "        "
+        ]);
+    }
+
+    #[test]
+    fn execute_dch() {
+        let mut vt = build_vt(3, 0, vec![
+            "abcdefgh"
+        ]);
+
+        vt.feed_str("\x1b[P");
+
+        assert_eq!(vt.cursor_x, 3);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abcefgh "
+        ]);
+
+        vt.feed_str("\x1b[2P");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abcgh   "
+        ]);
+
+        vt.feed_str("\x1b[10P");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc     "
         ]);
     }
 
