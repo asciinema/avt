@@ -998,35 +998,21 @@ impl VT {
         self.do_move_cursor_to_row(new_y as usize);
     }
 
-    fn scroll_up(&mut self, n: usize) {
-        let filler = self.blank_line();
-        VT::scroll_up_lines(&mut self.buffer[self.top_margin..=self.bottom_margin], n, &filler);
+    fn scroll_up(&mut self, mut n: usize) {
+        let end_index = self.bottom_margin + 1;
+        let line_count = end_index - self.top_margin;
+        n = n.min(line_count);
+        &mut self.buffer[self.top_margin..end_index].rotate_left(n);
+        self.clear_lines((line_count - n)..end_index);
     }
 
-    fn scroll_up_lines(lines: &mut [Vec<Cell>], mut n: usize, filler: &Vec<Cell>) {
-        n = n.min(lines.len());
-        lines.rotate_left(n);
-        let y = lines.len() - n;
-
-        for line in &mut lines[y..] {
-            *line = filler.clone();
-        }
+    fn scroll_down(&mut self, mut n: usize) {
+        let end_index = self.bottom_margin + 1;
+        let line_count = end_index - self.top_margin;
+        n = n.min(line_count);
+        &mut self.buffer[self.top_margin..end_index].rotate_right(n);
+        self.clear_lines(0..n);
     }
-
-    fn scroll_down(&mut self, n: usize) {
-        let filler = self.blank_line();
-        VT::scroll_down_lines(&mut self.buffer[self.top_margin..=self.bottom_margin], n, &filler);
-    }
-
-    fn scroll_down_lines(lines: &mut [Vec<Cell>], mut n: usize, filler: &Vec<Cell>) {
-        n = n.min(lines.len());
-        lines.rotate_right(n);
-
-        for line in &mut lines[0..n] {
-            *line = filler.clone();
-        }
-    }
-
 }
 
 #[cfg(test)]
@@ -1102,6 +1088,34 @@ mod tests {
         assert_eq!(vt.get_param(3, 999), 23);
         assert_eq!(vt.get_param(4, 999), 456);
         assert_eq!(vt.get_param(5, 999), 999);
+    }
+
+    #[test]
+    fn execute_lf() {
+        let mut vt = build_vt(3, 0, vec![
+            "abc     ",
+            "        "
+        ]);
+
+        vt.feed_str("\n");
+
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 1);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "abc     ",
+            "        "
+        ]);
+
+        vt.feed_str("d\n");
+
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.cursor_y, 1);
+
+        assert_eq!(dump_lines(&vt), vec![
+            "   d    ",
+            "        "
+        ]);
     }
 
     #[test]
