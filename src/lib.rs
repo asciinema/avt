@@ -876,7 +876,10 @@ impl VT {
         self.clear_line(self.cursor_x..(self.cursor_x + n));
     }
 
-    fn execute_cbt(&mut self) {}
+    fn execute_cbt(&mut self) {
+        self.move_cursor_to_prev_tab(self.get_param(0, 1) as usize);
+    }
+
     fn execute_vpa(&mut self) {}
     fn execute_tbc(&mut self) {}
     fn execute_sm(&mut self) {}
@@ -1013,6 +1016,20 @@ impl VT {
             .unwrap_or(&last_col);
 
         self.move_cursor_to_col(*next_tab);
+    }
+
+    fn move_cursor_to_prev_tab(&mut self, n: usize) {
+        let first_col = 0;
+
+        let prev_tab =
+            self.tabs
+            .iter()
+            .rev()
+            .skip_while(|&&t| self.cursor_x <= t)
+            .nth(n - 1)
+            .unwrap_or(&first_col);
+
+        self.move_cursor_to_col(*prev_tab);
     }
 
     fn move_cursor_down_with_scroll(&mut self) {
