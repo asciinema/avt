@@ -1357,6 +1357,44 @@ mod tests {
         ]);
     }
 
+    #[test]
+    fn execute_cht() {
+        let mut vt = build_vt(3, 0, vec![
+            "abcdefghijklmnopqrstuwxyzabc"
+        ]);
+
+        vt.feed_str("\x1b[I");
+
+        assert_eq!(vt.cursor_x, 8);
+
+        vt.feed_str("\x1b[2I");
+
+        assert_eq!(vt.cursor_x, 24);
+
+        vt.feed_str("\x1b[I");
+
+        assert_eq!(vt.cursor_x, 27);
+    }
+
+    #[test]
+    fn execute_cbt() {
+        let mut vt = build_vt(26, 0, vec![
+            "abcdefghijklmnopqrstuwxyzabc"
+        ]);
+
+        vt.feed_str("\x1b[Z");
+
+        assert_eq!(vt.cursor_x, 24);
+
+        vt.feed_str("\x1b[2Z");
+
+        assert_eq!(vt.cursor_x, 8);
+
+        vt.feed_str("\x1b[Z");
+
+        assert_eq!(vt.cursor_x, 0);
+    }
+
     fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> VT {
         let w = lines.get(0).unwrap().len();
         let h = lines.len();
