@@ -881,7 +881,15 @@ impl VT {
     }
 
     fn execute_vpa(&mut self) {}
-    fn execute_tbc(&mut self) {}
+
+    fn execute_tbc(&mut self) {
+        match self.get_param(0, 0) {
+            0 => self.clear_tab(),
+            3 => self.clear_all_tabs(),
+            _ => ()
+        }
+    }
+
     fn execute_sm(&mut self) {}
     fn execute_rm(&mut self) {}
     fn execute_sgr(&mut self) {}
