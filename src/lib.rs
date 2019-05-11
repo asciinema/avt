@@ -891,7 +891,9 @@ impl VT {
         self.move_cursor_to_prev_tab(self.get_param(0, 1) as usize);
     }
 
-    fn execute_vpa(&mut self) {}
+    fn execute_vpa(&mut self) {
+        self.move_cursor_to_row((self.get_param(0, 1) - 1) as usize);
+    }
 
     fn execute_tbc(&mut self) {
         match self.get_param(0, 0) {
