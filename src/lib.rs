@@ -959,7 +959,13 @@ impl VT {
     }
 
     fn execute_sgr(&mut self) {}
-    fn execute_decstr(&mut self) {}
+
+    fn execute_decstr(&mut self) {
+        if let Some('!') = self.intermediates.get(0) {
+            self.soft_reset();
+        }
+    }
+
     fn execute_decstbm(&mut self) {}
 
     // screen
@@ -1197,6 +1203,18 @@ impl VT {
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
         }
+    }
+
+    // resetting
+
+    fn soft_reset(&mut self) {
+        self.cursor_visible = true;
+        self.top_margin = 0;
+        self.bottom_margin = self.rows - 1;
+        self.insert_mode = false;
+        self.origin_mode = false;
+        self.pen = Pen::new();
+        self.saved_ctx = SavedCtx::new();
     }
 }
 
