@@ -888,8 +888,7 @@ impl VT {
 
                 (Some('?'), 6) => {
                     self.origin_mode = true;
-                    self.do_move_cursor_to_col(0);
-                    self.do_move_cursor_to_row(self.actual_top_margin());
+                    self.move_cursor_home();
                 },
 
                 (Some('?'), 7) => self.auto_wrap_mode = true,
@@ -915,8 +914,7 @@ impl VT {
 
                 (Some('?'), 6) =>  {
                     self.origin_mode = false;
-                    self.do_move_cursor_to_col(0);
-                    self.do_move_cursor_to_row(self.actual_top_margin());
+                    self.move_cursor_home();
                 },
 
                 (Some('?'), 7) => self.auto_wrap_mode = false,
@@ -943,7 +941,17 @@ impl VT {
         }
     }
 
-    fn execute_decstbm(&mut self) {}
+    fn execute_decstbm(&mut self) {
+        let top = (self.get_param(0, 1) - 1) as usize;
+        let bottom = (self.get_param(1, self.rows as u16) - 1) as usize;
+
+        if top < bottom && bottom < self.rows {
+            self.top_margin = top;
+            self.bottom_margin = bottom;
+        }
+
+        self.move_cursor_home();
+    }
 
     // screen
 
@@ -1088,6 +1096,11 @@ impl VT {
         } else {
             self.do_move_cursor_to_col(new_col as usize);
         }
+    }
+
+    fn move_cursor_home(&mut self) {
+        self.do_move_cursor_to_col(0);
+        self.do_move_cursor_to_row(self.actual_top_margin());
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
