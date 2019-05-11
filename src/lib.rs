@@ -650,30 +650,7 @@ impl VT {
     }
 
     fn execute_ris(&mut self) {
-        let buffer = VT::new_buffer(self.columns, self.rows);
-        let alternate_buffer = buffer.clone();
-
-        self.state = State::Ground;
-        self.params = Vec::new();
-        self.intermediates = Vec::new();
-        self.buffer = buffer;
-        self.alternate_buffer = alternate_buffer;
-        self.active_buffer_type = BufferType::Primary;
-        self.tabs = VT::default_tabs(self.columns);
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-        self.cursor_visible = true;
-        self.pen = Pen::new();
-        self.charset = Charset::G0;
-        self.insert_mode = false;
-        self.origin_mode = false;
-        self.auto_wrap_mode = true;
-        self.new_line_mode = false;
-        self.next_print_wraps = false;
-        self.top_margin = 0;
-        self.bottom_margin = self.rows - 1;
-        self.saved_ctx = SavedCtx::new();
-        self.alternate_saved_ctx = SavedCtx::new();
+        self.hard_reset();
     }
 
     fn execute_decaln(&mut self) {
@@ -1215,6 +1192,33 @@ impl VT {
         self.origin_mode = false;
         self.pen = Pen::new();
         self.saved_ctx = SavedCtx::new();
+    }
+
+    fn hard_reset(&mut self) {
+        let buffer = VT::new_buffer(self.columns, self.rows);
+        let alternate_buffer = buffer.clone();
+
+        self.state = State::Ground;
+        self.params = Vec::new();
+        self.intermediates = Vec::new();
+        self.buffer = buffer;
+        self.alternate_buffer = alternate_buffer;
+        self.active_buffer_type = BufferType::Primary;
+        self.tabs = VT::default_tabs(self.columns);
+        self.cursor_x = 0;
+        self.cursor_y = 0;
+        self.cursor_visible = true;
+        self.pen = Pen::new();
+        self.charset = Charset::G0;
+        self.insert_mode = false;
+        self.origin_mode = false;
+        self.auto_wrap_mode = true;
+        self.new_line_mode = false;
+        self.next_print_wraps = false;
+        self.top_margin = 0;
+        self.bottom_margin = self.rows - 1;
+        self.saved_ctx = SavedCtx::new();
+        self.alternate_saved_ctx = SavedCtx::new();
     }
 }
 
