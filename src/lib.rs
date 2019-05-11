@@ -49,6 +49,21 @@ enum Charset {
 }
 
 #[derive(Debug)]
+enum BufferType {
+    Primary,
+    Alternate
+}
+
+#[derive(Debug)]
+struct SavedCtx {
+    cursor_x: usize,
+    cursor_y: usize,
+    pen: Pen,
+    origin_mode: bool,
+    auto_wrap_mode: bool
+}
+
+#[derive(Debug)]
 pub struct VT {
     // parser
     state: State,
@@ -61,7 +76,8 @@ pub struct VT {
     columns: usize,
     rows: usize,
     buffer: Vec<Vec<Cell>>,
-    alt_buffer: Vec<Vec<Cell>>,
+    alternate_buffer: Vec<Vec<Cell>>,
+    active_buffer_type: BufferType,
     cursor_x: usize,
     cursor_y: usize,
     cursor_visible: bool,
@@ -75,12 +91,8 @@ pub struct VT {
     next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
-
-    saved_cursor_x: usize,
-    saved_cursor_y: usize,
-    saved_pen: Pen,
-    saved_origin_mode: bool,
-    saved_auto_wrap_mode: bool,
+    saved_ctx: SavedCtx,
+    alternate_saved_ctx: SavedCtx
 }
 
 const SPECIAL_GFX_CHARS: [char; 31] = [
@@ -124,10 +136,22 @@ impl Charset {
     }
 }
 
+impl SavedCtx {
+    fn new() -> SavedCtx {
+        SavedCtx {
+            cursor_x: 0,
+            cursor_y: 0,
+            pen: Pen::new(),
+            origin_mode: false,
+            auto_wrap_mode: true
+        }
+    }
+}
+
 impl VT {
     pub fn new(columns: usize, rows: usize) -> Self {
         let buffer = VT::new_buffer(columns, rows);
-        let alt_buffer = buffer.clone();
+        let alternate_buffer = buffer.clone();
 
         VT {
             state: State::Ground,
@@ -136,7 +160,8 @@ impl VT {
             columns: columns,
             rows: rows,
             buffer: buffer,
-            alt_buffer: alt_buffer,
+            alternate_buffer: alternate_buffer,
+            active_buffer_type: BufferType::Primary,
             tabs: VT::default_tabs(columns),
             cursor_x: 0,
             cursor_y: 0,
@@ -150,11 +175,8 @@ impl VT {
             next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
-            saved_cursor_x: 0,
-            saved_cursor_y: 0,
-            saved_pen: Pen::new(),
-            saved_origin_mode: false,
-            saved_auto_wrap_mode: true,
+            saved_ctx: SavedCtx::new(),
+            alternate_saved_ctx: SavedCtx::new()
         }
     }
 
@@ -620,31 +642,23 @@ impl VT {
     }
 
     fn execute_sc(&mut self) {
-        self.saved_cursor_x = self.cursor_x.min(self.columns - 1);
-        self.saved_cursor_y = self.cursor_y;
-        self.saved_pen = self.pen;
-        self.saved_origin_mode = self.origin_mode;
-        self.saved_auto_wrap_mode = self.auto_wrap_mode;
+        self.save_cursor();
     }
 
     fn execute_rc(&mut self) {
-        self.cursor_x = self.saved_cursor_x;
-        self.cursor_y = self.saved_cursor_y;
-        self.pen = self.saved_pen;
-        self.origin_mode = self.saved_origin_mode;
-        self.auto_wrap_mode = self.saved_auto_wrap_mode;
-        self.next_print_wraps = false;
+        self.restore_cursor();
     }
 
     fn execute_ris(&mut self) {
         let buffer = VT::new_buffer(self.columns, self.rows);
-        let alt_buffer = buffer.clone();
+        let alternate_buffer = buffer.clone();
 
         self.state = State::Ground;
         self.params = Vec::new();
         self.intermediates = Vec::new();
         self.buffer = buffer;
-        self.alt_buffer = alt_buffer;
+        self.alternate_buffer = alternate_buffer;
+        self.active_buffer_type = BufferType::Primary;
         self.tabs = VT::default_tabs(self.columns);
         self.cursor_x = 0;
         self.cursor_y = 0;
@@ -658,11 +672,8 @@ impl VT {
         self.next_print_wraps = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
-        self.saved_cursor_x = 0;
-        self.saved_cursor_y = 0;
-        self.saved_pen = Pen::new();
-        self.saved_origin_mode = false;
-        self.saved_auto_wrap_mode = true;
+        self.saved_ctx = SavedCtx::new();
+        self.alternate_saved_ctx = SavedCtx::new();
     }
 
     fn execute_decaln(&mut self) {
@@ -890,8 +901,61 @@ impl VT {
         }
     }
 
-    fn execute_sm(&mut self) {}
-    fn execute_rm(&mut self) {}
+    fn execute_sm(&mut self) {
+        for param in self.get_params() {
+            match (self.intermediates.get(0), param) {
+                (None, 4) => self.insert_mode = true,
+                (None, 20) => self.new_line_mode = true,
+
+                (Some('?'), 6) => {
+                    self.origin_mode = true;
+                    self.do_move_cursor_to_col(0);
+                    self.do_move_cursor_to_row(self.actual_top_margin());
+                },
+
+                (Some('?'), 7) => self.auto_wrap_mode = true,
+                (Some('?'), 25) => self.cursor_visible = true,
+                (Some('?'), 47) => self.switch_to_alternate_buffer(),
+                (Some('?'), 1047) => self.switch_to_alternate_buffer(),
+                (Some('?'), 1048) => self.save_cursor(),
+
+                (Some('?'), 1049) => {
+                    self.save_cursor();
+                    self.switch_to_alternate_buffer();
+                },
+                _ => ()
+            }
+        }
+    }
+
+    fn execute_rm(&mut self) {
+        for param in self.get_params() {
+            match (self.intermediates.get(0), param) {
+                (None, 4) => self.insert_mode = false,
+                (None, 20) => self.new_line_mode = false,
+
+                (Some('?'), 6) =>  {
+                    self.origin_mode = false;
+                    self.do_move_cursor_to_col(0);
+                    self.do_move_cursor_to_row(self.actual_top_margin());
+                },
+
+                (Some('?'), 7) => self.auto_wrap_mode = false,
+                (Some('?'), 25) => self.cursor_visible = false,
+                (Some('?'), 47) => self.switch_to_primary_buffer(),
+                (Some('?'), 1047) => self.switch_to_primary_buffer(),
+                (Some('?'), 1048) => self.restore_cursor(),
+
+                (Some('?'), 1049) =>  {
+                    self.switch_to_primary_buffer();
+                    self.restore_cursor();
+                },
+
+                _ => ()
+            }
+        }
+    }
+
     fn execute_sgr(&mut self) {}
     fn execute_decstr(&mut self) {}
     fn execute_decstbm(&mut self) {}
@@ -938,25 +1002,34 @@ impl VT {
         }
     }
 
+    fn get_params(&self) -> Vec<u16> {
+        self.params
+        .iter()
+        .map(|chars| VT::chars_to_number(chars))
+        .collect()
+    }
+
     fn get_param(&self, n: usize, default: u16) -> u16 {
         let param =
             self.params
             .iter()
             .nth(n)
-            .map_or(0, |chars| {
-                let mut number: u32 = 0;
-                let mut mult: u32 = 1;
-
-                for c in chars.iter().rev() {
-                    let digit = (*c as u32) - 0x30;
-                    number += digit * mult;
-                    mult *= 10;
-                }
-
-                number
-            });
+            .map_or(0, |chars| VT::chars_to_number(chars));
 
         if param == 0 { default } else { param as u16 }
+    }
+
+    fn chars_to_number(chars: &[char]) -> u16  {
+        let mut number: u32 = 0;
+        let mut mult: u32 = 1;
+
+        for c in chars.iter().rev() {
+            let digit = (*c as u32) - 0x30;
+            number += digit * mult;
+            mult *= 10;
+        }
+
+        number as u16
     }
 
     fn actual_top_margin(&self) -> usize {
@@ -973,6 +1046,25 @@ impl VT {
         } else {
             self.rows - 1
         }
+    }
+
+    // cursor
+
+    fn save_cursor(&mut self) {
+        self.saved_ctx.cursor_x = self.cursor_x.min(self.columns - 1);
+        self.saved_ctx.cursor_y = self.cursor_y;
+        self.saved_ctx.pen = self.pen;
+        self.saved_ctx.origin_mode = self.origin_mode;
+        self.saved_ctx.auto_wrap_mode = self.auto_wrap_mode;
+    }
+
+    fn restore_cursor(&mut self) {
+        self.cursor_x = self.saved_ctx.cursor_x;
+        self.cursor_y = self.saved_ctx.cursor_y;
+        self.pen = self.saved_ctx.pen;
+        self.origin_mode = self.saved_ctx.origin_mode;
+        self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
+        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_col(&mut self, col: usize) {
@@ -1070,6 +1162,8 @@ impl VT {
         self.do_move_cursor_to_row(new_y as usize);
     }
 
+    // scrolling
+
     fn scroll_up(&mut self, mut n: usize) {
         let end_index = self.bottom_margin + 1;
         n = n.min(end_index - self.top_margin);
@@ -1082,6 +1176,25 @@ impl VT {
         n = n.min(end_index - self.top_margin);
         &mut self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(0..n);
+    }
+
+    // buffer switching
+
+    fn switch_to_alternate_buffer(&mut self) {
+        if let BufferType::Primary = self.active_buffer_type {
+            self.active_buffer_type = BufferType::Alternate;
+            std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
+            std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
+            self.clear_lines(0..self.rows);
+        }
+    }
+
+    fn switch_to_primary_buffer(&mut self) {
+        if let BufferType::Alternate = self.active_buffer_type {
+            self.active_buffer_type = BufferType::Primary;
+            std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
+            std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
+        }
     }
 }
 
