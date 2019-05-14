@@ -21,7 +21,7 @@ enum State {
     SosPmApcString,
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 enum Color {
     Indexed(u8),
     RGB(u8, u8, u8)
@@ -933,7 +933,182 @@ impl VT {
         }
     }
 
-    fn execute_sgr(&mut self) {}
+    fn execute_sgr(&mut self) {
+        let mut params = self.get_params();
+
+        if params.len() == 0 {
+            params.push(0);
+        }
+
+        let mut ps = &params[..];
+
+        while ps.len() > 0 {
+            match ps.get(0).unwrap() {
+                0 => {
+                    self.pen = Pen::new();
+                    ps = &ps[1..];
+                }
+
+                1 => {
+                    self.pen.bold = true;
+                    ps = &ps[1..];
+                }
+
+                3 => {
+                    self.pen.italic = true;
+                    ps = &ps[1..];
+                }
+
+                4 => {
+                    self.pen.underline = true;
+                    ps = &ps[1..];
+                }
+
+                5 => {
+                    self.pen.blink = true;
+                    ps = &ps[1..];
+                }
+
+                7 => {
+                    self.pen.inverse = true;
+                    ps = &ps[1..];
+                }
+
+                9 => {
+                    ps = &ps[1..];
+                    self.pen.strikethrough = true;
+                }
+
+                21 => {
+                    self.pen.bold = false;
+                    ps = &ps[1..];
+                }
+
+                22 => {
+                    self.pen.bold = false;
+                    ps = &ps[1..];
+                }
+
+                23 => {
+                    self.pen.italic = false;
+                    ps = &ps[1..];
+                }
+
+                24 => {
+                    self.pen.underline = false;
+                    ps = &ps[1..];
+                }
+
+                25 => {
+                    self.pen.blink = false;
+                    ps = &ps[1..];
+                }
+
+                27 => {
+                    self.pen.inverse = false;
+                    ps = &ps[1..];
+                }
+
+                param if *param >= 30 && *param <= 37 => {
+                    self.pen.foreground = Some(Color::Indexed((param - 30) as u8));
+                    ps = &ps[1..];
+                }
+
+                38 => {
+                    match ps.get(1) {
+                        None => {
+                            ps = &ps[1..];
+                        }
+
+                        Some(2) => {
+                            if let Some(b) = ps.get(4) {
+                                let r = ps.get(2).unwrap();
+                                let g = ps.get(3).unwrap();
+                                self.pen.foreground = Some(Color::RGB(*r as u8, *g as u8, *b as u8));
+                                ps = &ps[5..];
+                            } else {
+                                ps = &ps[2..];
+                            }
+                        }
+
+                        Some(5) => {
+                            if let Some(param) = ps.get(2) {
+                                self.pen.foreground = Some(Color::Indexed(*param as u8));
+                                ps = &ps[3..];
+                            } else {
+                                ps = &ps[2..];
+                            }
+                        }
+
+                        Some(_) => {
+                            ps = &ps[1..];
+                        }
+                    }
+                }
+
+                39 => {
+                    self.pen.foreground = None;
+                    ps = &ps[1..];
+                }
+
+                param if *param >= 40 && *param <= 47 => {
+                    self.pen.background = Some(Color::Indexed((param - 40) as u8));
+                    ps = &ps[1..];
+                }
+
+                48 => {
+                    match ps.get(1) {
+                        None => {
+                            ps = &ps[1..];
+                        }
+
+                        Some(2) => {
+                            if let Some(b) = ps.get(4) {
+                                let r = ps.get(2).unwrap();
+                                let g = ps.get(3).unwrap();
+                                self.pen.background = Some(Color::RGB(*r as u8, *g as u8, *b as u8));
+                                ps = &ps[5..];
+                            } else {
+                                ps = &ps[2..];
+                            }
+                        }
+
+                        Some(5) => {
+                            if let Some(param) = ps.get(2) {
+                                self.pen.background = Some(Color::Indexed(*param as u8));
+                                ps = &ps[3..];
+                            } else {
+                                ps = &ps[2..];
+                            }
+                        }
+
+                        Some(_) => {
+                            ps = &ps[1..];
+                        }
+                    }
+                }
+
+                49 => {
+                    self.pen.background = None;
+                    ps = &ps[1..];
+                }
+
+                param if *param >= 90 && *param <= 97 => {
+                    self.pen.foreground = Some(Color::Indexed((param - 90 + 8) as u8));
+                    ps = &ps[1..];
+                }
+
+                param if *param >= 100 && *param <= 107 => {
+                    self.pen.background = Some(Color::Indexed((param - 100 + 8) as u8));
+                    ps = &ps[1..];
+                }
+
+                _ => {
+                    ps = &ps[1..];
+                }
+            }
+        }
+    }
 
     fn execute_decstr(&mut self) {
         if let Some('!') = self.intermediates.get(0) {
@@ -1245,6 +1420,7 @@ extern crate quickcheck_macros;
 mod tests {
     use super::VT;
     use super::Cell;
+    use super::Color;
     use quickcheck::{TestResult, quickcheck};
 
     #[quickcheck]
@@ -1551,6 +1727,59 @@ mod tests {
         vt.feed_str("\x1b[Z");
 
         assert_eq!(vt.cursor_x, 0);
+    }
+
+    #[test]
+    fn execute_sgr() {
+        let mut vt = build_vt(0, 0, vec!["abcd"]);
+
+        vt.feed_str("\x1b[1m");
+        assert!(vt.pen.bold);
+
+        vt.feed_str("\x1b[3m");
+        assert!(vt.pen.italic);
+
+        vt.feed_str("\x1b[4m");
+        assert!(vt.pen.underline);
+
+        vt.feed_str("\x1b[5m");
+        assert!(vt.pen.blink);
+
+        vt.feed_str("\x1b[7m");
+        assert!(vt.pen.inverse);
+
+        vt.feed_str("\x1b[9m");
+        assert!(vt.pen.strikethrough);
+
+        vt.feed_str("\x1b[32m");
+        assert_eq!(vt.pen.foreground, Some(Color::Indexed(2)));
+
+        vt.feed_str("\x1b[43m");
+        assert_eq!(vt.pen.background, Some(Color::Indexed(3)));
+
+        vt.feed_str("\x1b[93m");
+        assert_eq!(vt.pen.foreground, Some(Color::Indexed(11)));
+
+        vt.feed_str("\x1b[104m");
+        assert_eq!(vt.pen.background, Some(Color::Indexed(12)));
+
+        vt.feed_str("\x1b[39m");
+        assert_eq!(vt.pen.foreground, None);
+
+        vt.feed_str("\x1b[49m");
+        assert_eq!(vt.pen.background, None);
+
+        vt.feed_str("\x1b[1;38;5;88;48;5;99;5m");
+        assert!(vt.pen.bold);
+        assert!(vt.pen.blink);
+        assert_eq!(vt.pen.foreground, Some(Color::Indexed(88)));
+        assert_eq!(vt.pen.background, Some(Color::Indexed(99)));
+
+        vt.feed_str("\x1b[1;38;2;1;101;201;48;2;2;102;202;5m");
+        assert!(vt.pen.bold);
+        assert!(vt.pen.blink);
+        assert_eq!(vt.pen.foreground, Some(Color::RGB(1, 101, 201)));
+        assert_eq!(vt.pen.background, Some(Color::RGB(2, 102, 202)));
     }
 
     fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> VT {
