@@ -221,8 +221,8 @@ impl VT {
             // Anywhere
             (_, '\u{18}')
             | (_, '\u{1a}')
-            | (_, '\u{80}'...'\u{8f}')
-            | (_, '\u{91}'...'\u{97}')
+            | (_, '\u{80}'..='\u{8f}')
+            | (_, '\u{91}'..='\u{97}')
             | (_, '\u{99}')
             | (_, '\u{9a}') => {
                 self.state = State::Ground;
@@ -259,37 +259,37 @@ impl VT {
             // Ground
 
             // C0 prime
-            (State::Ground, '\u{00}'...'\u{17}')
+            (State::Ground, '\u{00}'..='\u{17}')
             | (State::Ground, '\u{19}')
-            | (State::Ground, '\u{1c}'...'\u{1f}') => {
+            | (State::Ground, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::Ground, '\u{20}'...'\u{7f}') => {
-                // (State::Ground, '\u{a0}'...'\u{ff}') => {
+            (State::Ground, '\u{20}'..='\u{7f}') => {
+                // (State::Ground, '\u{a0}'..='\u{ff}') => {
                 self.print(input);
             }
 
             // Escape
 
             // C0 prime
-            (State::Escape, '\u{00}'...'\u{17}')
+            (State::Escape, '\u{00}'..='\u{17}')
             | (State::Escape, '\u{19}')
-            | (State::Escape, '\u{1c}'...'\u{1f}') => {
+            | (State::Escape, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::Escape, '\u{20}'...'\u{2f}') => {
+            (State::Escape, '\u{20}'..='\u{2f}') => {
                 self.state = State::EscapeIntermediate;
                 self.collect(input);
             }
 
-            (State::Escape, '\u{30}'...'\u{4f}')
-            | (State::Escape, '\u{51}'...'\u{57}')
+            (State::Escape, '\u{30}'..='\u{4f}')
+            | (State::Escape, '\u{51}'..='\u{57}')
             | (State::Escape, '\u{59}')
             | (State::Escape, '\u{5a}')
             | (State::Escape, '\u{5c}')
-            | (State::Escape, '\u{60}'...'\u{7e}') => {
+            | (State::Escape, '\u{60}'..='\u{7e}') => {
                 self.state = State::Ground;
                 self.esc_dispatch(input);
             }
@@ -315,17 +315,17 @@ impl VT {
             // EscapeIntermediate
 
             // C0 prime
-            (State::EscapeIntermediate, '\u{00}'...'\u{17}')
+            (State::EscapeIntermediate, '\u{00}'..='\u{17}')
             | (State::EscapeIntermediate, '\u{19}')
-            | (State::EscapeIntermediate, '\u{1c}'...'\u{1f}') => {
+            | (State::EscapeIntermediate, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::EscapeIntermediate, '\u{20}'...'\u{2f}') => {
+            (State::EscapeIntermediate, '\u{20}'..='\u{2f}') => {
                 self.collect(input);
             }
 
-            (State::EscapeIntermediate, '\u{30}'...'\u{7e}') => {
+            (State::EscapeIntermediate, '\u{30}'..='\u{7e}') => {
                 self.state = State::Ground;
                 self.esc_dispatch(input);
             }
@@ -333,18 +333,18 @@ impl VT {
             // CsiEntry
 
             // C0 prime
-            (State::CsiEntry, '\u{00}'...'\u{17}')
+            (State::CsiEntry, '\u{00}'..='\u{17}')
             | (State::CsiEntry, '\u{19}')
-            | (State::CsiEntry, '\u{1c}'...'\u{1f}') => {
+            | (State::CsiEntry, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::CsiEntry, '\u{20}'...'\u{2f}') => {
+            (State::CsiEntry, '\u{20}'..='\u{2f}') => {
                 self.state = State::CsiIntermediate;
                 self.collect(input);
             }
 
-            (State::CsiEntry, '\u{30}'...'\u{39}') | (State::CsiEntry, '\u{3b}') => {
+            (State::CsiEntry, '\u{30}'..='\u{39}') | (State::CsiEntry, '\u{3b}') => {
                 self.state = State::CsiParam;
                 self.param(input);
             }
@@ -353,12 +353,12 @@ impl VT {
                 self.state = State::CsiIgnore;
             }
 
-            (State::CsiEntry, '\u{3c}'...'\u{3f}') => {
+            (State::CsiEntry, '\u{3c}'..='\u{3f}') => {
                 self.state = State::CsiParam;
                 self.collect(input);
             }
 
-            (State::CsiEntry, '\u{40}'...'\u{7e}') => {
+            (State::CsiEntry, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
                 self.csi_dispatch(input);
             }
@@ -366,26 +366,26 @@ impl VT {
             // CsiParam
 
             // C0 prime
-            (State::CsiParam, '\u{00}'...'\u{17}')
+            (State::CsiParam, '\u{00}'..='\u{17}')
             | (State::CsiParam, '\u{19}')
-            | (State::CsiParam, '\u{1c}'...'\u{1f}') => {
+            | (State::CsiParam, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::CsiParam, '\u{20}'...'\u{2f}') => {
+            (State::CsiParam, '\u{20}'..='\u{2f}') => {
                 self.state = State::CsiIntermediate;
                 self.collect(input);
             }
 
-            (State::CsiParam, '\u{30}'...'\u{39}') | (State::CsiParam, '\u{3b}') => {
+            (State::CsiParam, '\u{30}'..='\u{39}') | (State::CsiParam, '\u{3b}') => {
                 self.param(input);
             }
 
-            (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'...'\u{3f}') => {
+            (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'..='\u{3f}') => {
                 self.state = State::CsiIgnore;
             }
 
-            (State::CsiParam, '\u{40}'...'\u{7e}') => {
+            (State::CsiParam, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
                 self.csi_dispatch(input);
             }
@@ -393,21 +393,21 @@ impl VT {
             // CsiIntermediate
 
             // C0 prime
-            (State::CsiIntermediate, '\u{00}'...'\u{17}')
+            (State::CsiIntermediate, '\u{00}'..='\u{17}')
             | (State::CsiIntermediate, '\u{19}')
-            | (State::CsiIntermediate, '\u{1c}'...'\u{1f}') => {
+            | (State::CsiIntermediate, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::CsiIntermediate, '\u{20}'...'\u{2f}') => {
+            (State::CsiIntermediate, '\u{20}'..='\u{2f}') => {
                 self.collect(input);
             }
 
-            (State::CsiIntermediate, '\u{30}'...'\u{3f}') => {
+            (State::CsiIntermediate, '\u{30}'..='\u{3f}') => {
                 self.state = State::CsiIgnore;
             }
 
-            (State::CsiIntermediate, '\u{40}'...'\u{7e}') => {
+            (State::CsiIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
                 self.csi_dispatch(input);
             }
@@ -415,28 +415,28 @@ impl VT {
             // CsiIgnore
 
             // C0 prime
-            (State::CsiIgnore, '\u{00}'...'\u{17}')
+            (State::CsiIgnore, '\u{00}'..='\u{17}')
             | (State::CsiIgnore, '\u{19}')
-            | (State::CsiIgnore, '\u{1c}'...'\u{1f}') => {
+            | (State::CsiIgnore, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
             }
 
-            (State::CsiIgnore, '\u{40}'...'\u{7e}') => {
+            (State::CsiIgnore, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
             }
 
             // DcsEntry
-            (State::DcsEntry, '\u{20}'...'\u{2f}') => {
+            (State::DcsEntry, '\u{20}'..='\u{2f}') => {
                 self.state = State::DcsIntermediate;
                 self.collect(input);
             }
 
-            (State::DcsEntry, '\u{30}'...'\u{39}') | (State::DcsEntry, '\u{3b}') => {
+            (State::DcsEntry, '\u{30}'..='\u{39}') | (State::DcsEntry, '\u{3b}') => {
                 self.state = State::DcsParam;
                 self.param(input);
             }
 
-            (State::DcsEntry, '\u{3c}'...'\u{3f}') => {
+            (State::DcsEntry, '\u{3c}'..='\u{3f}') => {
                 self.state = State::DcsParam;
                 self.collect(input);
             }
@@ -445,51 +445,51 @@ impl VT {
                 self.state = State::DcsIgnore;
             }
 
-            (State::DcsEntry, '\u{40}'...'\u{7e}') => {
+            (State::DcsEntry, '\u{40}'..='\u{7e}') => {
                 self.state = State::DcsPassthrough;
             }
 
             // DcsParam
-            (State::DcsParam, '\u{20}'...'\u{2f}') => {
+            (State::DcsParam, '\u{20}'..='\u{2f}') => {
                 self.state = State::DcsIntermediate;
                 self.collect(input);
             }
 
-            (State::DcsParam, '\u{30}'...'\u{39}') | (State::DcsParam, '\u{3b}') => {
+            (State::DcsParam, '\u{30}'..='\u{39}') | (State::DcsParam, '\u{3b}') => {
                 self.param(input);
             }
 
-            (State::DcsParam, '\u{3a}') | (State::DcsParam, '\u{3c}'...'\u{3f}') => {
+            (State::DcsParam, '\u{3a}') | (State::DcsParam, '\u{3c}'..='\u{3f}') => {
                 self.state = State::DcsIgnore;
             }
 
-            (State::DcsParam, '\u{40}'...'\u{7e}') => {
+            (State::DcsParam, '\u{40}'..='\u{7e}') => {
                 self.state = State::DcsPassthrough;
             }
 
             // DcsIntermediate
-            (State::DcsIntermediate, '\u{20}'...'\u{2f}') => {
+            (State::DcsIntermediate, '\u{20}'..='\u{2f}') => {
                 self.collect(input);
             }
 
-            (State::DcsIntermediate, '\u{30}'...'\u{3f}') => {
+            (State::DcsIntermediate, '\u{30}'..='\u{3f}') => {
                 self.state = State::DcsIgnore;
             }
 
-            (State::DcsIntermediate, '\u{40}'...'\u{7e}') => {
+            (State::DcsIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = State::DcsPassthrough;
             }
 
             // DcsPassthrough
 
             // C0 prime
-            (State::DcsPassthrough, '\u{00}'...'\u{17}')
+            (State::DcsPassthrough, '\u{00}'..='\u{17}')
             | (State::DcsPassthrough, '\u{19}')
-            | (State::DcsPassthrough, '\u{1c}'...'\u{1f}') => {
+            | (State::DcsPassthrough, '\u{1c}'..='\u{1f}') => {
                 self.put(input);
             }
 
-            (State::DcsPassthrough, '\u{20}'...'\u{7e}') => {
+            (State::DcsPassthrough, '\u{20}'..='\u{7e}') => {
                 self.put(input);
             }
 
@@ -499,7 +499,7 @@ impl VT {
                 self.state = State::Ground;
             }
 
-            (State::OscString, '\u{20}'...'\u{7f}') => {
+            (State::OscString, '\u{20}'..='\u{7f}') => {
                 self.osc_put(input);
             }
 
@@ -1282,27 +1282,27 @@ impl VT {
         let last_col = self.columns - 1;
 
         let next_tab =
-            self.tabs
+            *self.tabs
             .iter()
             .skip_while(|&&t| self.cursor_x >= t)
             .nth(n - 1)
             .unwrap_or(&last_col);
 
-        self.move_cursor_to_col(*next_tab);
+        self.move_cursor_to_col(next_tab);
     }
 
     fn move_cursor_to_prev_tab(&mut self, n: usize) {
         let first_col = 0;
 
         let prev_tab =
-            self.tabs
+            *self.tabs
             .iter()
             .rev()
             .skip_while(|&&t| self.cursor_x <= t)
             .nth(n - 1)
             .unwrap_or(&first_col);
 
-        self.move_cursor_to_col(*prev_tab);
+        self.move_cursor_to_col(prev_tab);
     }
 
     fn move_cursor_down_with_scroll(&mut self) {
