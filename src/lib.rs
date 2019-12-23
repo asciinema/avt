@@ -1408,6 +1408,33 @@ impl VT {
         self.saved_ctx = SavedCtx::new();
         self.alternate_saved_ctx = SavedCtx::new();
     }
+
+    pub fn get_line(&self, l: usize) -> Vec<Part> {
+        VT::chunk_cells(&self.buffer[l])
+    }
+
+    fn chunk_cells(cells: &Vec<Cell>) -> Vec<Part> {
+        if cells.len() > 0 {
+            let mut part = Part(vec![cells[0].0], cells[0].1);
+            let mut parts = vec![];
+
+            for cell in &cells[1..] {
+                if cell.1 == part.1 {
+                    part.0.push(cell.0);
+                } else {
+                    parts.push(part);
+                    part = Part(vec![cell.0], cell.1);
+                }
+            }
+
+            parts.push(part);
+
+            parts
+        } else {
+            vec![]
+        }
+    }
+}
 }
 
 #[cfg(test)]
