@@ -4,6 +4,9 @@ version = "0.1.0"
 authors = ["Marcin Kulik <m@ku1ik.com>"]
 edition = "2018"
 
+[dependencies]
+serde = "1.0.104"
+
 [dev-dependencies]
 rand = "0.7"
 quickcheck = "0.9.0"

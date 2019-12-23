@@ -2,6 +2,8 @@
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
 use std::ops::Range;
+use serde::ser::{Serialize, Serializer, SerializeMap, SerializeTuple};
+
 
 #[derive(Debug)]
 enum State {
@@ -27,7 +29,7 @@ enum Color {
     RGB(u8, u8, u8)
 }
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 struct Pen {
     foreground: Option<Color>,
     background: Option<Color>,
@@ -41,6 +43,9 @@ struct Pen {
 
 #[derive(Debug, Copy, Clone)]
 struct Cell(char, Pen);
+
+#[derive(Debug)]
+pub struct Part(Vec<char>, Pen);
 
 #[derive(Debug)]
 enum Charset {
@@ -1435,6 +1440,112 @@ impl VT {
         }
     }
 }
+
+impl Serialize for Part {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut tup = serializer.serialize_tuple(2)?;
+        let text: String = self.0.iter().collect();
+        tup.serialize_element(&text)?;
+        tup.serialize_element(&self.1)?;
+        tup.end()
+    }
+}
+
+impl Serialize for Pen {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut len = 0;
+
+        if let Some(_) = self.foreground {
+            len += 1;
+        }
+
+        if let Some(_) = self.background {
+            len += 1;
+        }
+
+        if self.bold {
+            len += 1;
+        }
+
+        if self.italic {
+            len += 1;
+        }
+
+        if self.underline {
+            len += 1;
+        }
+
+        if self.strikethrough {
+            len += 1;
+        }
+
+        if self.blink {
+            len += 1;
+        }
+
+        if self.inverse {
+            len += 1;
+        }
+
+        let mut map = serializer.serialize_map(Some(len))?;
+
+        if let Some(c) = self.foreground {
+            map.serialize_entry("fg", &c)?;
+        }
+
+        if let Some(c) = self.background {
+            map.serialize_entry("bg", &c)?;
+        }
+
+        if self.bold {
+            map.serialize_entry("bold", &true)?;
+        }
+
+        if self.italic {
+            map.serialize_entry("italic", &true)?;
+        }
+
+        if self.underline {
+            map.serialize_entry("underline", &true)?;
+        }
+
+        if self.strikethrough {
+            map.serialize_entry("strikethrough", &true)?;
+        }
+
+        if self.blink {
+            map.serialize_entry("blink", &true)?;
+        }
+
+        if self.inverse {
+            map.serialize_entry("inverse", &true)?;
+        }
+
+        map.end()
+    }
+}
+
+impl Serialize for Color {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            Color::Indexed(c) => {
+                serializer.serialize_u8(*c)
+            }
+
+            Color::RGB(r, g, b) => {
+                serializer.serialize_str(&format!("rgb({},{},{})", r, g, b))
+            }
+        }
+    }
 }
 
 #[cfg(test)]
