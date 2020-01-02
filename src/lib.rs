@@ -45,7 +45,7 @@ struct Pen {
 struct Cell(char, Pen);
 
 #[derive(Debug)]
-pub struct Part(Vec<char>, Pen);
+pub struct Segment(Vec<char>, Pen);
 
 #[derive(Debug)]
 enum Charset {
@@ -1414,13 +1414,13 @@ impl VT {
         self.alternate_saved_ctx = SavedCtx::new();
     }
 
-    pub fn get_line(&self, l: usize) -> Vec<Part> {
+    pub fn get_line(&self, l: usize) -> Vec<Segment> {
         VT::chunk_cells(&self.buffer[l])
     }
 
-    fn chunk_cells(cells: &Vec<Cell>) -> Vec<Part> {
+    fn chunk_cells(cells: &Vec<Cell>) -> Vec<Segment> {
         if cells.len() > 0 {
-            let mut part = Part(vec![cells[0].0], cells[0].1);
+            let mut part = Segment(vec![cells[0].0], cells[0].1);
             let mut parts = vec![];
 
             for cell in &cells[1..] {
@@ -1428,7 +1428,7 @@ impl VT {
                     part.0.push(cell.0);
                 } else {
                     parts.push(part);
-                    part = Part(vec![cell.0], cell.1);
+                    part = Segment(vec![cell.0], cell.1);
                 }
             }
 
@@ -1441,7 +1441,7 @@ impl VT {
     }
 }
 
-impl Serialize for Part {
+impl Serialize for Segment {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
