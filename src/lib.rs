@@ -97,7 +97,8 @@ pub struct VT {
     top_margin: usize,
     bottom_margin: usize,
     saved_ctx: SavedCtx,
-    alternate_saved_ctx: SavedCtx
+    alternate_saved_ctx: SavedCtx,
+    affected_lines: Vec<bool>
 }
 
 const SPECIAL_GFX_CHARS: [char; 31] = [
@@ -181,7 +182,8 @@ impl VT {
             top_margin: 0,
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::new(),
-            alternate_saved_ctx: SavedCtx::new()
+            alternate_saved_ctx: SavedCtx::new(),
+            affected_lines: vec![true; rows]
         }
     }
 
@@ -213,10 +215,29 @@ impl VT {
 
     // parser
 
-    pub fn feed_str(&mut self, s: &str) {
+    pub fn feed_str(&mut self, s: &str) -> Vec<usize> {
+        // reset affected lines vec
+        for l in &mut self.affected_lines[..] {
+            *l = false;
+        }
+
+        // feed parser with chars
         for c in s.chars() {
             self.feed(c);
         }
+
+        // return affected line numbers
+        self.affected_lines
+        .iter()
+        .enumerate()
+        .filter_map(|(i, &affected)|
+            if affected {
+                Some(i)
+            } else {
+                None
+            }
+        )
+        .collect()
     }
 
     pub fn feed(&mut self, input: char) {
@@ -565,6 +586,8 @@ impl VT {
             self.set_cell(self.cursor_x, self.cursor_y, cell);
             self.do_move_cursor_to_col(next_column);
         }
+
+        self.mark_affected_line(self.cursor_y);
     }
 
     fn collect(&mut self, input: char) {
@@ -663,6 +686,8 @@ impl VT {
             for x in 0..self.columns {
                 self.set_cell(x, y, Cell('\u{45}', Pen::new()));
             }
+
+            self.mark_affected_line(y);
         }
     }
 
@@ -721,6 +746,8 @@ impl VT {
         for cell in &mut cells[0..n] {
             *cell = tpl;
         }
+
+        self.mark_affected_line(self.cursor_y);
     }
 
     fn execute_cuu(&mut self) {
@@ -768,17 +795,20 @@ impl VT {
                 // clear to end of screen
                 self.clear_line(self.cursor_x..self.columns);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
+                self.mark_affected_lines(self.cursor_y..self.rows);
             }
 
             1 => {
                 // clear to beginning of screen
                 self.clear_line(0..(self.cursor_x + 1).min(self.columns));
                 self.clear_lines(0..self.cursor_y);
+                self.mark_affected_lines(0..(self.cursor_y + 1));
             }
 
             2 => {
                 // clear whole screen
                 self.clear_lines(0..self.rows);
+                self.mark_affected_lines(0..self.rows);
             }
 
             _ => ()
@@ -790,16 +820,19 @@ impl VT {
             0 => {
                 // clear to end of line
                 self.clear_line(self.cursor_x..self.columns);
+                self.mark_affected_line(self.cursor_y);
             }
 
             1 => {
                 // clear to begining of line
                 self.clear_line(0..(self.cursor_x + 1).min(self.columns));
+                self.mark_affected_line(self.cursor_y);
             }
 
             2 => {
                 // clear whole line
                 self.clear_line(0..self.columns);
+                self.mark_affected_line(self.cursor_y);
             }
 
             _ => ()
@@ -813,10 +846,12 @@ impl VT {
             n = n.min(self.bottom_margin + 1 - self.cursor_y);
             &mut self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
+            self.mark_affected_lines(self.cursor_y..(self.bottom_margin + 1));
         } else {
             n = n.min(self.rows - self.cursor_y);
             &mut self.buffer[self.cursor_y..].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
+            self.mark_affected_lines(self.cursor_y..self.rows);
         }
     }
 
@@ -828,10 +863,12 @@ impl VT {
             n = n.min(end_index - self.cursor_y);
             &mut self.buffer[self.cursor_y..end_index].rotate_left(n);
             self.clear_lines((end_index - n)..end_index);
+            self.mark_affected_lines(self.cursor_y..end_index);
         } else {
             n = n.min(self.rows - self.cursor_y);
             &mut self.buffer[self.cursor_y..self.rows].rotate_left(n);
             self.clear_lines((self.rows - n)..self.rows);
+            self.mark_affected_lines(self.cursor_y..self.rows);
         }
     }
 
@@ -844,6 +881,7 @@ impl VT {
         n = n.min(self.columns - self.cursor_x);
         &mut self.buffer[self.cursor_y][self.cursor_x..].rotate_left(n);
         self.clear_line((self.columns - n)..self.columns);
+        self.mark_affected_line(self.cursor_y);
     }
 
     fn execute_su(&mut self) {
@@ -867,6 +905,7 @@ impl VT {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.columns - self.cursor_x);
         self.clear_line(self.cursor_x..(self.cursor_x + n));
+        self.mark_affected_line(self.cursor_y);
     }
 
     fn execute_cbt(&mut self) {
@@ -1347,6 +1386,7 @@ impl VT {
         n = n.min(end_index - self.top_margin);
         &mut self.buffer[self.top_margin..end_index].rotate_left(n);
         self.clear_lines((end_index - n)..end_index);
+        self.mark_affected_lines(self.top_margin..end_index);
     }
 
     fn scroll_down(&mut self, mut n: usize) {
@@ -1354,6 +1394,7 @@ impl VT {
         n = n.min(end_index - self.top_margin);
         &mut self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(0..n);
+        self.mark_affected_lines(0..end_index);
     }
 
     // buffer switching
@@ -1364,6 +1405,7 @@ impl VT {
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
             self.clear_lines(0..self.rows);
+            self.mark_affected_lines(0..self.rows);
         }
     }
 
@@ -1372,6 +1414,7 @@ impl VT {
             self.active_buffer_type = BufferType::Primary;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
+            self.mark_affected_lines(0..self.rows);
         }
     }
 
@@ -1412,6 +1455,7 @@ impl VT {
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::new();
         self.alternate_saved_ctx = SavedCtx::new();
+        self.affected_lines = vec![true; self.rows];
     }
 
     pub fn get_line(&self, l: usize) -> Vec<Segment> {
@@ -1438,6 +1482,18 @@ impl VT {
         } else {
             vec![]
         }
+    }
+
+    // line change tracking
+
+    fn mark_affected_lines(&mut self, range: Range<usize>) {
+        for l in &mut self.affected_lines[range] {
+            *l = true;
+        }
+    }
+
+    fn mark_affected_line(&mut self, line: usize) {
+        self.affected_lines[line] = true;
     }
 }
 
