@@ -209,8 +209,12 @@ impl VT {
         tabs
     }
 
-    pub fn get_cursor_x(&self) -> usize {
-        self.cursor_x
+    pub fn get_cursor(&self) -> Option<(usize, usize)> {
+        if self.cursor_visible {
+            Some((self.cursor_x, self.cursor_y))
+        } else {
+            None
+        }
     }
 
     // parser
