@@ -1466,6 +1466,13 @@ impl VT {
         VT::chunk_cells(&self.buffer[l])
     }
 
+    pub fn get_lines(&self) -> Vec<Vec<Segment>> {
+        self.buffer
+        .iter()
+        .map(|line| VT::chunk_cells(line))
+        .collect()
+    }
+
     fn chunk_cells(cells: &Vec<Cell>) -> Vec<Segment> {
         if cells.len() > 0 {
             let mut part = Segment(vec![cells[0].0], cells[0].1);
