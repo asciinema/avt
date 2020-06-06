@@ -575,11 +575,11 @@ impl VT {
         let cell = Cell(input, self.pen);
         let next_column = self.cursor_x + 1;
 
-        if next_column == self.columns {
-            self.set_cell(self.cursor_x, self.cursor_y, cell);
+        if next_column >= self.columns {
+            self.set_cell(self.columns - 1, self.cursor_y, cell);
 
             if self.auto_wrap_mode {
-                self.do_move_cursor_to_col(next_column);
+                self.do_move_cursor_to_col(self.columns);
                 self.next_print_wraps = true;
             }
         } else {
@@ -1679,8 +1679,10 @@ mod tests {
 
     // #[test]
     // fn failed() {
-    //     let mut vt = VT::new(10, 4);
+    //     let mut vt = VT::new(2, 2);
     //     let bytes: Vec<u8> = vec![32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 74];
+    //     let bytes: Vec<u8> = vec![32, 32, 27, 91, 63, 55, 108, 32];
+    //     let bytes: Vec<u8> = fs::read("100303.txt").unwrap();
 
     //     for b in bytes {
     //         vt.feed(b as char);
