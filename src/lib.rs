@@ -5,8 +5,8 @@ use std::ops::Range;
 use serde::ser::{Serialize, Serializer, SerializeMap, SerializeTuple};
 
 
-#[derive(Debug)]
-enum State {
+#[derive(Debug, Copy, Clone)]
+pub enum State {
     Ground,
     Escape,
     EscapeIntermediate,
@@ -71,7 +71,7 @@ struct SavedCtx {
 #[derive(Debug)]
 pub struct VT {
     // parser
-    state: State,
+    pub state: State,
 
     // interpreter
     params: Vec<Vec<char>>,
