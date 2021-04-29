@@ -1629,7 +1629,7 @@ mod tests {
     use quickcheck::{TestResult, quickcheck};
 
     #[quickcheck]
-    fn cursor_position(bytes: Vec<u8>) -> bool {
+    fn qc_cursor_position(bytes: Vec<u8>) -> bool {
         let mut vt = VT::new(10, 4);
 
         for b in bytes.iter() {
@@ -1640,7 +1640,7 @@ mod tests {
     }
 
     #[quickcheck]
-    fn buffer_size(bytes: Vec<u8>) -> bool {
+    fn qc_buffer_size(bytes: Vec<u8>) -> bool {
         let mut vt = VT::new(10, 4);
 
         for b in bytes.iter() {
@@ -1651,7 +1651,7 @@ mod tests {
     }
 
     #[quickcheck]
-    fn wrapping(y: u8, bytes: Vec<u8>) -> TestResult {
+    fn qc_wrapping(y: u8, bytes: Vec<u8>) -> TestResult {
         if y >= 5 {
             return TestResult::discard()
         }
