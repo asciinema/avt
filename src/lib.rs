@@ -74,7 +74,7 @@ pub struct VT {
     pub state: State,
 
     // interpreter
-    params: Vec<Vec<char>>,
+    params: Vec<u16>,
     intermediates: Vec<char>,
 
     // screen
@@ -161,7 +161,7 @@ impl VT {
 
         VT {
             state: State::Ground,
-            params: Vec::new(),
+            params: Vec::with_capacity(4),
             intermediates: Vec::new(),
             columns: columns,
             rows: rows,
@@ -616,14 +616,15 @@ impl VT {
 
     fn param(&mut self, input: char) {
         if self.params.is_empty() {
-            self.params.push(Vec::new());
+            self.params.push(0);
         }
 
         if input == ';' {
-            self.params.push(Vec::new());
+            self.params.push(0);
         } else {
             let n = self.params.len() - 1;
-            self.params[n].push(input);
+            let p = self.params.get_mut(n).unwrap();
+            *p = (10 * *p) + (input as u16) - 0x30;
         }
     }
 
@@ -929,7 +930,7 @@ impl VT {
     }
 
     fn execute_sm(&mut self) {
-        for param in self.get_params() {
+        for param in self.params.clone() {
             match (self.intermediates.get(0), param) {
                 (None, 4) => self.insert_mode = true,
                 (None, 20) => self.new_line_mode = true,
@@ -955,7 +956,7 @@ impl VT {
     }
 
     fn execute_rm(&mut self) {
-        for param in self.get_params() {
+        for param in self.params.clone() {
             match (self.intermediates.get(0), param) {
                 (None, 4) => self.insert_mode = false,
                 (None, 20) => self.new_line_mode = false,
@@ -982,13 +983,11 @@ impl VT {
     }
 
     fn execute_sgr(&mut self) {
-        let mut params = self.get_params();
-
-        if params.len() == 0 {
-            params.push(0);
+        if self.params.len() == 0 {
+            self.params.push(0);
         }
 
-        let mut ps = &params[..];
+        let mut ps = &self.params[..];
 
         while ps.len() > 0 {
             match ps.get(0).unwrap() {
@@ -1218,34 +1217,10 @@ impl VT {
         }
     }
 
-    fn get_params(&self) -> Vec<u16> {
-        self.params
-        .iter()
-        .map(|chars| VT::chars_to_number(chars))
-        .collect()
-    }
-
     fn get_param(&self, n: usize, default: u16) -> u16 {
-        let param =
-            self.params
-            .iter()
-            .nth(n)
-            .map_or(0, |chars| VT::chars_to_number(chars));
+        let param = *self.params.get(n).unwrap_or(&0);
 
-        if param == 0 { default } else { param as u16 }
-    }
-
-    fn chars_to_number(chars: &[char]) -> u16  {
-        let mut number: u32 = 0;
-        let mut mult: u32 = 1;
-
-        for c in chars.iter().rev() {
-            let digit = (*c as u32) - 0x30;
-            number += digit * mult;
-            mult *= 10;
-        }
-
-        number as u16
+        if param == 0 { default } else { param }
     }
 
     fn actual_top_margin(&self) -> usize {
