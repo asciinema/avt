@@ -161,7 +161,7 @@ impl VT {
 
         VT {
             state: State::Ground,
-            params: Vec::with_capacity(4),
+            params: Vec::new(),
             intermediates: Vec::new(),
             columns: columns,
             rows: rows,
