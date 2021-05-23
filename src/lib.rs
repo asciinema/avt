@@ -615,10 +615,6 @@ impl VT {
     }
 
     fn param(&mut self, input: char) {
-        if self.params.is_empty() {
-            self.params.push(0);
-        }
-
         if input == ';' {
             self.params.push(0);
         } else {
@@ -671,6 +667,7 @@ impl VT {
 
     fn clear(&mut self) {
         self.params.clear();
+        self.params.push(0);
         self.intermediates.clear();
     }
 
@@ -983,10 +980,6 @@ impl VT {
     }
 
     fn execute_sgr(&mut self) {
-        if self.params.len() == 0 {
-            self.params.push(0);
-        }
-
         let mut ps = &self.params[..];
 
         while ps.len() > 0 {
@@ -1415,6 +1408,7 @@ impl VT {
 
         self.state = State::Ground;
         self.params = Vec::new();
+        self.params.push(0);
         self.intermediates = Vec::new();
         self.buffer = buffer;
         self.alternate_buffer = alternate_buffer;
