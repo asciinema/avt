@@ -619,7 +619,7 @@ impl VT {
             self.params.push(0);
         } else {
             let n = self.params.len() - 1;
-            let p = self.params.get_mut(n).unwrap();
+            let p = &mut self.params[n];
             *p = (10 * *p) + (input as u16) - 0x30;
         }
     }
