@@ -584,7 +584,7 @@ impl VT {
             }
         } else {
             if self.insert_mode {
-                &mut self.buffer[self.cursor_y][self.cursor_x..].rotate_right(1);
+                self.buffer[self.cursor_y][self.cursor_x..].rotate_right(1);
             }
 
             self.set_cell(self.cursor_x, self.cursor_y, cell);
@@ -846,12 +846,12 @@ impl VT {
 
         if self.cursor_y <= self.bottom_margin {
             n = n.min(self.bottom_margin + 1 - self.cursor_y);
-            &mut self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
+            self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
             self.mark_affected_lines(self.cursor_y..(self.bottom_margin + 1));
         } else {
             n = n.min(self.rows - self.cursor_y);
-            &mut self.buffer[self.cursor_y..].rotate_right(n);
+            self.buffer[self.cursor_y..].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
             self.mark_affected_lines(self.cursor_y..self.rows);
         }
@@ -863,12 +863,12 @@ impl VT {
         if self.cursor_y <= self.bottom_margin {
             let end_index = self.bottom_margin + 1;
             n = n.min(end_index - self.cursor_y);
-            &mut self.buffer[self.cursor_y..end_index].rotate_left(n);
+            self.buffer[self.cursor_y..end_index].rotate_left(n);
             self.clear_lines((end_index - n)..end_index);
             self.mark_affected_lines(self.cursor_y..end_index);
         } else {
             n = n.min(self.rows - self.cursor_y);
-            &mut self.buffer[self.cursor_y..self.rows].rotate_left(n);
+            self.buffer[self.cursor_y..self.rows].rotate_left(n);
             self.clear_lines((self.rows - n)..self.rows);
             self.mark_affected_lines(self.cursor_y..self.rows);
         }
@@ -881,7 +881,7 @@ impl VT {
 
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.columns - self.cursor_x);
-        &mut self.buffer[self.cursor_y][self.cursor_x..].rotate_left(n);
+        self.buffer[self.cursor_y][self.cursor_x..].rotate_left(n);
         self.clear_line((self.columns - n)..self.columns);
         self.mark_affected_line(self.cursor_y);
     }
@@ -1356,7 +1356,7 @@ impl VT {
     fn scroll_up(&mut self, mut n: usize) {
         let end_index = self.bottom_margin + 1;
         n = n.min(end_index - self.top_margin);
-        &mut self.buffer[self.top_margin..end_index].rotate_left(n);
+        self.buffer[self.top_margin..end_index].rotate_left(n);
         self.clear_lines((end_index - n)..end_index);
         self.mark_affected_lines(self.top_margin..end_index);
     }
@@ -1364,7 +1364,7 @@ impl VT {
     fn scroll_down(&mut self, mut n: usize) {
         let end_index = self.bottom_margin + 1;
         n = n.min(end_index - self.top_margin);
-        &mut self.buffer[self.top_margin..end_index].rotate_right(n);
+        self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(0..n);
         self.mark_affected_lines(0..end_index);
     }
