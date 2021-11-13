@@ -648,6 +648,7 @@ impl VT {
             (None, 'Z') => self.execute_cbt(),
             (None, '`') => self.execute_cha(),
             (None, 'a') => self.execute_cuf(),
+            (None, 'b') => self.execute_rep(),
             (None, 'd') => self.execute_vpa(),
             (None, 'e') => self.execute_cuu(),
             (None, 'f') => self.execute_cup(),
@@ -910,6 +911,17 @@ impl VT {
         n = n.min(self.columns - self.cursor_x);
         self.clear_line(self.cursor_x..(self.cursor_x + n));
         self.mark_affected_line(self.cursor_y);
+    }
+
+    fn execute_rep(&mut self) {
+        if self.cursor_x > 0 {
+            let n = self.get_param(0, 1);
+            let char = self.buffer[self.cursor_y][self.cursor_x - 1].0;
+
+            for _n in 0..n {
+                self.print(char);
+            }
+        }
     }
 
     fn execute_cbt(&mut self) {
