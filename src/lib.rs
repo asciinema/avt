@@ -625,38 +625,40 @@ impl VT {
     }
 
     fn csi_dispatch(&mut self, input: char) {
-        match input {
-            '@' => self.execute_ich(),
-            'A' => self.execute_cuu(),
-            'B' => self.execute_cud(),
-            'C' => self.execute_cuf(),
-            'D' => self.execute_cub(),
-            'E' => self.execute_cnl(),
-            'F' => self.execute_cpl(),
-            'G' => self.execute_cha(),
-            'H' => self.execute_cup(),
-            'I' => self.execute_cht(),
-            'J' => self.execute_ed(),
-            'K' => self.execute_el(),
-            'L' => self.execute_il(),
-            'M' => self.execute_dl(),
-            'P' => self.execute_dch(),
-            'S' => self.execute_su(),
-            'T' => self.execute_sd(),
-            'W' => self.execute_ctc(),
-            'X' => self.execute_ech(),
-            'Z' => self.execute_cbt(),
-            '`' => self.execute_cha(),
-            'a' => self.execute_cuf(),
-            'd' => self.execute_vpa(),
-            'e' => self.execute_cuu(),
-            'f' => self.execute_cup(),
-            'g' => self.execute_tbc(),
-            'h' => self.execute_sm(),
-            'l' => self.execute_rm(),
-            'm' => self.execute_sgr(),
-            'p' => self.execute_decstr(),
-            'r' => self.execute_decstbm(),
+        match (self.intermediates.get(0), input) {
+            (None, '@') => self.execute_ich(),
+            (None, 'A') => self.execute_cuu(),
+            (None, 'B') => self.execute_cud(),
+            (None, 'C') => self.execute_cuf(),
+            (None, 'D') => self.execute_cub(),
+            (None, 'E') => self.execute_cnl(),
+            (None, 'F') => self.execute_cpl(),
+            (None, 'G') => self.execute_cha(),
+            (None, 'H') => self.execute_cup(),
+            (None, 'I') => self.execute_cht(),
+            (None, 'J') => self.execute_ed(),
+            (None, 'K') => self.execute_el(),
+            (None, 'L') => self.execute_il(),
+            (None, 'M') => self.execute_dl(),
+            (None, 'P') => self.execute_dch(),
+            (None, 'S') => self.execute_su(),
+            (None, 'T') => self.execute_sd(),
+            (None, 'W') => self.execute_ctc(),
+            (None, 'X') => self.execute_ech(),
+            (None, 'Z') => self.execute_cbt(),
+            (None, '`') => self.execute_cha(),
+            (None, 'a') => self.execute_cuf(),
+            (None, 'd') => self.execute_vpa(),
+            (None, 'e') => self.execute_cuu(),
+            (None, 'f') => self.execute_cup(),
+            (None, 'g') => self.execute_tbc(),
+            (None, 'h') => self.execute_sm(),
+            (None, 'l') => self.execute_rm(),
+            (None, 'm') => self.execute_sgr(),
+            (None, 'r') => self.execute_decstbm(),
+            (Some('!'), 'p') => self.execute_decstr(),
+            (Some('?'), 'h') => self.execute_prv_sm(),
+            (Some('?'), 'l') => self.execute_prv_rm(),
             _ => {}
         }
     }
@@ -928,25 +930,9 @@ impl VT {
 
     fn execute_sm(&mut self) {
         for param in self.params.clone() {
-            match (self.intermediates.get(0), param) {
-                (None, 4) => self.insert_mode = true,
-                (None, 20) => self.new_line_mode = true,
-
-                (Some('?'), 6) => {
-                    self.origin_mode = true;
-                    self.move_cursor_home();
-                },
-
-                (Some('?'), 7) => self.auto_wrap_mode = true,
-                (Some('?'), 25) => self.cursor_visible = true,
-                (Some('?'), 47) => self.switch_to_alternate_buffer(),
-                (Some('?'), 1047) => self.switch_to_alternate_buffer(),
-                (Some('?'), 1048) => self.save_cursor(),
-
-                (Some('?'), 1049) => {
-                    self.save_cursor();
-                    self.switch_to_alternate_buffer();
-                },
+            match param {
+                4 => self.insert_mode = true,
+                20 => self.new_line_mode = true,
                 _ => ()
             }
         }
@@ -954,26 +940,9 @@ impl VT {
 
     fn execute_rm(&mut self) {
         for param in self.params.clone() {
-            match (self.intermediates.get(0), param) {
-                (None, 4) => self.insert_mode = false,
-                (None, 20) => self.new_line_mode = false,
-
-                (Some('?'), 6) =>  {
-                    self.origin_mode = false;
-                    self.move_cursor_home();
-                },
-
-                (Some('?'), 7) => self.auto_wrap_mode = false,
-                (Some('?'), 25) => self.cursor_visible = false,
-                (Some('?'), 47) => self.switch_to_primary_buffer(),
-                (Some('?'), 1047) => self.switch_to_primary_buffer(),
-                (Some('?'), 1048) => self.restore_cursor(),
-
-                (Some('?'), 1049) =>  {
-                    self.switch_to_primary_buffer();
-                    self.restore_cursor();
-                },
-
+            match param {
+                4 => self.insert_mode = false,
+                20 => self.new_line_mode = false,
                 _ => ()
             }
         }
@@ -1150,10 +1119,55 @@ impl VT {
         }
     }
 
-    fn execute_decstr(&mut self) {
-        if let Some('!') = self.intermediates.get(0) {
-            self.soft_reset();
+    fn execute_prv_sm(&mut self) {
+        for param in self.params.clone() {
+            match param {
+                6 => {
+                    self.origin_mode = true;
+                    self.move_cursor_home();
+                },
+
+                7 => self.auto_wrap_mode = true,
+                25 => self.cursor_visible = true,
+                47 => self.switch_to_alternate_buffer(),
+                1047 => self.switch_to_alternate_buffer(),
+                1048 => self.save_cursor(),
+
+                1049 => {
+                    self.save_cursor();
+                    self.switch_to_alternate_buffer();
+                },
+                _ => ()
+            }
         }
+    }
+
+    fn execute_prv_rm(&mut self) {
+        for param in self.params.clone() {
+            match param {
+                6 =>  {
+                    self.origin_mode = false;
+                    self.move_cursor_home();
+                },
+
+                7 => self.auto_wrap_mode = false,
+                25 => self.cursor_visible = false,
+                47 => self.switch_to_primary_buffer(),
+                1047 => self.switch_to_primary_buffer(),
+                1048 => self.restore_cursor(),
+
+                1049 =>  {
+                    self.switch_to_primary_buffer();
+                    self.restore_cursor();
+                },
+
+                _ => ()
+            }
+        }
+    }
+
+    fn execute_decstr(&mut self) {
+        self.soft_reset();
     }
 
     fn execute_decstbm(&mut self) {
