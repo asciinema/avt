@@ -12,6 +12,7 @@ rand = "0.7"
 quickcheck = "1.0.1"
 quickcheck_macros = "1.0.0"
 criterion = "0.3"
+pretty_assertions = "1.0"
 
 [[bench]]
 name = "feed"

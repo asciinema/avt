@@ -1622,6 +1622,7 @@ mod tests {
     use super::Cell;
     use super::Color;
     use quickcheck::{TestResult, quickcheck};
+    use pretty_assertions::assert_eq;
 
     #[quickcheck]
     fn qc_cursor_position(bytes: Vec<u8>) -> bool {
