@@ -5,7 +5,7 @@ use std::ops::Range;
 use serde::ser::{Serialize, Serializer, SerializeMap, SerializeTuple};
 
 
-#[derive(Debug, Copy, Clone)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub enum State {
     Ground,
     Escape,
@@ -47,19 +47,19 @@ struct Cell(char, Pen);
 #[derive(Debug)]
 pub struct Segment(Vec<char>, Pen);
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Charset {
     G0,
     G1
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum BufferType {
     Primary,
     Alternate
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct SavedCtx {
     cursor_x: usize,
     cursor_y: usize,
@@ -119,6 +119,68 @@ impl Pen {
             strikethrough: false,
             blink: false,
             inverse: false
+        }
+    }
+
+    fn sgr_seq(&self) -> String {
+        let mut s = "\x1b[0".to_owned();
+
+        if let Some(c) = self.foreground {
+            s.push_str(&format!(";{}", c.sgr_params(30)));
+        }
+
+        if let Some(c) = self.background {
+            s.push_str(&format!(";{}", c.sgr_params(40)));
+        }
+
+        if self.bold {
+            s.push_str(";1");
+        }
+
+        if self.italic {
+            s.push_str(";3");
+        }
+
+        if self.underline {
+            s.push_str(";4");
+        }
+
+        if self.blink {
+            s.push_str(";5");
+        }
+
+        if self.inverse {
+            s.push_str(";7");
+        }
+
+        if self.strikethrough {
+            s.push_str(";9");
+        }
+
+        s.push_str("m");
+
+        s
+    }
+}
+
+impl Color {
+    fn sgr_params(&self, base: u8) -> String {
+        match self {
+            Color::Indexed(c) if *c < 8 => {
+                format!("{}", base + c)
+            }
+
+            Color::Indexed(c) if *c < 16 => {
+                format!("{}", base + 52 + c)
+            }
+
+            Color::Indexed(c) => {
+                format!("{};5;{}", base + 8, c)
+            }
+
+            Color::RGB(r, g, b) => {
+                format!("{};2;{};{};{}", base + 8, r, g, b)
+            }
         }
     }
 }
@@ -620,7 +682,7 @@ impl VT {
         } else {
             let n = self.params.len() - 1;
             let p = &mut self.params[n];
-            *p = (10 * *p) + (input as u16) - 0x30;
+            *p = (10 * (*p as u32) + (input as u32) - 0x30) as u16;
         }
     }
 
@@ -1457,6 +1519,290 @@ impl VT {
         self.affected_lines = vec![true; self.rows];
     }
 
+    // full state dump
+
+    pub fn dump(&self) -> String {
+        let (primary_ctx, alternate_ctx): (&SavedCtx, &SavedCtx) = match self.active_buffer_type {
+            BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
+            BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx)
+        };
+
+        // 1. dump primary screen buffer
+
+        let mut seq: String = self.dump_buffer(BufferType::Primary);
+
+        // 2. setup tab stops
+
+        // clear all tab stops
+        seq.push_str("\u{9b}5W");
+
+        // set each tab stop
+        for t in &self.tabs {
+            seq.push_str(&format!("\u{9b}{}`\u{1b}[W", t + 1));
+        }
+
+        // 3. configure saved context for primary screen
+
+        if !primary_ctx.auto_wrap_mode {
+            // disable auto-wrap mode
+            seq.push_str("\u{9b}?7l");
+        }
+
+        if primary_ctx.origin_mode {
+            // enable origin mode
+            seq.push_str("\u{9b}?6h");
+        }
+
+        // fix cursor in target position
+        seq.push_str(&format!("\u{9b}{};{}H", primary_ctx.cursor_y + 1, primary_ctx.cursor_x + 1));
+
+        // configure pen
+        seq.push_str(&primary_ctx.pen.sgr_seq());
+
+        // save cursor
+        seq.push_str("\u{1b}7");
+
+        if !primary_ctx.auto_wrap_mode {
+            // re-enable auto-wrap mode
+            seq.push_str("\u{9b}?7h");
+        }
+
+        if primary_ctx.origin_mode {
+            // re-disable origin mode
+            seq.push_str("\u{9b}?6l");
+        }
+
+        // 4. dump alternate screen buffer
+
+        // switch to alternate screen
+        seq.push_str("\u{9b}?1047h");
+
+        if self.active_buffer_type == BufferType::Alternate {
+            // move cursor home
+            seq.push_str("\u{9b}1;1H");
+
+            // dump alternate buffer
+            seq.push_str(&self.dump_buffer(BufferType::Alternate));
+        }
+
+        // 5. configure saved context for alternate screen
+
+        if !alternate_ctx.auto_wrap_mode {
+            // disable auto-wrap mode
+            seq.push_str("\u{9b}?7l");
+        }
+
+        if alternate_ctx.origin_mode {
+            // enable origin mode
+            seq.push_str("\u{9b}?6h");
+        }
+
+        // fix cursor in target position
+        seq.push_str(&format!("\u{9b}{};{}H", alternate_ctx.cursor_y + 1, alternate_ctx.cursor_x + 1));
+
+        // configure pen
+        seq.push_str(&alternate_ctx.pen.sgr_seq());
+
+        // save cursor
+        seq.push_str("\u{1b}7");
+
+        if !alternate_ctx.auto_wrap_mode {
+            // re-enable auto-wrap mode
+            seq.push_str("\u{9b}?7h");
+        }
+
+        if alternate_ctx.origin_mode {
+            // re-disable origin mode
+            seq.push_str("\u{9b}?6l");
+        }
+
+        // 6. ensure the right buffer is active
+
+        if self.active_buffer_type == BufferType::Primary {
+            // switch back to primary screen
+            seq.push_str("\u{9b}?1047l");
+        }
+
+        // 7. setup origin mode
+
+        if self.origin_mode {
+            // enable origin mode
+            // note: this resets cursor position - must be done before fixing cursor
+            seq.push_str("\u{9b}?6h");
+        }
+
+        // 8. setup margins
+
+        // note: this resets cursor position - must be done before fixing cursor
+        seq.push_str(&format!("\u{9b}{};{}r", self.top_margin + 1, self.bottom_margin + 1));
+
+        // 9. setup cursor
+
+        let row = if self.origin_mode {
+            self.cursor_y - self.top_margin + 1
+        } else {
+            self.cursor_y + 1
+        };
+
+        let column = self.cursor_x + 1;
+
+        // fix cursor in target position
+        seq.push_str(&format!("\u{9b}{};{}H", row, column));
+
+        if self.cursor_x >= self.columns {
+            // move cursor past right border by re-printing the character in
+            // the last column
+            let cell = self.buffer[self.cursor_y][self.columns - 1];
+            seq.push_str(&format!("{}{}", cell.1.sgr_seq(), cell.0));
+        }
+
+        // configure pen
+        seq.push_str(&self.pen.sgr_seq());
+
+        if !self.cursor_visible {
+            // hide cursor
+            seq.push_str("\u{9b}?25l");
+        }
+
+        // Below 3 must happen after ALL prints as they alter print behaviour,
+        // including the "move cursor past right border one" above.
+
+        // 10. setup charset
+
+        if self.charset == Charset::G1 {
+            // switch to G1 charset
+            seq.push_str("\u{0e}");
+        }
+
+        // 11. setup insert mode
+
+        if self.insert_mode {
+            // enable insert mode
+            seq.push_str("\u{9b}4h");
+        }
+
+        // 12. setup auto-wrap mode
+
+        if !self.auto_wrap_mode {
+            // disable auto-wrap mode
+            seq.push_str("\u{9b}?7l");
+        }
+
+        // 13. setup new line mode
+
+        if self.new_line_mode {
+            // enable new line mode
+            seq.push_str("\u{9b}20h");
+        }
+
+        // 14. transition into current state
+
+        match self.state {
+            State::Ground => (),
+
+            State::Escape =>
+                seq.push_str("\u{1b}"),
+
+            State::EscapeIntermediate => {
+                let intermediates = self.intermediates.iter().collect::<String>();
+                let s = format!("\u{1b}{}", intermediates);
+                seq.push_str(&s);
+            },
+
+            State::CsiEntry =>
+                seq.push_str("\u{9b}"),
+
+            State::CsiParam => {
+                let intermediates = self.intermediates.iter().collect::<String>();
+
+                let params = self.params
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";");
+
+                let s = &format!("\u{9b}{}{}", intermediates, params);
+                seq.push_str(s);
+            },
+
+            State::CsiIntermediate => {
+                let intermediates = self.intermediates.iter().collect::<String>();
+                let s = &format!("\u{9b}{}", intermediates);
+                seq.push_str(s);
+            },
+
+            State::CsiIgnore =>
+                seq.push_str("\u{9b}\u{3a}"),
+
+            State::DcsEntry =>
+                seq.push_str("\u{90}"),
+
+            State::DcsIntermediate => {
+                let intermediates = self.intermediates.iter().collect::<String>();
+                let s = &format!("\u{90}{}", intermediates);
+                seq.push_str(s);
+            },
+
+            State::DcsParam => {
+                let intermediates = self.intermediates.iter().collect::<String>();
+
+                let params = self.params
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";");
+
+                let s = &format!("\u{90}{}{}", intermediates, params);
+                seq.push_str(s);
+            },
+
+            State::DcsPassthrough => {
+                let intermediates = self.intermediates.iter().collect::<String>();
+                let s = &format!("\u{90}{}\u{40}", intermediates);
+                seq.push_str(s);
+            }
+
+            State::DcsIgnore =>
+                seq.push_str("\u{90}\u{3a}"),
+
+            State::OscString =>
+                seq.push_str("\u{9d}"),
+
+            State::SosPmApcString =>
+                seq.push_str("\u{98}")
+        }
+
+        seq
+    }
+
+    fn dump_buffer(&self, buffer_type: BufferType) -> String {
+        let buffer = if self.active_buffer_type == buffer_type {
+            &self.buffer
+        } else {
+            &self.alternate_buffer
+        };
+
+        buffer
+        .iter()
+        .map(|line| VT::dump_line(&VT::chunk_cells(line)))
+        .collect()
+    }
+
+    fn dump_line(segments: &[Segment]) -> String {
+        segments
+        .iter()
+        .map(|segment| VT::dump_segment(segment))
+        .collect()
+    }
+
+    fn dump_segment(segment: &Segment) -> String {
+        let mut s = segment.1.sgr_seq();
+        let text = segment.0.iter().collect::<String>();
+        s.push_str(&text);
+
+        s
+    }
+
     pub fn get_line(&self, l: usize) -> Vec<Segment> {
         VT::chunk_cells(&self.buffer[l])
     }
@@ -1618,11 +1964,15 @@ extern crate quickcheck_macros;
 
 #[cfg(test)]
 mod tests {
-    use super::VT;
+    use std::env;
+    use std::fs;
+    use pretty_assertions::assert_eq;
+    use quickcheck::{TestResult, quickcheck};
+    use super::BufferType;
     use super::Cell;
     use super::Color;
-    use quickcheck::{TestResult, quickcheck};
-    use pretty_assertions::assert_eq;
+    use super::State;
+    use super::VT;
 
     #[quickcheck]
     fn qc_cursor_position(bytes: Vec<u8>) -> bool {
@@ -1985,6 +2335,61 @@ mod tests {
         assert_eq!(vt.pen.background, Some(Color::RGB(2, 102, 202)));
     }
 
+    #[test]
+    fn dump_initial() {
+        let vt1 = VT::new(10, 4);
+        let mut vt2 = VT::new(10, 4);
+
+        vt2.feed_str(&vt1.dump());
+
+        assert_vts_eq(&vt1, &vt2);
+    }
+
+    #[test]
+    fn dump_modified() {
+        let mut vt1 = VT::new(10, 4);
+        let mut vt2 = VT::new(10, 4);
+
+        vt1.feed_str(&"hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{0e}\u{9b}4h\u{9b}?7l\u{9b}20h\u{9b}\u{3a}");
+        vt2.feed_str(&vt1.dump());
+
+        assert_vts_eq(&vt1, &vt2);
+    }
+
+    #[test]
+    fn dump_with_file() {
+        if let Ok((w, h, input, step)) = setup_dump_with_file() {
+            let mut vt1 = VT::new(w, h);
+
+            let mut s = 0;
+
+            for c in input.chars().take(1_000_000) {
+                vt1.feed(c);
+
+                if s == 0 {
+                    let d = vt1.dump();
+                    let mut vt2 = VT::new(w, h);
+
+                    vt2.feed_str(&d);
+
+                    assert_vts_eq(&vt1, &vt2);
+                }
+
+                s = (s + 1) % step;
+            }
+        }
+    }
+
+    fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
+        let path = env::var("P")?;
+        let input = fs::read_to_string(path).unwrap();
+        let w: usize = env::var("W").unwrap().parse::<usize>().unwrap();
+        let h: usize = env::var("H").unwrap().parse::<usize>().unwrap();
+        let step: usize = env::var("S").unwrap_or("1".to_owned()).parse::<usize>().unwrap();
+
+        Ok((w, h, input, step))
+    }
+
     fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> VT {
         let w = lines.get(0).unwrap().len();
         let h = lines.len();
@@ -2009,5 +2414,61 @@ mod tests {
 
     fn dump_line(cells: &[Cell]) -> String {
         cells.iter().map(|cell| cell.0).collect()
+    }
+
+    fn assert_vts_eq(vt1: &VT, vt2: &VT) {
+        assert_eq!(vt1.state, vt2.state);
+
+        if vt1.state == State::CsiParam || vt1.state == State::DcsParam {
+            assert_eq!(vt1.params, vt2.params);
+        }
+
+        if vt1.state == State::EscapeIntermediate || vt1.state == State::CsiIntermediate || vt1.state == State::CsiParam || vt1.state == State::DcsIntermediate || vt1.state == State::DcsParam {
+            assert_eq!(vt1.intermediates, vt2.intermediates);
+        }
+
+        assert_eq!(vt1.active_buffer_type, vt2.active_buffer_type);
+        assert_eq!(vt1.cursor_x, vt2.cursor_x);
+        assert_eq!(vt1.cursor_y, vt2.cursor_y, "margins: {} {}", vt1.top_margin, vt2.bottom_margin);
+        assert_eq!(vt1.cursor_visible, vt2.cursor_visible);
+        assert_eq!(vt1.pen, vt2.pen);
+        assert_eq!(vt1.charset, vt2.charset);
+        assert_eq!(vt1.tabs, vt2.tabs);
+        assert_eq!(vt1.insert_mode, vt2.insert_mode);
+        assert_eq!(vt1.origin_mode, vt2.origin_mode);
+        assert_eq!(vt1.auto_wrap_mode, vt2.auto_wrap_mode);
+        assert_eq!(vt1.new_line_mode, vt2.new_line_mode);
+        assert_eq!(vt1.next_print_wraps, vt2.next_print_wraps);
+        assert_eq!(vt1.top_margin, vt2.top_margin);
+        assert_eq!(vt1.bottom_margin, vt2.bottom_margin);
+        assert_eq!(vt1.saved_ctx, vt2.saved_ctx);
+        assert_eq!(vt1.alternate_saved_ctx, vt2.alternate_saved_ctx);
+
+        match vt1.active_buffer_type {
+            BufferType::Primary => {
+                assert_eq!(buffer_as_string(&vt1.buffer), buffer_as_string(&vt2.buffer));
+            }
+
+            BufferType::Alternate => {
+                // primary:
+                assert_eq!(buffer_as_string(&vt1.alternate_buffer), buffer_as_string(&vt2.alternate_buffer));
+                // alternate:
+                assert_eq!(buffer_as_string(&vt1.buffer), buffer_as_string(&vt2.buffer));
+            }
+        }
+    }
+
+    fn buffer_as_string(buffer: &Vec<Vec<Cell>>) -> String {
+        let mut s = "".to_owned();
+
+        for line in buffer {
+            for cell in line {
+                s.push(cell.0);
+            }
+
+            s.push_str("\n");
+        }
+
+        s
     }
 }
