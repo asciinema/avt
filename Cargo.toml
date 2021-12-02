@@ -2,7 +2,7 @@
 name = "vt"
 version = "0.2.0"
 authors = ["Marcin Kulik <m@ku1ik.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 serde = "1.0.130"
