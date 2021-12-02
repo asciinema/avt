@@ -1025,8 +1025,8 @@ impl VT {
     fn execute_sgr(&mut self) {
         let mut ps = &self.params[..];
 
-        while ps.len() > 0 {
-            match ps.get(0).unwrap() {
+        while let Some(param) = ps.get(0) {
+            match param {
                 0 => {
                     self.pen = Pen::new();
                     ps = &ps[1..];
