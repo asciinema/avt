@@ -218,6 +218,9 @@ impl SavedCtx {
 
 impl VT {
     pub fn new(columns: usize, rows: usize) -> Self {
+        assert!(columns > 0);
+        assert!(rows > 0);
+
         let buffer = VT::new_buffer(columns, rows);
         let alternate_buffer = buffer.clone();
 
