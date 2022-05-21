@@ -78,8 +78,8 @@ pub struct VT {
     intermediates: Vec<char>,
 
     // screen
-    columns: usize,
-    rows: usize,
+    pub columns: usize,
+    pub rows: usize,
     buffer: Vec<Vec<Cell>>,
     alternate_buffer: Vec<Vec<Cell>>,
     active_buffer_type: BufferType,
