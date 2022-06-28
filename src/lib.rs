@@ -68,6 +68,8 @@ struct SavedCtx {
     auto_wrap_mode: bool
 }
 
+type Line = Vec<Cell>;
+
 #[derive(Debug)]
 pub struct VT {
     // parser
@@ -80,8 +82,8 @@ pub struct VT {
     // screen
     pub columns: usize,
     pub rows: usize,
-    buffer: Vec<Vec<Cell>>,
-    alternate_buffer: Vec<Vec<Cell>>,
+    buffer: Vec<Line>,
+    alternate_buffer: Vec<Line>,
     active_buffer_type: BufferType,
     cursor_x: usize,
     cursor_y: usize,
@@ -252,11 +254,11 @@ impl VT {
         }
     }
 
-    fn new_buffer(columns: usize, rows: usize) -> Vec<Vec<Cell>> {
+    fn new_buffer(columns: usize, rows: usize) -> Vec<Line> {
         vec![vec![Cell::blank(); columns]; rows]
     }
 
-    fn blank_line(&self) -> Vec<Cell> {
+    fn blank_line(&self) -> Line {
         vec![self.blank_cell(); self.columns]
     }
 
@@ -1817,7 +1819,7 @@ impl VT {
         .collect()
     }
 
-    fn chunk_cells(cells: &Vec<Cell>) -> Vec<Segment> {
+    fn chunk_cells(cells: &Line) -> Vec<Segment> {
         if cells.len() > 0 {
             let mut part = Segment(vec![cells[0].0], cells[0].1);
             let mut parts = vec![];
@@ -1974,6 +1976,7 @@ mod tests {
     use super::BufferType;
     use super::Cell;
     use super::Color;
+    use super::Line;
     use super::State;
     use super::VT;
 
@@ -2461,7 +2464,7 @@ mod tests {
         }
     }
 
-    fn buffer_as_string(buffer: &Vec<Vec<Cell>>) -> String {
+    fn buffer_as_string(buffer: &Vec<Line>) -> String {
         let mut s = "".to_owned();
 
         for line in buffer {
