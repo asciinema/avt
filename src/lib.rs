@@ -31,15 +31,15 @@ pub enum Color {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-struct Pen {
-    foreground: Option<Color>,
-    background: Option<Color>,
-    bold: bool,
-    italic: bool,
-    underline: bool,
-    strikethrough: bool,
-    blink: bool,
-    inverse: bool
+pub struct Pen {
+    pub foreground: Option<Color>,
+    pub background: Option<Color>,
+    pub bold: bool,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikethrough: bool,
+    pub blink: bool,
+    pub inverse: bool
 }
 
 #[derive(Debug, Copy, Clone)]
