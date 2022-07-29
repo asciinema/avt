@@ -25,7 +25,7 @@ pub enum State {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-enum Color {
+pub enum Color {
     Indexed(u8),
     RGB(RGB8)
 }
