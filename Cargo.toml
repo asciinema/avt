@@ -5,7 +5,8 @@ authors = ["Marcin Kulik <m@ku1ik.com>"]
 edition = "2021"
 
 [dependencies]
-serde = "1.0.130"
+serde = { version = "1.0.130", features = ["derive"] }
+rgb = "0.8.33"
 
 [dev-dependencies]
 rand = "0.7"

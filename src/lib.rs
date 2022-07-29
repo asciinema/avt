@@ -2,6 +2,7 @@
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
 use std::ops::Range;
+use rgb::RGB8;
 use serde::ser::{Serialize, Serializer, SerializeMap, SerializeTuple};
 
 
@@ -26,7 +27,7 @@ pub enum State {
 #[derive(Debug, Copy, Clone, PartialEq)]
 enum Color {
     Indexed(u8),
-    RGB(u8, u8, u8)
+    RGB(RGB8)
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -180,8 +181,8 @@ impl Color {
                 format!("{};5;{}", base + 8, c)
             }
 
-            Color::RGB(r, g, b) => {
-                format!("{};2;{};{};{}", base + 8, r, g, b)
+            Color::RGB(c) => {
+                format!("{};2;{};{};{}", base + 8, c.r, c.g, c.b)
             }
         }
     }
@@ -1112,7 +1113,7 @@ impl VT {
                             if let Some(b) = ps.get(4) {
                                 let r = ps.get(2).unwrap();
                                 let g = ps.get(3).unwrap();
-                                self.pen.foreground = Some(Color::RGB(*r as u8, *g as u8, *b as u8));
+                                self.pen.foreground = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
                                 ps = &ps[5..];
                             } else {
                                 ps = &ps[2..];
@@ -1154,7 +1155,7 @@ impl VT {
                             if let Some(b) = ps.get(4) {
                                 let r = ps.get(2).unwrap();
                                 let g = ps.get(3).unwrap();
-                                self.pen.background = Some(Color::RGB(*r as u8, *g as u8, *b as u8));
+                                self.pen.background = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
                                 ps = &ps[5..];
                             } else {
                                 ps = &ps[2..];
@@ -1954,8 +1955,8 @@ impl Serialize for Color {
                 serializer.serialize_u8(*c)
             }
 
-            Color::RGB(r, g, b) => {
-                serializer.serialize_str(&format!("rgb({},{},{})", r, g, b))
+            Color::RGB(c) => {
+                serializer.serialize_str(&format!("rgb({},{},{})", c.r, c.g, c.b))
             }
         }
     }
@@ -1973,6 +1974,7 @@ mod tests {
     use std::fs;
     use pretty_assertions::assert_eq;
     use quickcheck::{TestResult, quickcheck};
+    use rgb::RGB8;
     use super::BufferType;
     use super::Cell;
     use super::Color;
@@ -2337,8 +2339,8 @@ mod tests {
         vt.feed_str("\x1b[1;38;2;1;101;201;48;2;2;102;202;5m");
         assert!(vt.pen.bold);
         assert!(vt.pen.blink);
-        assert_eq!(vt.pen.foreground, Some(Color::RGB(1, 101, 201)));
-        assert_eq!(vt.pen.background, Some(Color::RGB(2, 102, 202)));
+        assert_eq!(vt.pen.foreground, Some(Color::RGB(RGB8::new(1, 101, 201))));
+        assert_eq!(vt.pen.background, Some(Color::RGB(RGB8::new(2, 102, 202))));
     }
 
     #[test]
