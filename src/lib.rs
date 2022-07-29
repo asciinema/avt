@@ -1809,6 +1809,13 @@ impl VT {
         s
     }
 
+    pub fn lines(&self) -> Vec<Vec<(char, Pen)>> {
+        self.buffer
+        .iter()
+        .map(|cells| { cells.iter().map(|cell| { (cell.0, cell.1)}).collect() })
+        .collect()
+    }
+
     pub fn get_line(&self, l: usize) -> Vec<Segment> {
         VT::chunk_cells(&self.buffer[l])
     }
