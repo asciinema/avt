@@ -277,7 +277,7 @@ impl VT {
         tabs
     }
 
-    pub fn get_cursor(&self) -> Option<(usize, usize)> {
+    pub fn cursor(&self) -> Option<(usize, usize)> {
         if self.cursor_visible {
             Some((self.cursor_x, self.cursor_y))
         } else {
