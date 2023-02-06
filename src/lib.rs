@@ -196,7 +196,7 @@ impl Cell {
 
 impl Charset {
     fn translate(&self, input: char) -> char {
-        if input >= '\x60' && input < '\x7f' {
+        if ('\x60'..'\x7f').contains(&input) {
             match self {
                 Charset::G0 => input,
                 Charset::G1 => SPECIAL_GFX_CHARS[(input as usize) - 0x60],
@@ -668,7 +668,7 @@ impl VT {
 
     fn esc_dispatch(&mut self, input: char) {
         match (self.intermediates.get(0), input) {
-            (None, c) if '@' <= c && c <= '_' => {
+            (None, c) if ('@'..='_').contains(&c) => {
                 self.execute(((input as u8) + 0x40) as char)
             }
 
