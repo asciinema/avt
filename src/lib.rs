@@ -1797,7 +1797,7 @@ impl VT {
     fn dump_line(segments: &[Segment]) -> String {
         segments
         .iter()
-        .map(|segment| VT::dump_segment(segment))
+        .map(VT::dump_segment)
         .collect()
     }
 
@@ -1823,7 +1823,7 @@ impl VT {
     pub fn get_lines(&self) -> Vec<Vec<Segment>> {
         self.buffer
         .iter()
-        .map(|line| VT::chunk_cells(line))
+        .map(VT::chunk_cells)
         .collect()
     }
 
