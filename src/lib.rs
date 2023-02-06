@@ -1653,7 +1653,7 @@ impl VT {
         let column = self.cursor_x + 1;
 
         // fix cursor in target position
-        seq.push_str(&format!("\u{9b}{};{}H", row, column));
+        seq.push_str(&format!("\u{9b}{row};{column}H"));
 
         if self.cursor_x >= self.columns {
             // move cursor past right border by re-printing the character in
@@ -1711,7 +1711,7 @@ impl VT {
 
             State::EscapeIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
-                let s = format!("\u{1b}{}", intermediates);
+                let s = format!("\u{1b}{intermediates}");
                 seq.push_str(&s);
             },
 
@@ -1727,13 +1727,13 @@ impl VT {
                     .collect::<Vec<_>>()
                     .join(";");
 
-                let s = &format!("\u{9b}{}{}", intermediates, params);
+                let s = &format!("\u{9b}{intermediates}{params}");
                 seq.push_str(s);
             },
 
             State::CsiIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
-                let s = &format!("\u{9b}{}", intermediates);
+                let s = &format!("\u{9b}{intermediates}");
                 seq.push_str(s);
             },
 
@@ -1745,7 +1745,7 @@ impl VT {
 
             State::DcsIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
-                let s = &format!("\u{90}{}", intermediates);
+                let s = &format!("\u{90}{intermediates}");
                 seq.push_str(s);
             },
 
@@ -1758,13 +1758,13 @@ impl VT {
                     .collect::<Vec<_>>()
                     .join(";");
 
-                let s = &format!("\u{90}{}{}", intermediates, params);
+                let s = &format!("\u{90}{intermediates}{params}");
                 seq.push_str(s);
             },
 
             State::DcsPassthrough => {
                 let intermediates = self.intermediates.iter().collect::<String>();
-                let s = &format!("\u{90}{}\u{40}", intermediates);
+                let s = &format!("\u{90}{intermediates}\u{40}");
                 seq.push_str(s);
             }
 
