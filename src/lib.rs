@@ -667,7 +667,7 @@ impl VT {
     }
 
     fn esc_dispatch(&mut self, input: char) {
-        match (self.intermediates.get(0), input) {
+        match (self.intermediates.first(), input) {
             (None, c) if ('@'..='_').contains(&c) => {
                 self.execute(((input as u8) + 0x40) as char)
             }
@@ -693,7 +693,7 @@ impl VT {
     }
 
     fn csi_dispatch(&mut self, input: char) {
-        match (self.intermediates.get(0), input) {
+        match (self.intermediates.first(), input) {
             (None, '@') => self.execute_ich(),
             (None, 'A') => self.execute_cuu(),
             (None, 'B') => self.execute_cud(),
@@ -1031,7 +1031,7 @@ impl VT {
     fn execute_sgr(&mut self) {
         let mut ps = &self.params[..];
 
-        while let Some(param) = ps.get(0) {
+        while let Some(param) = ps.first() {
             match param {
                 0 => {
                     self.pen = Pen::new();
@@ -2406,7 +2406,7 @@ mod tests {
     }
 
     fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> VT {
-        let w = lines.get(0).unwrap().len();
+        let w = lines.first().unwrap().len();
         let h = lines.len();
         let mut vt = VT::new(w, h);
 
