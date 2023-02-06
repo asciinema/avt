@@ -2365,7 +2365,7 @@ mod tests {
         let mut vt1 = VT::new(10, 4);
         let mut vt2 = VT::new(10, 4);
 
-        vt1.feed_str(&"hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{0e}\u{9b}4h\u{9b}?7l\u{9b}20h\u{9b}\u{3a}");
+        vt1.feed_str("hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{0e}\u{9b}4h\u{9b}?7l\u{9b}20h\u{9b}\u{3a}");
         vt2.feed_str(&vt1.dump());
 
         assert_vts_eq(&vt1, &vt2);
