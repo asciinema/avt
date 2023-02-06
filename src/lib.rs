@@ -1828,7 +1828,7 @@ impl VT {
     }
 
     fn chunk_cells(cells: &Line) -> Vec<Segment> {
-        if cells.len() > 0 {
+        if !cells.is_empty() {
             let mut part = Segment(vec![cells[0].0], cells[0].1);
             let mut parts = vec![];
 
