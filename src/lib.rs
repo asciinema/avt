@@ -160,7 +160,7 @@ impl Pen {
             s.push_str(";9");
         }
 
-        s.push_str("m");
+        s.push('m');
 
         s
     }
@@ -1677,7 +1677,7 @@ impl VT {
 
         if self.charset == Charset::G1 {
             // switch to G1 charset
-            seq.push_str("\u{0e}");
+            seq.push('\u{0e}');
         }
 
         // 11. setup insert mode
@@ -1707,7 +1707,7 @@ impl VT {
             State::Ground => (),
 
             State::Escape =>
-                seq.push_str("\u{1b}"),
+                seq.push('\u{1b}'),
 
             State::EscapeIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
@@ -1716,7 +1716,7 @@ impl VT {
             },
 
             State::CsiEntry =>
-                seq.push_str("\u{9b}"),
+                seq.push('\u{9b}'),
 
             State::CsiParam => {
                 let intermediates = self.intermediates.iter().collect::<String>();
@@ -1741,7 +1741,7 @@ impl VT {
                 seq.push_str("\u{9b}\u{3a}"),
 
             State::DcsEntry =>
-                seq.push_str("\u{90}"),
+                seq.push('\u{90}'),
 
             State::DcsIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
@@ -1772,10 +1772,10 @@ impl VT {
                 seq.push_str("\u{90}\u{3a}"),
 
             State::OscString =>
-                seq.push_str("\u{9d}"),
+                seq.push('\u{9d}'),
 
             State::SosPmApcString =>
-                seq.push_str("\u{98}")
+                seq.push('\u{98}')
         }
 
         seq
@@ -2481,7 +2481,7 @@ mod tests {
                 s.push(cell.0);
             }
 
-            s.push_str("\n");
+            s.push('\n');
         }
 
         s
