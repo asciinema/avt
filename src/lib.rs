@@ -1882,11 +1882,11 @@ impl Serialize for Pen {
     {
         let mut len = 0;
 
-        if let Some(_) = self.foreground {
+        if self.foreground.is_some() {
             len += 1;
         }
 
-        if let Some(_) = self.background {
+        if self.background.is_some() {
             len += 1;
         }
 
