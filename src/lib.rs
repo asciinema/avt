@@ -734,6 +734,8 @@ impl VT {
             (None, 'l') => self.execute_rm(),
             (None, 'm') => self.execute_sgr(),
             (None, 'r') => self.execute_decstbm(),
+            (None, 's') => self.execute_sc(),
+            (None, 'u') => self.execute_rc(),
             (Some('!'), 'p') => self.execute_decstr(),
             (Some('?'), 'h') => self.execute_prv_sm(),
             (Some('?'), 'l') => self.execute_prv_rm(),
@@ -2310,6 +2312,47 @@ mod tests {
     }
 
     #[test]
+    fn execute_sc_rc() {
+        // DECSC/DECRC variant
+
+        let mut vt = build_vt(0, 0, vec!["    ", "    ", "    "]);
+
+        // move 2x right, 1 down
+        vt.feed_str("  \n");
+
+        // save cursor
+        vt.feed_str("\x1b7");
+
+        // move 1x right, 1x down
+        vt.feed_str(" \n");
+
+        // restore cursor
+        vt.feed_str("\x1b8");
+
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 1);
+
+        // ansi.sys variant
+
+        let mut vt = build_vt(0, 0, vec!["    ", "    ", "    "]);
+
+        // move 2x right, 1 down
+        vt.feed_str("  \n");
+
+        // save cursor
+        vt.feed_str("\x1b[s");
+
+        // move 1x right, 1x down
+        vt.feed_str(" \n");
+
+        // restore cursor
+        vt.feed_str("\x1b[u");
+
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 1);
+    }
+
+    #[test]
     fn execute_sgr() {
         let mut vt = build_vt(0, 0, vec!["abcd"]);
 
@@ -2429,8 +2472,7 @@ mod tests {
             vt.feed_str(line);
         }
 
-        vt.cursor_x = cx;
-        vt.cursor_y = cy;
+        vt.feed_str(&format!("\u{9b}{};{}H", cy + 1, cx + 1));
 
         vt
     }
