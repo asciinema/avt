@@ -31,10 +31,17 @@ pub enum Color {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
+pub enum Intensity {
+    Normal,
+    Bold,
+    Faint,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Pen {
     pub foreground: Option<Color>,
     pub background: Option<Color>,
-    pub bold: bool,
+    pub intensity: Intensity,
     pub italic: bool,
     pub underline: bool,
     pub strikethrough: bool,
@@ -116,7 +123,7 @@ impl Pen {
         Pen {
             foreground: None,
             background: None,
-            bold: false,
+            intensity: Intensity::Normal,
             italic: false,
             underline: false,
             strikethrough: false,
@@ -136,8 +143,10 @@ impl Pen {
             s.push_str(&format!(";{}", c.sgr_params(40)));
         }
 
-        if self.bold {
-            s.push_str(";1");
+        match self.intensity {
+            Intensity::Normal => (),
+            Intensity::Bold => { s.push_str(";1"); },
+            Intensity::Faint => { s.push_str(";2"); },
         }
 
         if self.italic {
@@ -1039,7 +1048,12 @@ impl VT {
                 }
 
                 1 => {
-                    self.pen.bold = true;
+                    self.pen.intensity = Intensity::Bold;
+                    ps = &ps[1..];
+                }
+
+                2 => {
+                    self.pen.intensity = Intensity::Faint;
                     ps = &ps[1..];
                 }
 
@@ -1068,13 +1082,8 @@ impl VT {
                     self.pen.strikethrough = true;
                 }
 
-                21 => {
-                    self.pen.bold = false;
-                    ps = &ps[1..];
-                }
-
-                22 => {
-                    self.pen.bold = false;
+                21 | 22 => {
+                    self.pen.intensity = Intensity::Normal;
                     ps = &ps[1..];
                 }
 
@@ -1890,7 +1899,7 @@ impl Serialize for Pen {
             len += 1;
         }
 
-        if self.bold {
+        if let Intensity::Bold | Intensity::Faint = self.intensity {
             len += 1;
         }
 
@@ -1924,8 +1933,10 @@ impl Serialize for Pen {
             map.serialize_entry("bg", &c)?;
         }
 
-        if self.bold {
-            map.serialize_entry("bold", &true)?;
+        match self.intensity {
+            Intensity::Normal => (),
+            Intensity::Bold => map.serialize_entry("bold", &true)?,
+            Intensity::Faint => map.serialize_entry("faint", &true)?,
         }
 
         if self.italic {
@@ -1985,6 +1996,7 @@ mod tests {
     use super::BufferType;
     use super::Cell;
     use super::Color;
+    use super::Intensity;
     use super::Line;
     use super::State;
     use super::VT;
@@ -2302,7 +2314,10 @@ mod tests {
         let mut vt = build_vt(0, 0, vec!["abcd"]);
 
         vt.feed_str("\x1b[1m");
-        assert!(vt.pen.bold);
+        assert!(vt.pen.intensity == Intensity::Bold);
+
+        vt.feed_str("\x1b[2m");
+        assert_eq!(vt.pen.intensity, Intensity::Faint);
 
         vt.feed_str("\x1b[3m");
         assert!(vt.pen.italic);
@@ -2338,13 +2353,13 @@ mod tests {
         assert_eq!(vt.pen.background, None);
 
         vt.feed_str("\x1b[1;38;5;88;48;5;99;5m");
-        assert!(vt.pen.bold);
+        assert_eq!(vt.pen.intensity, Intensity::Bold);
         assert!(vt.pen.blink);
         assert_eq!(vt.pen.foreground, Some(Color::Indexed(88)));
         assert_eq!(vt.pen.background, Some(Color::Indexed(99)));
 
         vt.feed_str("\x1b[1;38;2;1;101;201;48;2;2;102;202;5m");
-        assert!(vt.pen.bold);
+        assert_eq!(vt.pen.intensity, Intensity::Bold);
         assert!(vt.pen.blink);
         assert_eq!(vt.pen.foreground, Some(Color::RGB(RGB8::new(1, 101, 201))));
         assert_eq!(vt.pen.background, Some(Color::RGB(RGB8::new(2, 102, 202))));
