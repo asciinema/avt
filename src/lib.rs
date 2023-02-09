@@ -1482,8 +1482,8 @@ impl VT {
         let end_index = self.bottom_margin + 1;
         n = n.min(end_index - self.top_margin);
         self.buffer[self.top_margin..end_index].rotate_right(n);
-        self.clear_lines(0..n);
-        self.mark_affected_lines(0..end_index);
+        self.clear_lines(self.top_margin..self.top_margin + n);
+        self.mark_affected_lines(self.top_margin..end_index);
     }
 
     // buffer switching
@@ -2126,6 +2126,39 @@ mod tests {
         assert_eq!(dump_lines(&vt), vec![
             "   d    ",
             "        "
+        ]);
+    }
+
+    #[test]
+    fn execute_ri() {
+        let mut vt = build_vt(0, 0, vec![
+            "abcd",
+            "efgh",
+            "ijkl",
+            "mnop",
+            "qrst",
+        ]);
+
+        vt.feed_str("\x1bM"); // RI
+
+        assert_eq!(dump_lines(&vt), vec![
+            "    ",
+            "abcd",
+            "efgh",
+            "ijkl",
+            "mnop",
+        ]);
+
+        vt.feed_str("\x1b[3;4r"); // use smaller scroll region
+        vt.feed_str("\x1b[3;1H"); // place cursor on top margin
+        vt.feed_str("\x1bM"); // RI
+
+        assert_eq!(dump_lines(&vt), vec![
+            "    ",
+            "abcd",
+            "    ",
+            "efgh",
+            "mnop",
         ]);
     }
 
