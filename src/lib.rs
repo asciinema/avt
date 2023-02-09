@@ -57,8 +57,8 @@ pub struct Segment(Vec<char>, Pen);
 
 #[derive(Debug, PartialEq)]
 enum Charset {
-    G0,
-    G1
+    Ascii,
+    Drawing,
 }
 
 #[derive(Debug, PartialEq)]
@@ -97,7 +97,8 @@ pub struct VT {
     cursor_y: usize,
     cursor_visible: bool,
     pen: Pen,
-    charset: Charset,
+    charsets: [Charset; 2],
+    active_charset: usize,
     tabs: Vec<usize>,
     insert_mode: bool,
     origin_mode: bool,
@@ -207,8 +208,8 @@ impl Charset {
     fn translate(&self, input: char) -> char {
         if ('\x60'..'\x7f').contains(&input) {
             match self {
-                Charset::G0 => input,
-                Charset::G1 => SPECIAL_GFX_CHARS[(input as usize) - 0x60],
+                Charset::Ascii => input,
+                Charset::Drawing => SPECIAL_GFX_CHARS[(input as usize) - 0x60],
             }
         } else {
             input
@@ -250,7 +251,8 @@ impl VT {
             cursor_y: 0,
             cursor_visible: true,
             pen: Pen::new(),
-            charset: Charset::G0,
+            charsets: [Charset::Ascii, Charset::Ascii],
+            active_charset: 0,
             insert_mode: false,
             origin_mode: false,
             auto_wrap_mode: true,
@@ -647,7 +649,7 @@ impl VT {
             }
         }
 
-        input = self.charset.translate(input);
+        input = self.charsets[self.active_charset].translate(input);
 
         let cell = Cell(input, self.pen);
         let next_column = self.cursor_x + 1;
@@ -685,8 +687,10 @@ impl VT {
             (None, '8') => self.execute_rc(),
             (None, 'c') => self.execute_ris(),
             (Some('#'), '8') => self.execute_decaln(),
-            (Some('('), '0') => self.execute_so(),
-            (Some('('), _) => self.execute_si(),
+            (Some('('), '0') => self.execute_gzd4(Charset::Drawing),
+            (Some('('), _) => self.execute_gzd4(Charset::Ascii),
+            (Some(')'), '0') => self.execute_g1d4(Charset::Drawing),
+            (Some(')'), _) => self.execute_g1d4(Charset::Ascii),
             _ => ()
         }
     }
@@ -775,6 +779,14 @@ impl VT {
         }
     }
 
+    fn execute_gzd4(&mut self, charset: Charset) {
+        self.charsets[0] = charset;
+    }
+
+    fn execute_g1d4(&mut self, charset: Charset) {
+        self.charsets[1] = charset;
+    }
+
     fn execute_bs(&mut self) {
         self.move_cursor_to_rel_col(-1);
     }
@@ -796,11 +808,11 @@ impl VT {
     }
 
     fn execute_so(&mut self) {
-        self.charset = Charset::G1;
+        self.active_charset = 1;
     }
 
     fn execute_si(&mut self) {
-        self.charset = Charset::G0;
+        self.active_charset = 0;
     }
 
     fn execute_nel(&mut self) {
@@ -1523,7 +1535,8 @@ impl VT {
         self.cursor_y = 0;
         self.cursor_visible = true;
         self.pen = Pen::new();
-        self.charset = Charset::G0;
+        self.charsets = [Charset::Ascii, Charset::Ascii];
+        self.active_charset = 0;
         self.insert_mode = false;
         self.origin_mode = false;
         self.auto_wrap_mode = true;
@@ -1686,8 +1699,18 @@ impl VT {
 
         // 10. setup charset
 
-        if self.charset == Charset::G1 {
-            // switch to G1 charset
+        if self.charsets[0] == Charset::Drawing {
+            // put drawing charset into G0 slot
+            seq.push_str("\u{1b}(0");
+        }
+
+        if self.charsets[1] == Charset::Drawing {
+            // put drawing charset into G1 slot
+            seq.push_str("\u{1b})0");
+        }
+
+        if self.active_charset == 1 {
+            // shift-out: point GL to G1 slot
             seq.push('\u{0e}');
         }
 
@@ -2423,7 +2446,10 @@ mod tests {
         let mut vt1 = VT::new(10, 4);
         let mut vt2 = VT::new(10, 4);
 
-        vt1.feed_str("hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{0e}\u{9b}4h\u{9b}?7l\u{9b}20h\u{9b}\u{3a}");
+        vt1.feed_str("hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h");
+        vt1.feed_str("\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{9b}4h");
+        vt1.feed_str("\u{9b}?7l\u{9b}20h\u{9b}\u{3a}\x1b(0\x1b)0\u{0e}");
+
         vt2.feed_str(&vt1.dump());
 
         assert_vts_eq(&vt1, &vt2);
@@ -2451,6 +2477,39 @@ mod tests {
                 s = (s + 1) % step;
             }
         }
+    }
+
+    #[test]
+    fn charsets() {
+        let mut vt = build_vt(0, 0, vec!["      "; 7]);
+
+        // GL points to G0, G0 is set to ascii
+        vt.feed_str("alpty\r\n");
+
+        // GL points to G0, G0 is set to drawing
+        vt.feed_str("\x1b(0alpty\r\n");
+
+        // GL points to G1, G1 is still set to ascii
+        vt.feed_str("\u{0e}alpty\r\n");
+
+        // GL points to G1, G1 is set to drawing
+        vt.feed_str("\x1b)0alpty\r\n");
+
+        // GL points to G1, G1 is set back to ascii
+        vt.feed_str("\x1b)Balpty\r\n");
+
+        // GL points to G0, G0 is set back to ascii
+        vt.feed_str("\x1b(B\u{0f}alpty");
+
+        assert_eq!(dump_lines(&vt), vec![
+            "alpty ",
+            "▒┌⎻├≤ ",
+            "alpty ",
+            "▒┌⎻├≤ ",
+            "alpty ",
+            "alpty ",
+            "      ",
+        ]);
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
@@ -2504,7 +2563,8 @@ mod tests {
         assert_eq!(vt1.cursor_y, vt2.cursor_y, "margins: {} {}", vt1.top_margin, vt2.bottom_margin);
         assert_eq!(vt1.cursor_visible, vt2.cursor_visible);
         assert_eq!(vt1.pen, vt2.pen);
-        assert_eq!(vt1.charset, vt2.charset);
+        assert_eq!(vt1.charsets, vt2.charsets);
+        assert_eq!(vt1.active_charset, vt2.active_charset);
         assert_eq!(vt1.tabs, vt2.tabs);
         assert_eq!(vt1.insert_mode, vt2.insert_mode);
         assert_eq!(vt1.origin_mode, vt2.origin_mode);
