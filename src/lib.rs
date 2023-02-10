@@ -1516,6 +1516,8 @@ impl VT {
         self.insert_mode = false;
         self.origin_mode = false;
         self.pen = Pen::new();
+        self.charsets = [Charset::Ascii, Charset::Ascii];
+        self.active_charset = 0;
         self.saved_ctx = SavedCtx::new();
     }
 
