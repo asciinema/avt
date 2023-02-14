@@ -31,7 +31,7 @@ pub enum Color {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum Intensity {
+enum Intensity {
     Normal,
     Bold,
     Faint,
@@ -39,14 +39,14 @@ pub enum Intensity {
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub struct Pen {
-    pub foreground: Option<Color>,
-    pub background: Option<Color>,
-    pub intensity: Intensity,
-    pub italic: bool,
-    pub underline: bool,
-    pub strikethrough: bool,
-    pub blink: bool,
-    pub inverse: bool
+    foreground: Option<Color>,
+    background: Option<Color>,
+    intensity: Intensity,
+    italic: bool,
+    underline: bool,
+    strikethrough: bool,
+    blink: bool,
+    inverse: bool
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -174,6 +174,42 @@ impl Pen {
 
         s
     }
+
+    pub fn foreground(&self) -> Option<Color> {
+        self.foreground
+    }
+
+    pub fn background(&self) -> Option<Color> {
+        self.background
+    }
+
+    pub fn is_bold(&self) -> bool {
+        self.intensity == Intensity::Bold
+    }
+
+    pub fn is_faint(&self) -> bool {
+        self.intensity == Intensity::Faint
+    }
+
+    pub fn is_italic(&self) -> bool {
+        self.italic
+    }
+
+    pub fn is_underline(&self) -> bool {
+        self.underline
+    }
+
+    pub fn is_strikethrough(&self) -> bool {
+        self.strikethrough
+    }
+
+    pub fn is_blink(&self) -> bool {
+        self.blink
+    }
+
+    pub fn is_inverse(&self) -> bool {
+        self.inverse
+    }
 }
 
 impl Color {
@@ -201,6 +237,48 @@ impl Color {
 impl Cell {
     fn blank() -> Cell {
         Cell(' ', Pen::new())
+    }
+}
+
+impl Segment {
+    pub fn text(&self) -> String {
+        self.0.iter().collect()
+    }
+
+    pub fn foreground(&self) -> Option<Color> {
+        self.1.foreground()
+    }
+
+    pub fn background(&self) -> Option<Color> {
+        self.1.background()
+    }
+
+    pub fn is_bold(&self) -> bool {
+        self.1.is_bold()
+    }
+
+    pub fn is_faint(&self) -> bool {
+        self.1.is_faint()
+    }
+
+    pub fn is_italic(&self) -> bool {
+        self.1.is_italic()
+    }
+
+    pub fn is_underline(&self) -> bool {
+        self.1.is_underline()
+    }
+
+    pub fn is_strikethrough(&self) -> bool {
+        self.1.is_strikethrough()
+    }
+
+    pub fn is_blink(&self) -> bool {
+        self.1.is_blink()
+    }
+
+    pub fn is_inverse(&self) -> bool {
+        self.1.is_inverse()
     }
 }
 
