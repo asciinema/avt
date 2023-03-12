@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use vt::VT;
+use avt::VT;
 use std::fs;
 
 fn go(t: &str) {

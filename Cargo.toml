@@ -1,5 +1,5 @@
 [package]
-name = "vt"
+name = "avt"
 version = "0.5.0"
 authors = ["Marcin Kulik <m@ku1ik.com>"]
 edition = "2021"
