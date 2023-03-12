@@ -79,7 +79,7 @@ struct SavedCtx {
 type Line = Vec<Cell>;
 
 #[derive(Debug)]
-pub struct VT {
+pub struct Vt {
     // parser
     pub state: State,
 
@@ -307,15 +307,15 @@ impl SavedCtx {
     }
 }
 
-impl VT {
+impl Vt {
     pub fn new(columns: usize, rows: usize) -> Self {
         assert!(columns > 0);
         assert!(rows > 0);
 
-        let buffer = VT::new_buffer(columns, rows);
+        let buffer = Vt::new_buffer(columns, rows);
         let alternate_buffer = buffer.clone();
 
-        VT {
+        Vt {
             state: State::Ground,
             params: Vec::new(),
             intermediates: Vec::new(),
@@ -324,7 +324,7 @@ impl VT {
             buffer,
             alternate_buffer,
             active_buffer_type: BufferType::Primary,
-            tabs: VT::default_tabs(columns),
+            tabs: Vt::default_tabs(columns),
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: true,
@@ -1600,7 +1600,7 @@ impl VT {
     }
 
     fn hard_reset(&mut self) {
-        let buffer = VT::new_buffer(self.columns, self.rows);
+        let buffer = Vt::new_buffer(self.columns, self.rows);
         let alternate_buffer = buffer.clone();
 
         self.state = State::Ground;
@@ -1610,7 +1610,7 @@ impl VT {
         self.buffer = buffer;
         self.alternate_buffer = alternate_buffer;
         self.active_buffer_type = BufferType::Primary;
-        self.tabs = VT::default_tabs(self.columns);
+        self.tabs = Vt::default_tabs(self.columns);
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.cursor_visible = true;
@@ -1904,14 +1904,14 @@ impl VT {
 
         buffer
         .iter()
-        .map(|line| VT::dump_line(&VT::chunk_cells(line)))
+        .map(|line| Vt::dump_line(&Vt::chunk_cells(line)))
         .collect()
     }
 
     fn dump_line(segments: &[Segment]) -> String {
         segments
         .iter()
-        .map(VT::dump_segment)
+        .map(Vt::dump_segment)
         .collect()
     }
 
@@ -1931,13 +1931,13 @@ impl VT {
     }
 
     pub fn get_line(&self, l: usize) -> Vec<Segment> {
-        VT::chunk_cells(&self.buffer[l])
+        Vt::chunk_cells(&self.buffer[l])
     }
 
     pub fn get_lines(&self) -> Vec<Vec<Segment>> {
         self.buffer
         .iter()
-        .map(VT::chunk_cells)
+        .map(Vt::chunk_cells)
         .collect()
     }
 
@@ -2104,11 +2104,11 @@ mod tests {
     use super::Intensity;
     use super::Line;
     use super::State;
-    use super::VT;
+    use super::Vt;
 
     #[quickcheck]
     fn qc_cursor_position(bytes: Vec<u8>) -> bool {
-        let mut vt = VT::new(10, 4);
+        let mut vt = Vt::new(10, 4);
 
         for b in bytes.iter() {
             vt.feed((*b) as char);
@@ -2119,7 +2119,7 @@ mod tests {
 
     #[quickcheck]
     fn qc_buffer_size(bytes: Vec<u8>) -> bool {
-        let mut vt = VT::new(10, 4);
+        let mut vt = Vt::new(10, 4);
 
         for b in bytes.iter() {
             vt.feed((*b) as char);
@@ -2134,7 +2134,7 @@ mod tests {
             return TestResult::discard()
         }
 
-        let mut vt = VT::new(10, 5);
+        let mut vt = Vt::new(10, 5);
 
         vt.cursor_x = 9;
         vt.cursor_y = y as usize;
@@ -2148,16 +2148,16 @@ mod tests {
 
     #[test]
     fn default_tabs() {
-        assert_eq!(VT::default_tabs(1), vec![]);
-        assert_eq!(VT::default_tabs(8), vec![]);
-        assert_eq!(VT::default_tabs(9), vec![8]);
-        assert_eq!(VT::default_tabs(16), vec![8]);
-        assert_eq!(VT::default_tabs(17), vec![8, 16]);
+        assert_eq!(Vt::default_tabs(1), vec![]);
+        assert_eq!(Vt::default_tabs(8), vec![]);
+        assert_eq!(Vt::default_tabs(9), vec![8]);
+        assert_eq!(Vt::default_tabs(16), vec![8]);
+        assert_eq!(Vt::default_tabs(17), vec![8, 16]);
     }
 
     // #[test]
     // fn failed() {
-    //     let mut vt = VT::new(2, 2);
+    //     let mut vt = Vt::new(2, 2);
     //     let bytes: Vec<u8> = vec![32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 74];
     //     let bytes: Vec<u8> = vec![32, 32, 27, 91, 63, 55, 108, 32];
     //     let bytes: Vec<u8> = fs::read("100303.txt").unwrap();
@@ -2169,7 +2169,7 @@ mod tests {
 
     #[test]
     fn get_param() {
-        let mut vt = VT::new(1, 1);
+        let mut vt = Vt::new(1, 1);
 
         vt.feed_str("\x1b[;1;;23;456;");
 
@@ -2546,8 +2546,8 @@ mod tests {
 
     #[test]
     fn dump_initial() {
-        let vt1 = VT::new(10, 4);
-        let mut vt2 = VT::new(10, 4);
+        let vt1 = Vt::new(10, 4);
+        let mut vt2 = Vt::new(10, 4);
 
         vt2.feed_str(&vt1.dump());
 
@@ -2556,8 +2556,8 @@ mod tests {
 
     #[test]
     fn dump_modified() {
-        let mut vt1 = VT::new(10, 4);
-        let mut vt2 = VT::new(10, 4);
+        let mut vt1 = Vt::new(10, 4);
+        let mut vt2 = Vt::new(10, 4);
 
         vt1.feed_str("hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h");
         vt1.feed_str("\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{9b}4h");
@@ -2571,7 +2571,7 @@ mod tests {
     #[test]
     fn dump_with_file() {
         if let Ok((w, h, input, step)) = setup_dump_with_file() {
-            let mut vt1 = VT::new(w, h);
+            let mut vt1 = Vt::new(w, h);
 
             let mut s = 0;
 
@@ -2580,7 +2580,7 @@ mod tests {
 
                 if s == 0 {
                     let d = vt1.dump();
-                    let mut vt2 = VT::new(w, h);
+                    let mut vt2 = Vt::new(w, h);
 
                     vt2.feed_str(&d);
 
@@ -2635,10 +2635,10 @@ mod tests {
         Ok((w, h, input, step))
     }
 
-    fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> VT {
+    fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> Vt {
         let w = lines.first().unwrap().len();
         let h = lines.len();
-        let mut vt = VT::new(w, h);
+        let mut vt = Vt::new(w, h);
 
         for line in lines {
             vt.feed_str(line);
@@ -2649,7 +2649,7 @@ mod tests {
         vt
     }
 
-    fn dump_lines(vt: &VT) -> Vec<String> {
+    fn dump_lines(vt: &Vt) -> Vec<String> {
         vt.buffer
         .iter()
         .map(|cells| dump_line(cells))
@@ -2660,7 +2660,7 @@ mod tests {
         cells.iter().map(|cell| cell.0).collect()
     }
 
-    fn assert_vts_eq(vt1: &VT, vt2: &VT) {
+    fn assert_vts_eq(vt1: &Vt, vt2: &Vt) {
         assert_eq!(vt1.state, vt2.state);
 
         if vt1.state == State::CsiParam || vt1.state == State::DcsParam {
