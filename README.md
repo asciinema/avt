@@ -1,14 +1,31 @@
-# asciinema virtual terminal
+# avt - asciinema virtual terminal
 
-This repository contains the source code of virtual terminal emulator used
-by [asciinema-player](https://github.com/asciinema/asciinema-player) and
-[asciinema-server](https://github.com/asciinema/asciinema-server).
+avt is asciinema's implementation of virtual terminal emulator written in Rust.
+It's used by [asciinema player](https://github.com/asciinema/asciinema-player),
+[asciinema server](https://github.com/asciinema/asciinema-server) and [asciinema
+gif generator](https://github.com/asciinema/agg).
 
-The emulator is based on
-[Paul Williams' parser for ANSI-compatible video terminals](https://www.vt100.net/emu/dec_ansi_parser).
-It covers only the display part of the emulation as only this is needed
-by asciinema. Handling of escape sequences is fully compatible
-with most modern terminal emulators like xterm, Gnome Terminal, iTerm, mosh etc.
+This implementation covers only parsing and virtual buffer related aspects of a
+terminal emulator as it's all asciinema needs.
+
+avt consists of:
+
+- parser for ANSI-compatible video terminal based on [excellent state diagram by Paul Williams](https://www.vt100.net/emu/dec_ansi_parser),
+- virtual screen buffers (primary/alternate) in a form of character grid with additional color/styling attributes,
+- API for feeding text into the parser and for querying virtual screen buffer and cursor position.
+
+Following aspects of terminal emulation are not in scope of this project:
+
+- input handling,
+- scrollback,
+- rendering.
+
+Therefore avt is small and focused but a full-fledged terminal emulator can't be
+built with it.
+
+avt doesn't try to replicate a specific terminal variant like VT102 or VT220 and
+instead implements most emulation features found in modern terminal emulators
+like xterm, Gnome Terminal, Alacritty, iTerm, mosh etc.
 
 ## License
 
