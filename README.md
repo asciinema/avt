@@ -24,7 +24,7 @@ Therefore avt is small and focused but a full-fledged terminal emulator can't be
 built with it.
 
 avt doesn't try to replicate a specific terminal variant like VT102 or VT220 and
-instead implements most emulation features found in modern terminal emulators
+instead implements most control sequences found in modern terminal emulators
 like xterm, Gnome Terminal, Alacritty, iTerm, mosh etc.
 
 ## License
