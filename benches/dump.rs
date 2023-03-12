@@ -1,7 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use avt::VT;
+use avt::Vt;
 
-fn go(vt: &VT) {
+fn go(vt: &Vt) {
 
     for _n in 0..10 {
         vt.dump();
@@ -9,7 +9,7 @@ fn go(vt: &VT) {
 }
 
 pub fn criterion_benchmark(c: &mut Criterion) {
-    let mut vt = VT::new(100, 24);
+    let mut vt = Vt::new(100, 24);
 
     for fg in 1..8 {
         for bg in 1..8 {
