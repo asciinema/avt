@@ -4,7 +4,8 @@
 use std::ops::Range;
 use rgb::RGB8;
 use serde::ser::{Serialize, Serializer, SerializeMap, SerializeTuple};
-
+mod line;
+pub use line::Line;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum State {
@@ -75,8 +76,6 @@ struct SavedCtx {
     origin_mode: bool,
     auto_wrap_mode: bool
 }
-
-type Line = Vec<Cell>;
 
 #[derive(Debug)]
 pub struct Vt {
@@ -345,11 +344,11 @@ impl Vt {
     }
 
     fn new_buffer(columns: usize, rows: usize) -> Vec<Line> {
-        vec![vec![Cell::blank(); columns]; rows]
+        vec![Line(vec![Cell::blank(); columns]); rows]
     }
 
     fn blank_line(&self) -> Line {
-        vec![self.blank_cell(); self.columns]
+        Line(vec![self.blank_cell(); self.columns])
     }
 
     fn blank_cell(&self) -> Cell {
@@ -740,7 +739,7 @@ impl Vt {
             }
         } else {
             if self.insert_mode {
-                self.buffer[self.cursor_y][self.cursor_x..].rotate_right(1);
+                self.buffer[self.cursor_y].0[self.cursor_x..].rotate_right(1);
             }
 
             self.set_cell(self.cursor_x, self.cursor_y, cell);
@@ -913,7 +912,7 @@ impl Vt {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.columns - self.cursor_x);
         let tpl = self.blank_cell();
-        let cells = &mut self.buffer[self.cursor_y][self.cursor_x..];
+        let cells = &mut self.buffer[self.cursor_y].0[self.cursor_x..];
         cells.rotate_right(n);
 
         for cell in &mut cells[0..n] {
@@ -1052,7 +1051,7 @@ impl Vt {
 
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.columns - self.cursor_x);
-        self.buffer[self.cursor_y][self.cursor_x..].rotate_left(n);
+        self.buffer[self.cursor_y].0[self.cursor_x..].rotate_left(n);
         self.clear_line((self.columns - n)..self.columns);
         self.mark_affected_line(self.cursor_y);
     }
@@ -1084,7 +1083,7 @@ impl Vt {
     fn execute_rep(&mut self) {
         if self.cursor_x > 0 {
             let n = self.get_param(0, 1);
-            let char = self.buffer[self.cursor_y][self.cursor_x - 1].0;
+            let char = self.buffer[self.cursor_y].0[self.cursor_x - 1].0;
 
             for _n in 0..n {
                 self.print(char);
@@ -1365,7 +1364,7 @@ impl Vt {
     // screen
 
     fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
-        self.buffer[y][x] = cell;
+        self.buffer[y].0[x] = cell;
     }
 
     fn set_tab(&mut self) {
@@ -1391,7 +1390,7 @@ impl Vt {
     fn clear_line(&mut self, range: Range<usize>) {
         let tpl = self.blank_cell();
 
-        for cell in &mut self.buffer[self.cursor_y][range] {
+        for cell in &mut self.buffer[self.cursor_y].0[range] {
             *cell = tpl;
         }
     }
@@ -1761,7 +1760,7 @@ impl Vt {
         if self.cursor_x >= self.columns {
             // move cursor past right border by re-printing the character in
             // the last column
-            let cell = self.buffer[self.cursor_y][self.columns - 1];
+            let cell = self.buffer[self.cursor_y].0[self.columns - 1];
             seq.push_str(&format!("{}{}", cell.1.sgr_seq(), cell.0));
         }
 
@@ -1903,7 +1902,7 @@ impl Vt {
 
         buffer
         .iter()
-        .map(|line| Vt::dump_line(&Vt::chunk_cells(line)))
+        .map(|line| Vt::dump_line(&line.segments().collect::<Vec<_>>()))
         .collect()
     }
 
@@ -1922,45 +1921,14 @@ impl Vt {
         s
     }
 
-    pub fn lines(&self) -> Vec<Vec<(char, Pen)>> {
+    pub fn lines(&self) -> impl Iterator<Item = &Line> {
         self.buffer
         .iter()
-        .map(|cells| { cells.iter().map(|cell| { (cell.0, cell.1)}).collect() })
-        .collect()
     }
 
-    pub fn get_line(&self, l: usize) -> Vec<Segment> {
-        Vt::chunk_cells(&self.buffer[l])
-    }
-
-    pub fn get_lines(&self) -> Vec<Vec<Segment>> {
-        self.buffer
-        .iter()
-        .map(Vt::chunk_cells)
-        .collect()
-    }
-
-    fn chunk_cells(cells: &Line) -> Vec<Segment> {
-        if !cells.is_empty() {
-            let mut part = Segment(vec![cells[0].0], cells[0].1);
-            let mut parts = vec![];
-
-            for cell in &cells[1..] {
-                if cell.1 == part.1 {
-                    part.0.push(cell.0);
-                } else {
-                    parts.push(part);
-                    part = Segment(vec![cell.0], cell.1);
-                }
-            }
-
-            parts.push(part);
-
-            parts
-        } else {
-            vec![]
-        }
-    }
+    pub fn line(&self, n: usize) -> &Line {
+        &self.buffer[n]
+     }
 
     // line change tracking
 
@@ -2098,7 +2066,6 @@ mod tests {
     use quickcheck::{TestResult, quickcheck};
     use rgb::RGB8;
     use super::BufferType;
-    use super::Cell;
     use super::Color;
     use super::Intensity;
     use super::Line;
@@ -2655,8 +2622,8 @@ mod tests {
         .collect()
     }
 
-    fn dump_line(cells: &[Cell]) -> String {
-        cells.iter().map(|cell| cell.0).collect()
+    fn dump_line(line: &Line) -> String {
+        line.cells().map(|cell| cell.0).collect()
     }
 
     fn assert_vts_eq(vt1: &Vt, vt2: &Vt) {
@@ -2706,7 +2673,7 @@ mod tests {
         let mut s = "".to_owned();
 
         for line in buffer {
-            for cell in line {
+            for cell in &line.0 {
                 s.push(cell.0);
             }
 
