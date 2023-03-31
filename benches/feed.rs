@@ -1,5 +1,5 @@
-use criterion::{criterion_group, criterion_main, Criterion};
 use avt::Vt;
+use criterion::{criterion_group, criterion_main, Criterion};
 use std::fs;
 
 fn go(t: &str) {
@@ -13,9 +13,7 @@ fn go(t: &str) {
 pub fn criterion_benchmark(c: &mut Criterion) {
     let t = fs::read_to_string("benches/sample.txt").unwrap();
 
-    c.bench_function("feed", |b|
-        b.iter(|| go(&t))
-	);
+    c.bench_function("feed", |b| b.iter(|| go(&t)));
 }
 
 criterion_group!(
