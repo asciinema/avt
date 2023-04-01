@@ -453,7 +453,6 @@ impl Vt {
             }
 
             (State::Ground, '\u{20}'..='\u{7f}') => {
-                // (State::Ground, '\u{a0}'..='\u{ff}') => {
                 self.print(input);
             }
 
