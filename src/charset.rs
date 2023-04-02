@@ -11,13 +11,16 @@ const SPECIAL_GFX_CHARS: [char; 31] = [
 
 impl Charset {
     pub fn translate(&self, input: char) -> char {
-        if ('\x60'..'\x7f').contains(&input) {
-            match self {
-                Charset::Ascii => input,
-                Charset::Drawing => SPECIAL_GFX_CHARS[(input as usize) - 0x60],
+        match self {
+            Charset::Ascii => input,
+
+            Charset::Drawing => {
+                if ('\x60'..'\x7f').contains(&input) {
+                    SPECIAL_GFX_CHARS[(input as usize) - 0x60]
+                } else {
+                    input
+                }
             }
-        } else {
-            input
         }
     }
 }
