@@ -107,15 +107,7 @@ impl Vt {
     }
 
     fn new_buffer(cols: usize, rows: usize) -> Vec<Line> {
-        vec![Line(vec![Cell::default(); cols]); rows]
-    }
-
-    fn blank_line(&self) -> Line {
-        Line(vec![self.blank_cell(); self.cols])
-    }
-
-    fn blank_cell(&self) -> Cell {
-        Cell(' ', self.pen)
+        vec![Line::blank(cols, Pen::default()); rows]
     }
 
     fn default_tabs(cols: usize) -> Vec<usize> {
@@ -666,7 +658,7 @@ impl Vt {
     fn execute_ich(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
-        let tpl = self.blank_cell();
+        let tpl = Cell::blank(self.pen);
         let cells = &mut self.buffer[self.cursor_y].0[self.cursor_x..];
         cells.rotate_right(n);
 
@@ -1143,7 +1135,7 @@ impl Vt {
     }
 
     fn clear_line(&mut self, range: Range<usize>) {
-        let tpl = self.blank_cell();
+        let tpl = Cell::blank(self.pen);
 
         for cell in &mut self.buffer[self.cursor_y].0[range] {
             *cell = tpl;
@@ -1151,7 +1143,7 @@ impl Vt {
     }
 
     fn clear_lines(&mut self, range: Range<usize>) {
-        let tpl = self.blank_line();
+        let tpl = Line::blank(self.cols, self.pen);
 
         for line in &mut self.buffer[range] {
             *line = tpl.clone();

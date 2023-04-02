@@ -7,6 +7,10 @@ use crate::segment::Segment;
 pub struct Line(pub(crate) Vec<Cell>);
 
 impl Line {
+    pub(crate) fn blank(cols: usize, pen: Pen) -> Self {
+        Line(vec![Cell::blank(pen); cols])
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }
