@@ -5,11 +5,13 @@ use std::ops::Range;
 use rgb::RGB8;
 mod color;
 mod pen;
+mod cell;
 mod segment;
 mod line;
 pub use color::Color;
 pub use pen::Pen;
 use pen::Intensity;
+use cell::Cell;
 pub use line::Line;
 pub use segment::Segment;
 
@@ -34,9 +36,6 @@ pub enum State {
     OscString,
     SosPmApcString,
 }
-
-#[derive(Debug, Copy, Clone)]
-struct Cell(char, Pen);
 
 #[derive(Debug, PartialEq)]
 enum Charset {
@@ -99,12 +98,6 @@ const SPECIAL_GFX_CHARS: [char; 31] = [
     '├', '┤', '┴', '┬', '│', '≤', '≥', 'π', '≠', '£',
     '⋅'
 ];
-
-impl Cell {
-    fn blank() -> Cell {
-        Cell(' ', Pen::new())
-    }
-}
 
 impl Charset {
     fn translate(&self, input: char) -> char {
