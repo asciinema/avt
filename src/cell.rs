@@ -1,10 +1,10 @@
 use super::Pen;
 
 #[derive(Debug, Copy, Clone)]
-pub(crate) struct Cell(pub(crate) char, pub(crate) Pen);
+pub struct Cell(pub char, pub Pen);
 
 impl Cell {
-    pub(crate) fn blank() -> Cell {
+    pub fn blank() -> Cell {
         Cell(' ', Pen::new())
     }
 }

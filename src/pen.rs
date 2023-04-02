@@ -14,7 +14,7 @@ pub struct Pen {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub(crate) enum Intensity {
+pub enum Intensity {
     Normal,
     Bold,
     Faint,

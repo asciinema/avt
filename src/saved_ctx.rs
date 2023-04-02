@@ -2,11 +2,11 @@ use super::Pen;
 
 #[derive(Debug, PartialEq)]
 pub struct SavedCtx {
-    pub(crate) cursor_x: usize,
-    pub(crate) cursor_y: usize,
-    pub(crate) pen: Pen,
-    pub(crate) origin_mode: bool,
-    pub(crate) auto_wrap_mode: bool,
+    pub cursor_x: usize,
+    pub cursor_y: usize,
+    pub pen: Pen,
+    pub origin_mode: bool,
+    pub auto_wrap_mode: bool,
 }
 
 impl SavedCtx {
