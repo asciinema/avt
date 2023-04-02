@@ -1,23 +1,23 @@
 // The parser is based on Paul Williams' parser for ANSI-compatible video
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
-use std::ops::Range;
 use rgb::RGB8;
-mod color;
-mod pen;
+use std::ops::Range;
 mod cell;
-mod segment;
-mod line;
 mod charset;
+mod color;
+mod line;
+mod pen;
 mod saved_ctx;
-pub use color::Color;
-pub use pen::Pen;
-use pen::Intensity;
+mod segment;
 use cell::Cell;
-pub use line::Line;
-pub use segment::Segment;
 use charset::Charset;
+pub use color::Color;
+pub use line::Line;
+use pen::Intensity;
+pub use pen::Pen;
 use saved_ctx::SavedCtx;
+pub use segment::Segment;
 
 trait Dump {
     fn dump(&self) -> String;
