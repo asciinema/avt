@@ -21,3 +21,21 @@ impl Charset {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Charset;
+
+    #[test]
+    fn translate() {
+        let charset = Charset::Ascii;
+        assert_eq!(charset.translate('A'), 'A');
+        assert_eq!(charset.translate('a'), 'a');
+        assert_eq!(charset.translate('~'), '~');
+
+        let charset = Charset::Drawing;
+        assert_eq!(charset.translate('A'), 'A');
+        assert_eq!(charset.translate('a'), '▒');
+        assert_eq!(charset.translate('~'), '⋅');
+    }
+}
