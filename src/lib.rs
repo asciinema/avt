@@ -3,9 +3,15 @@
 
 use std::ops::Range;
 use rgb::RGB8;
-use serde::ser::{Serialize, Serializer, SerializeMap, SerializeTuple};
+use serde::ser::{Serialize, Serializer, SerializeMap};
 mod line;
+mod segment;
 pub use line::Line;
+pub use segment::Segment;
+
+trait Dump {
+    fn dump(&self) -> String;
+}
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum State {
@@ -52,9 +58,6 @@ pub struct Pen {
 
 #[derive(Debug, Copy, Clone)]
 struct Cell(char, Pen);
-
-#[derive(Debug)]
-pub struct Segment(Vec<char>, Pen);
 
 #[derive(Debug, PartialEq)]
 enum Charset {
@@ -236,48 +239,6 @@ impl Color {
 impl Cell {
     fn blank() -> Cell {
         Cell(' ', Pen::new())
-    }
-}
-
-impl Segment {
-    pub fn text(&self) -> String {
-        self.0.iter().collect()
-    }
-
-    pub fn foreground(&self) -> Option<Color> {
-        self.1.foreground()
-    }
-
-    pub fn background(&self) -> Option<Color> {
-        self.1.background()
-    }
-
-    pub fn is_bold(&self) -> bool {
-        self.1.is_bold()
-    }
-
-    pub fn is_faint(&self) -> bool {
-        self.1.is_faint()
-    }
-
-    pub fn is_italic(&self) -> bool {
-        self.1.is_italic()
-    }
-
-    pub fn is_underline(&self) -> bool {
-        self.1.is_underline()
-    }
-
-    pub fn is_strikethrough(&self) -> bool {
-        self.1.is_strikethrough()
-    }
-
-    pub fn is_blink(&self) -> bool {
-        self.1.is_blink()
-    }
-
-    pub fn is_inverse(&self) -> bool {
-        self.1.is_inverse()
     }
 }
 
@@ -1909,16 +1870,8 @@ impl Vt {
     fn dump_line(segments: &[Segment]) -> String {
         segments
         .iter()
-        .map(Vt::dump_segment)
+        .map(Dump::dump)
         .collect()
-    }
-
-    fn dump_segment(segment: &Segment) -> String {
-        let mut s = segment.1.sgr_seq();
-        let text = segment.0.iter().collect::<String>();
-        s.push_str(&text);
-
-        s
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
@@ -1940,19 +1893,6 @@ impl Vt {
 
     fn mark_affected_line(&mut self, line: usize) {
         self.affected_lines[line] = true;
-    }
-}
-
-impl Serialize for Segment {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut tup = serializer.serialize_tuple(2)?;
-        let text: String = self.0.iter().collect();
-        tup.serialize_element(&text)?;
-        tup.serialize_element(&self.1)?;
-        tup.end()
     }
 }
 
