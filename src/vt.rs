@@ -45,7 +45,7 @@ pub struct Vt {
     intermediates: Vec<char>,
 
     // screen
-    pub columns: usize,
+    pub cols: usize,
     pub rows: usize,
     buffer: Vec<Line>,
     alternate_buffer: Vec<Line>,
@@ -70,23 +70,23 @@ pub struct Vt {
 }
 
 impl Vt {
-    pub fn new(columns: usize, rows: usize) -> Self {
-        assert!(columns > 0);
+    pub fn new(cols: usize, rows: usize) -> Self {
+        assert!(cols > 0);
         assert!(rows > 0);
 
-        let buffer = Vt::new_buffer(columns, rows);
+        let buffer = Vt::new_buffer(cols, rows);
         let alternate_buffer = buffer.clone();
 
         Vt {
             state: State::Ground,
             params: Vec::new(),
             intermediates: Vec::new(),
-            columns,
+            cols,
             rows,
             buffer,
             alternate_buffer,
             active_buffer_type: BufferType::Primary,
-            tabs: Vt::default_tabs(columns),
+            tabs: Vt::default_tabs(cols),
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: true,
@@ -106,22 +106,22 @@ impl Vt {
         }
     }
 
-    fn new_buffer(columns: usize, rows: usize) -> Vec<Line> {
-        vec![Line(vec![Cell::default(); columns]); rows]
+    fn new_buffer(cols: usize, rows: usize) -> Vec<Line> {
+        vec![Line(vec![Cell::default(); cols]); rows]
     }
 
     fn blank_line(&self) -> Line {
-        Line(vec![self.blank_cell(); self.columns])
+        Line(vec![self.blank_cell(); self.cols])
     }
 
     fn blank_cell(&self) -> Cell {
         Cell(' ', self.pen)
     }
 
-    fn default_tabs(columns: usize) -> Vec<usize> {
+    fn default_tabs(cols: usize) -> Vec<usize> {
         let mut tabs = vec![];
 
-        for t in (8..columns).step_by(8) {
+        for t in (8..cols).step_by(8) {
             tabs.push(t);
         }
 
@@ -487,11 +487,11 @@ impl Vt {
         let cell = Cell(input, self.pen);
         let next_column = self.cursor_x + 1;
 
-        if next_column >= self.columns {
-            self.set_cell(self.columns - 1, self.cursor_y, cell);
+        if next_column >= self.cols {
+            self.set_cell(self.cols - 1, self.cursor_y, cell);
 
             if self.auto_wrap_mode {
-                self.do_move_cursor_to_col(self.columns);
+                self.do_move_cursor_to_col(self.cols);
                 self.next_print_wraps = true;
             }
         } else {
@@ -602,7 +602,7 @@ impl Vt {
 
     fn execute_decaln(&mut self) {
         for y in 0..self.rows {
-            for x in 0..self.columns {
+            for x in 0..self.cols {
                 self.set_cell(x, y, Cell('\u{45}', Pen::default()));
             }
 
@@ -665,7 +665,7 @@ impl Vt {
 
     fn execute_ich(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.columns - self.cursor_x);
+        n = n.min(self.cols - self.cursor_x);
         let tpl = self.blank_cell();
         let cells = &mut self.buffer[self.cursor_y].0[self.cursor_x..];
         cells.rotate_right(n);
@@ -720,14 +720,14 @@ impl Vt {
         match self.get_param(0, 0) {
             0 => {
                 // clear to end of screen
-                self.clear_line(self.cursor_x..self.columns);
+                self.clear_line(self.cursor_x..self.cols);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
                 self.mark_affected_lines(self.cursor_y..self.rows);
             }
 
             1 => {
                 // clear to beginning of screen
-                self.clear_line(0..(self.cursor_x + 1).min(self.columns));
+                self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.clear_lines(0..self.cursor_y);
                 self.mark_affected_lines(0..(self.cursor_y + 1));
             }
@@ -746,19 +746,19 @@ impl Vt {
         match self.get_param(0, 0) {
             0 => {
                 // clear to end of line
-                self.clear_line(self.cursor_x..self.columns);
+                self.clear_line(self.cursor_x..self.cols);
                 self.mark_affected_line(self.cursor_y);
             }
 
             1 => {
                 // clear to begining of line
-                self.clear_line(0..(self.cursor_x + 1).min(self.columns));
+                self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.mark_affected_line(self.cursor_y);
             }
 
             2 => {
                 // clear whole line
-                self.clear_line(0..self.columns);
+                self.clear_line(0..self.cols);
                 self.mark_affected_line(self.cursor_y);
             }
 
@@ -800,14 +800,14 @@ impl Vt {
     }
 
     fn execute_dch(&mut self) {
-        if self.cursor_x >= self.columns {
-            self.move_cursor_to_col(self.columns - 1);
+        if self.cursor_x >= self.cols {
+            self.move_cursor_to_col(self.cols - 1);
         }
 
         let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.columns - self.cursor_x);
+        n = n.min(self.cols - self.cursor_x);
         self.buffer[self.cursor_y].0[self.cursor_x..].rotate_left(n);
-        self.clear_line((self.columns - n)..self.columns);
+        self.clear_line((self.cols - n)..self.cols);
         self.mark_affected_line(self.cursor_y);
     }
 
@@ -830,7 +830,7 @@ impl Vt {
 
     fn execute_ech(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.columns - self.cursor_x);
+        n = n.min(self.cols - self.cursor_x);
         self.clear_line(self.cursor_x..(self.cursor_x + n));
         self.mark_affected_line(self.cursor_y);
     }
@@ -1121,7 +1121,7 @@ impl Vt {
     }
 
     fn set_tab(&mut self) {
-        if 0 < self.cursor_x && self.cursor_x < self.columns {
+        if 0 < self.cursor_x && self.cursor_x < self.cols {
             match self.tabs.binary_search(&self.cursor_x) {
                 Ok(_pos) => (),
                 Err(pos) => self.tabs.insert(pos, self.cursor_x),
@@ -1187,7 +1187,7 @@ impl Vt {
     // cursor
 
     fn save_cursor(&mut self) {
-        self.saved_ctx.cursor_x = self.cursor_x.min(self.columns - 1);
+        self.saved_ctx.cursor_x = self.cursor_x.min(self.cols - 1);
         self.saved_ctx.cursor_y = self.cursor_y;
         self.saved_ctx.pen = self.pen;
         self.saved_ctx.origin_mode = self.origin_mode;
@@ -1204,8 +1204,8 @@ impl Vt {
     }
 
     fn move_cursor_to_col(&mut self, col: usize) {
-        if col >= self.columns {
-            self.do_move_cursor_to_col(self.columns - 1);
+        if col >= self.cols {
+            self.do_move_cursor_to_col(self.cols - 1);
         } else {
             self.do_move_cursor_to_col(col);
         }
@@ -1224,7 +1224,7 @@ impl Vt {
     }
 
     fn do_move_cursor_to_row(&mut self, row: usize) {
-        self.cursor_x = self.cursor_x.min(self.columns - 1);
+        self.cursor_x = self.cursor_x.min(self.cols - 1);
         self.cursor_y = row;
         self.next_print_wraps = false;
     }
@@ -1234,8 +1234,8 @@ impl Vt {
 
         if new_col < 0 {
             self.do_move_cursor_to_col(0);
-        } else if new_col as usize >= self.columns {
-            self.do_move_cursor_to_col(self.columns - 1);
+        } else if new_col as usize >= self.cols {
+            self.do_move_cursor_to_col(self.cols - 1);
         } else {
             self.do_move_cursor_to_col(new_col as usize);
         }
@@ -1247,7 +1247,7 @@ impl Vt {
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
-        let last_col = self.columns - 1;
+        let last_col = self.cols - 1;
 
         let next_tab = *self
             .tabs
@@ -1357,7 +1357,7 @@ impl Vt {
     }
 
     fn hard_reset(&mut self) {
-        let buffer = Vt::new_buffer(self.columns, self.rows);
+        let buffer = Vt::new_buffer(self.cols, self.rows);
         let alternate_buffer = buffer.clone();
 
         self.state = State::Ground;
@@ -1367,7 +1367,7 @@ impl Vt {
         self.buffer = buffer;
         self.alternate_buffer = alternate_buffer;
         self.active_buffer_type = BufferType::Primary;
-        self.tabs = Vt::default_tabs(self.columns);
+        self.tabs = Vt::default_tabs(self.cols);
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.cursor_visible = true;
@@ -1528,10 +1528,10 @@ impl Vt {
         // fix cursor in target position
         seq.push_str(&format!("\u{9b}{row};{column}H"));
 
-        if self.cursor_x >= self.columns {
+        if self.cursor_x >= self.cols {
             // move cursor past right border by re-printing the character in
             // the last column
-            let cell = self.buffer[self.cursor_y].0[self.columns - 1];
+            let cell = self.buffer[self.cursor_y].0[self.cols - 1];
             seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
         }
 
