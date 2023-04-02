@@ -8,7 +8,6 @@ use crate::dump::Dump;
 use crate::line::Line;
 use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
-use crate::segment::Segment;
 use rgb::RGB8;
 use std::ops::Range;
 
@@ -91,7 +90,7 @@ impl Vt {
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: true,
-            pen: Pen::new(),
+            pen: Pen::default(),
             charsets: [Charset::Ascii, Charset::Ascii],
             active_charset: 0,
             insert_mode: false,
@@ -101,14 +100,14 @@ impl Vt {
             next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
-            saved_ctx: SavedCtx::new(),
-            alternate_saved_ctx: SavedCtx::new(),
+            saved_ctx: SavedCtx::default(),
+            alternate_saved_ctx: SavedCtx::default(),
             affected_lines: vec![true; rows],
         }
     }
 
     fn new_buffer(columns: usize, rows: usize) -> Vec<Line> {
-        vec![Line(vec![Cell::blank(); columns]); rows]
+        vec![Line(vec![Cell::default(); columns]); rows]
     }
 
     fn blank_line(&self) -> Line {
@@ -604,7 +603,7 @@ impl Vt {
     fn execute_decaln(&mut self) {
         for y in 0..self.rows {
             for x in 0..self.columns {
-                self.set_cell(x, y, Cell('\u{45}', Pen::new()));
+                self.set_cell(x, y, Cell('\u{45}', Pen::default()));
             }
 
             self.mark_affected_line(y);
@@ -889,7 +888,7 @@ impl Vt {
         while let Some(param) = ps.first() {
             match param {
                 0 => {
-                    self.pen = Pen::new();
+                    self.pen = Pen::default();
                     ps = &ps[1..];
                 }
 
@@ -1351,10 +1350,10 @@ impl Vt {
         self.bottom_margin = self.rows - 1;
         self.insert_mode = false;
         self.origin_mode = false;
-        self.pen = Pen::new();
+        self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
-        self.saved_ctx = SavedCtx::new();
+        self.saved_ctx = SavedCtx::default();
     }
 
     fn hard_reset(&mut self) {
@@ -1372,7 +1371,7 @@ impl Vt {
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.cursor_visible = true;
-        self.pen = Pen::new();
+        self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
         self.insert_mode = false;
@@ -1382,8 +1381,8 @@ impl Vt {
         self.next_print_wraps = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
-        self.saved_ctx = SavedCtx::new();
-        self.alternate_saved_ctx = SavedCtx::new();
+        self.saved_ctx = SavedCtx::default();
+        self.alternate_saved_ctx = SavedCtx::default();
         self.affected_lines = vec![true; self.rows];
     }
 

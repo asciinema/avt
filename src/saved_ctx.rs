@@ -9,12 +9,12 @@ pub struct SavedCtx {
     pub auto_wrap_mode: bool,
 }
 
-impl SavedCtx {
-    pub fn new() -> SavedCtx {
+impl Default for SavedCtx {
+    fn default() -> Self {
         SavedCtx {
             cursor_x: 0,
             cursor_y: 0,
-            pen: Pen::new(),
+            pen: Pen::default(),
             origin_mode: false,
             auto_wrap_mode: true,
         }

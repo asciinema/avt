@@ -22,19 +22,6 @@ pub enum Intensity {
 }
 
 impl Pen {
-    pub(crate) fn new() -> Pen {
-        Pen {
-            foreground: None,
-            background: None,
-            intensity: Intensity::Normal,
-            italic: false,
-            underline: false,
-            strikethrough: false,
-            blink: false,
-            inverse: false,
-        }
-    }
-
     pub fn foreground(&self) -> Option<Color> {
         self.foreground
     }
@@ -69,6 +56,21 @@ impl Pen {
 
     pub fn is_inverse(&self) -> bool {
         self.inverse
+    }
+}
+
+impl Default for Pen {
+    fn default() -> Self {
+        Pen {
+            foreground: None,
+            background: None,
+            intensity: Intensity::Normal,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            blink: false,
+            inverse: false,
+        }
     }
 }
 
