@@ -1667,14 +1667,7 @@ impl Vt {
             &self.alternate_buffer
         };
 
-        buffer
-            .iter()
-            .map(|line| Vt::dump_line(&line.segments().collect::<Vec<_>>()))
-            .collect()
-    }
-
-    fn dump_line(segments: &[Segment]) -> String {
-        segments.iter().map(Dump::dump).collect()
+        buffer.iter().map(Dump::dump).collect()
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {

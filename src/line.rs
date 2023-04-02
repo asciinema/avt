@@ -1,4 +1,5 @@
 use crate::cell::Cell;
+use crate::dump::Dump;
 use crate::pen::Pen;
 use crate::segment::Segment;
 
@@ -51,5 +52,11 @@ impl<'a, I: Iterator<Item = &'a Cell>> Iterator for Chunk<'a, I> {
         }
 
         self.segment.take()
+    }
+}
+
+impl Dump for Line {
+    fn dump(&self) -> String {
+        self.segments().map(|s| s.dump()).collect()
     }
 }
