@@ -1,3 +1,5 @@
+use std::ops::Range;
+
 use crate::cell::Cell;
 use crate::dump::Dump;
 use crate::pen::Pen;
@@ -9,6 +11,14 @@ pub struct Line(pub(crate) Vec<Cell>);
 impl Line {
     pub(crate) fn blank(cols: usize, pen: Pen) -> Self {
         Line(vec![Cell::blank(pen); cols])
+    }
+
+    pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
+        let tpl = Cell::blank(*pen);
+
+        for cell in &mut self.0[range] {
+            *cell = tpl;
+        }
     }
 
     pub fn len(&self) -> usize {

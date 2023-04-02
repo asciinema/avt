@@ -1135,11 +1135,7 @@ impl Vt {
     }
 
     fn clear_line(&mut self, range: Range<usize>) {
-        let tpl = Cell::blank(self.pen);
-
-        for cell in &mut self.buffer[self.cursor_y].0[range] {
-            *cell = tpl;
-        }
+        self.buffer[self.cursor_y].clear(range, &self.pen);
     }
 
     fn clear_lines(&mut self, range: Range<usize>) {
