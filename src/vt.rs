@@ -1,9 +1,9 @@
 // The parser is based on Paul Williams' parser for ANSI-compatible video
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
+use super::{Cell, Charset, Color, Dump, Intensity, Line, Pen, SavedCtx, Segment};
 use rgb::RGB8;
 use std::ops::Range;
-use super::{Cell, Charset, Color, Dump, Intensity, Line, Pen, SavedCtx, Segment};
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum State {
@@ -26,7 +26,7 @@ pub enum State {
 #[derive(Debug, PartialEq)]
 enum BufferType {
     Primary,
-    Alternate
+    Alternate,
 }
 
 #[derive(Debug)]
@@ -60,7 +60,7 @@ pub struct Vt {
     bottom_margin: usize,
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
-    affected_lines: Vec<bool>
+    affected_lines: Vec<bool>,
 }
 
 impl Vt {
@@ -96,7 +96,7 @@ impl Vt {
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::new(),
             alternate_saved_ctx: SavedCtx::new(),
-            affected_lines: vec![true; rows]
+            affected_lines: vec![true; rows],
         }
     }
 
@@ -145,16 +145,10 @@ impl Vt {
 
         // return affected line numbers
         self.affected_lines
-        .iter()
-        .enumerate()
-        .filter_map(|(i, &affected)|
-            if affected {
-                Some(i)
-            } else {
-                None
-            }
-        )
-        .collect()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, &affected)| if affected { Some(i) } else { None })
+            .collect()
     }
 
     pub fn feed(&mut self, input: char) {
@@ -445,7 +439,7 @@ impl Vt {
                 self.osc_put(input);
             }
 
-            _ => ()
+            _ => (),
         }
     }
 
@@ -465,7 +459,7 @@ impl Vt {
             '\u{85}' => self.execute_nel(),
             '\u{88}' => self.execute_hts(),
             '\u{8d}' => self.execute_ri(),
-            _ => ()
+            _ => (),
         }
     }
 
@@ -512,9 +506,7 @@ impl Vt {
 
     fn esc_dispatch(&mut self, input: char) {
         match (self.intermediates.first(), input) {
-            (None, c) if ('@'..='_').contains(&c) => {
-                self.execute(((input as u8) + 0x40) as char)
-            }
+            (None, c) if ('@'..='_').contains(&c) => self.execute(((input as u8) + 0x40) as char),
 
             (None, '7') => self.execute_sc(),
             (None, '8') => self.execute_rc(),
@@ -524,7 +516,7 @@ impl Vt {
             (Some('('), _) => self.execute_gzd4(Charset::Ascii),
             (Some(')'), '0') => self.execute_g1d4(Charset::Drawing),
             (Some(')'), _) => self.execute_g1d4(Charset::Ascii),
-            _ => ()
+            _ => (),
         }
     }
 
@@ -740,7 +732,7 @@ impl Vt {
                 self.mark_affected_lines(0..self.rows);
             }
 
-            _ => ()
+            _ => (),
         }
     }
 
@@ -764,7 +756,7 @@ impl Vt {
                 self.mark_affected_line(self.cursor_y);
             }
 
-            _ => ()
+            _ => (),
         }
     }
 
@@ -826,7 +818,7 @@ impl Vt {
             0 => self.set_tab(),
             2 => self.clear_tab(),
             5 => self.clear_all_tabs(),
-            _ => ()
+            _ => (),
         }
     }
 
@@ -860,7 +852,7 @@ impl Vt {
         match self.get_param(0, 0) {
             0 => self.clear_tab(),
             3 => self.clear_all_tabs(),
-            _ => ()
+            _ => (),
         }
     }
 
@@ -869,7 +861,7 @@ impl Vt {
             match param {
                 4 => self.insert_mode = true,
                 20 => self.new_line_mode = true,
-                _ => ()
+                _ => (),
             }
         }
     }
@@ -879,7 +871,7 @@ impl Vt {
             match param {
                 4 => self.insert_mode = false,
                 20 => self.new_line_mode = false,
-                _ => ()
+                _ => (),
             }
         }
     }
@@ -959,37 +951,36 @@ impl Vt {
                     ps = &ps[1..];
                 }
 
-                38 => {
-                    match ps.get(1) {
-                        None => {
-                            ps = &ps[1..];
-                        }
+                38 => match ps.get(1) {
+                    None => {
+                        ps = &ps[1..];
+                    }
 
-                        Some(2) => {
-                            if let Some(b) = ps.get(4) {
-                                let r = ps.get(2).unwrap();
-                                let g = ps.get(3).unwrap();
-                                self.pen.foreground = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
-                                ps = &ps[5..];
-                            } else {
-                                ps = &ps[2..];
-                            }
-                        }
-
-                        Some(5) => {
-                            if let Some(param) = ps.get(2) {
-                                self.pen.foreground = Some(Color::Indexed(*param as u8));
-                                ps = &ps[3..];
-                            } else {
-                                ps = &ps[2..];
-                            }
-                        }
-
-                        Some(_) => {
-                            ps = &ps[1..];
+                    Some(2) => {
+                        if let Some(b) = ps.get(4) {
+                            let r = ps.get(2).unwrap();
+                            let g = ps.get(3).unwrap();
+                            self.pen.foreground =
+                                Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
+                            ps = &ps[5..];
+                        } else {
+                            ps = &ps[2..];
                         }
                     }
-                }
+
+                    Some(5) => {
+                        if let Some(param) = ps.get(2) {
+                            self.pen.foreground = Some(Color::Indexed(*param as u8));
+                            ps = &ps[3..];
+                        } else {
+                            ps = &ps[2..];
+                        }
+                    }
+
+                    Some(_) => {
+                        ps = &ps[1..];
+                    }
+                },
 
                 39 => {
                     self.pen.foreground = None;
@@ -1001,37 +992,36 @@ impl Vt {
                     ps = &ps[1..];
                 }
 
-                48 => {
-                    match ps.get(1) {
-                        None => {
-                            ps = &ps[1..];
-                        }
+                48 => match ps.get(1) {
+                    None => {
+                        ps = &ps[1..];
+                    }
 
-                        Some(2) => {
-                            if let Some(b) = ps.get(4) {
-                                let r = ps.get(2).unwrap();
-                                let g = ps.get(3).unwrap();
-                                self.pen.background = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
-                                ps = &ps[5..];
-                            } else {
-                                ps = &ps[2..];
-                            }
-                        }
-
-                        Some(5) => {
-                            if let Some(param) = ps.get(2) {
-                                self.pen.background = Some(Color::Indexed(*param as u8));
-                                ps = &ps[3..];
-                            } else {
-                                ps = &ps[2..];
-                            }
-                        }
-
-                        Some(_) => {
-                            ps = &ps[1..];
+                    Some(2) => {
+                        if let Some(b) = ps.get(4) {
+                            let r = ps.get(2).unwrap();
+                            let g = ps.get(3).unwrap();
+                            self.pen.background =
+                                Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
+                            ps = &ps[5..];
+                        } else {
+                            ps = &ps[2..];
                         }
                     }
-                }
+
+                    Some(5) => {
+                        if let Some(param) = ps.get(2) {
+                            self.pen.background = Some(Color::Indexed(*param as u8));
+                            ps = &ps[3..];
+                        } else {
+                            ps = &ps[2..];
+                        }
+                    }
+
+                    Some(_) => {
+                        ps = &ps[1..];
+                    }
+                },
 
                 49 => {
                     self.pen.background = None;
@@ -1061,7 +1051,7 @@ impl Vt {
                 6 => {
                     self.origin_mode = true;
                     self.move_cursor_home();
-                },
+                }
 
                 7 => self.auto_wrap_mode = true,
                 25 => self.cursor_visible = true,
@@ -1072,8 +1062,8 @@ impl Vt {
                 1049 => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
-                },
-                _ => ()
+                }
+                _ => (),
             }
         }
     }
@@ -1081,10 +1071,10 @@ impl Vt {
     fn execute_prv_rm(&mut self) {
         for param in self.params.clone() {
             match param {
-                6 =>  {
+                6 => {
                     self.origin_mode = false;
                     self.move_cursor_home();
-                },
+                }
 
                 7 => self.auto_wrap_mode = false,
                 25 => self.cursor_visible = false,
@@ -1092,12 +1082,12 @@ impl Vt {
                 1047 => self.switch_to_primary_buffer(),
                 1048 => self.restore_cursor(),
 
-                1049 =>  {
+                1049 => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
-                },
+                }
 
-                _ => ()
+                _ => (),
             }
         }
     }
@@ -1128,15 +1118,17 @@ impl Vt {
         if 0 < self.cursor_x && self.cursor_x < self.columns {
             match self.tabs.binary_search(&self.cursor_x) {
                 Ok(_pos) => (),
-                Err(pos) => self.tabs.insert(pos, self.cursor_x)
+                Err(pos) => self.tabs.insert(pos, self.cursor_x),
             }
         }
     }
 
     fn clear_tab(&mut self) {
         match self.tabs.binary_search(&self.cursor_x) {
-            Ok(pos) => { self.tabs.remove(pos); },
-            Err(_pos) => ()
+            Ok(pos) => {
+                self.tabs.remove(pos);
+            }
+            Err(_pos) => (),
         }
     }
 
@@ -1163,7 +1155,11 @@ impl Vt {
     fn get_param(&self, n: usize, default: u16) -> u16 {
         let param = *self.params.get(n).unwrap_or(&0);
 
-        if param == 0 { default } else { param }
+        if param == 0 {
+            default
+        } else {
+            param
+        }
     }
 
     fn actual_top_margin(&self) -> usize {
@@ -1247,8 +1243,8 @@ impl Vt {
     fn move_cursor_to_next_tab(&mut self, n: usize) {
         let last_col = self.columns - 1;
 
-        let next_tab =
-            *self.tabs
+        let next_tab = *self
+            .tabs
             .iter()
             .skip_while(|&&t| self.cursor_x >= t)
             .nth(n - 1)
@@ -1260,8 +1256,8 @@ impl Vt {
     fn move_cursor_to_prev_tab(&mut self, n: usize) {
         let first_col = 0;
 
-        let prev_tab =
-            *self.tabs
+        let prev_tab = *self
+            .tabs
             .iter()
             .rev()
             .skip_while(|&&t| self.cursor_x <= t)
@@ -1389,7 +1385,7 @@ impl Vt {
     pub fn dump(&self) -> String {
         let (primary_ctx, alternate_ctx): (&SavedCtx, &SavedCtx) = match self.active_buffer_type {
             BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
-            BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx)
+            BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx),
         };
 
         // 1. dump primary screen buffer
@@ -1419,7 +1415,11 @@ impl Vt {
         }
 
         // fix cursor in target position
-        seq.push_str(&format!("\u{9b}{};{}H", primary_ctx.cursor_y + 1, primary_ctx.cursor_x + 1));
+        seq.push_str(&format!(
+            "\u{9b}{};{}H",
+            primary_ctx.cursor_y + 1,
+            primary_ctx.cursor_x + 1
+        ));
 
         // configure pen
         seq.push_str(&primary_ctx.pen.dump());
@@ -1463,7 +1463,11 @@ impl Vt {
         }
 
         // fix cursor in target position
-        seq.push_str(&format!("\u{9b}{};{}H", alternate_ctx.cursor_y + 1, alternate_ctx.cursor_x + 1));
+        seq.push_str(&format!(
+            "\u{9b}{};{}H",
+            alternate_ctx.cursor_y + 1,
+            alternate_ctx.cursor_x + 1
+        ));
 
         // configure pen
         seq.push_str(&alternate_ctx.pen.dump());
@@ -1499,7 +1503,11 @@ impl Vt {
         // 8. setup margins
 
         // note: this resets cursor position - must be done before fixing cursor
-        seq.push_str(&format!("\u{9b}{};{}r", self.top_margin + 1, self.bottom_margin + 1));
+        seq.push_str(&format!(
+            "\u{9b}{};{}r",
+            self.top_margin + 1,
+            self.bottom_margin + 1
+        ));
 
         // 9. setup cursor
 
@@ -1575,22 +1583,21 @@ impl Vt {
         match self.state {
             State::Ground => (),
 
-            State::Escape =>
-                seq.push('\u{1b}'),
+            State::Escape => seq.push('\u{1b}'),
 
             State::EscapeIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
                 let s = format!("\u{1b}{intermediates}");
                 seq.push_str(&s);
-            },
+            }
 
-            State::CsiEntry =>
-                seq.push('\u{9b}'),
+            State::CsiEntry => seq.push('\u{9b}'),
 
             State::CsiParam => {
                 let intermediates = self.intermediates.iter().collect::<String>();
 
-                let params = self.params
+                let params = self
+                    .params
                     .iter()
                     .map(|param| param.to_string())
                     .collect::<Vec<_>>()
@@ -1598,30 +1605,29 @@ impl Vt {
 
                 let s = &format!("\u{9b}{intermediates}{params}");
                 seq.push_str(s);
-            },
+            }
 
             State::CsiIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
                 let s = &format!("\u{9b}{intermediates}");
                 seq.push_str(s);
-            },
+            }
 
-            State::CsiIgnore =>
-                seq.push_str("\u{9b}\u{3a}"),
+            State::CsiIgnore => seq.push_str("\u{9b}\u{3a}"),
 
-            State::DcsEntry =>
-                seq.push('\u{90}'),
+            State::DcsEntry => seq.push('\u{90}'),
 
             State::DcsIntermediate => {
                 let intermediates = self.intermediates.iter().collect::<String>();
                 let s = &format!("\u{90}{intermediates}");
                 seq.push_str(s);
-            },
+            }
 
             State::DcsParam => {
                 let intermediates = self.intermediates.iter().collect::<String>();
 
-                let params = self.params
+                let params = self
+                    .params
                     .iter()
                     .map(|param| param.to_string())
                     .collect::<Vec<_>>()
@@ -1629,7 +1635,7 @@ impl Vt {
 
                 let s = &format!("\u{90}{intermediates}{params}");
                 seq.push_str(s);
-            },
+            }
 
             State::DcsPassthrough => {
                 let intermediates = self.intermediates.iter().collect::<String>();
@@ -1637,14 +1643,11 @@ impl Vt {
                 seq.push_str(s);
             }
 
-            State::DcsIgnore =>
-                seq.push_str("\u{90}\u{3a}"),
+            State::DcsIgnore => seq.push_str("\u{90}\u{3a}"),
 
-            State::OscString =>
-                seq.push('\u{9d}'),
+            State::OscString => seq.push('\u{9d}'),
 
-            State::SosPmApcString =>
-                seq.push('\u{98}')
+            State::SosPmApcString => seq.push('\u{98}'),
         }
 
         seq
@@ -1658,26 +1661,22 @@ impl Vt {
         };
 
         buffer
-        .iter()
-        .map(|line| Vt::dump_line(&line.segments().collect::<Vec<_>>()))
-        .collect()
+            .iter()
+            .map(|line| Vt::dump_line(&line.segments().collect::<Vec<_>>()))
+            .collect()
     }
 
     fn dump_line(segments: &[Segment]) -> String {
-        segments
-        .iter()
-        .map(Dump::dump)
-        .collect()
+        segments.iter().map(Dump::dump).collect()
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.buffer
-        .iter()
+        self.buffer.iter()
     }
 
     pub fn line(&self, n: usize) -> &Line {
         &self.buffer[n]
-     }
+    }
 
     // line change tracking
 
@@ -1697,17 +1696,17 @@ extern crate quickcheck;
 
 #[cfg(test)]
 mod tests {
-    use std::env;
-    use std::fs;
-    use pretty_assertions::assert_eq;
-    use quickcheck::{TestResult, quickcheck};
-    use rgb::RGB8;
     use super::BufferType;
     use super::Color;
     use super::Intensity;
     use super::Line;
     use super::State;
     use super::Vt;
+    use pretty_assertions::assert_eq;
+    use quickcheck::{quickcheck, TestResult};
+    use rgb::RGB8;
+    use std::env;
+    use std::fs;
 
     #[quickcheck]
     fn qc_cursor_position(bytes: Vec<u8>) -> bool {
@@ -1734,7 +1733,7 @@ mod tests {
     #[quickcheck]
     fn qc_wrapping(y: u8, bytes: Vec<u8>) -> TestResult {
         if y >= 5 {
-            return TestResult::discard()
+            return TestResult::discard();
         }
 
         let mut vt = Vt::new(10, 5);
@@ -1786,237 +1785,152 @@ mod tests {
 
     #[test]
     fn execute_lf() {
-        let mut vt = build_vt(3, 0, vec![
-            "abc     ",
-            "        "
-        ]);
+        let mut vt = build_vt(3, 0, vec!["abc     ", "        "]);
 
         vt.feed_str("\n");
 
         assert_eq!(vt.cursor_x, 3);
         assert_eq!(vt.cursor_y, 1);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc     ",
-            "        "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc     ", "        "]);
 
         vt.feed_str("d\n");
 
         assert_eq!(vt.cursor_x, 4);
         assert_eq!(vt.cursor_y, 1);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "   d    ",
-            "        "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["   d    ", "        "]);
     }
 
     #[test]
     fn execute_ri() {
-        let mut vt = build_vt(0, 0, vec![
-            "abcd",
-            "efgh",
-            "ijkl",
-            "mnop",
-            "qrst",
-        ]);
+        let mut vt = build_vt(0, 0, vec!["abcd", "efgh", "ijkl", "mnop", "qrst"]);
 
         vt.feed_str("\x1bM"); // RI
 
-        assert_eq!(dump_lines(&vt), vec![
-            "    ",
-            "abcd",
-            "efgh",
-            "ijkl",
-            "mnop",
-        ]);
+        assert_eq!(
+            dump_lines(&vt),
+            vec!["    ", "abcd", "efgh", "ijkl", "mnop",]
+        );
 
         vt.feed_str("\x1b[3;4r"); // use smaller scroll region
         vt.feed_str("\x1b[3;1H"); // place cursor on top margin
         vt.feed_str("\x1bM"); // RI
 
-        assert_eq!(dump_lines(&vt), vec![
-            "    ",
-            "abcd",
-            "    ",
-            "efgh",
-            "mnop",
-        ]);
+        assert_eq!(
+            dump_lines(&vt),
+            vec!["    ", "abcd", "    ", "efgh", "mnop",]
+        );
     }
 
     #[test]
     fn execute_ich() {
-        let mut vt = build_vt(3, 0, vec![
-            "abcdefgh",
-            "ijklmnop"
-        ]);
+        let mut vt = build_vt(3, 0, vec!["abcdefgh", "ijklmnop"]);
 
         vt.feed_str("\x1b[@");
 
         assert_eq!(vt.cursor_x, 3);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc defg",
-            "ijklmnop"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc defg", "ijklmnop"]);
 
         vt.feed_str("\x1b[2@");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc   de",
-            "ijklmnop"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc   de", "ijklmnop"]);
 
         vt.feed_str("\x1b[10@");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc     ",
-            "ijklmnop"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc     ", "ijklmnop"]);
 
-        let mut vt = build_vt(7, 0, vec![
-            "abcdefgh",
-            "ijklmnop"
-        ]);
+        let mut vt = build_vt(7, 0, vec!["abcdefgh", "ijklmnop"]);
 
         vt.feed_str("\x1b[10@");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abcdefg ",
-            "ijklmnop"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abcdefg ", "ijklmnop"]);
     }
 
     #[test]
     fn execute_il() {
-        let mut vt = build_vt(3, 1, vec![
-            "abcdefgh",
-            "ijklmnop",
-            "qrstuwxy"
-        ]);
+        let mut vt = build_vt(3, 1, vec!["abcdefgh", "ijklmnop", "qrstuwxy"]);
 
         vt.feed_str("\x1b[L");
 
         assert_eq!(vt.cursor_x, 3);
         assert_eq!(vt.cursor_y, 1);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abcdefgh",
-            "        ",
-            "ijklmnop"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abcdefgh", "        ", "ijklmnop"]);
 
         vt.cursor_y = 0;
 
         vt.feed_str("\x1b[2L");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "        ",
-            "        ",
-            "abcdefgh"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "abcdefgh"]);
 
         vt.cursor_y = 1;
 
         vt.feed_str("\x1b[100L");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "        ",
-            "        ",
-            "        "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "        "]);
     }
 
     #[test]
     fn execute_dl() {
-        let mut vt = build_vt(3, 1, vec![
-            "abcdefgh",
-            "ijklmnop",
-            "qrstuwxy"
-        ]);
+        let mut vt = build_vt(3, 1, vec!["abcdefgh", "ijklmnop", "qrstuwxy"]);
 
         vt.feed_str("\x1b[M");
 
         assert_eq!(vt.cursor_x, 3);
         assert_eq!(vt.cursor_y, 1);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abcdefgh",
-            "qrstuwxy",
-            "        "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abcdefgh", "qrstuwxy", "        "]);
 
         vt.cursor_y = 0;
 
         vt.feed_str("\x1b[5M");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "        ",
-            "        ",
-            "        "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "        "]);
     }
 
     #[test]
     fn execute_dch() {
-        let mut vt = build_vt(3, 0, vec![
-            "abcdefgh"
-        ]);
+        let mut vt = build_vt(3, 0, vec!["abcdefgh"]);
 
         vt.feed_str("\x1b[P");
 
         assert_eq!(vt.cursor_x, 3);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abcefgh "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abcefgh "]);
 
         vt.feed_str("\x1b[2P");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abcgh   "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abcgh   "]);
 
         vt.feed_str("\x1b[10P");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc     "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc     "]);
     }
 
     #[test]
     fn execute_ech() {
-        let mut vt = build_vt(3, 0, vec![
-            "abcdefgh"
-        ]);
+        let mut vt = build_vt(3, 0, vec!["abcdefgh"]);
 
         vt.feed_str("\x1b[X");
 
         assert_eq!(vt.cursor_x, 3);
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc efgh"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc efgh"]);
 
         vt.feed_str("\x1b[2X");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc  fgh"
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc  fgh"]);
 
         vt.feed_str("\x1b[10X");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "abc     "
-        ]);
+        assert_eq!(dump_lines(&vt), vec!["abc     "]);
     }
 
     #[test]
     fn execute_cht() {
-        let mut vt = build_vt(3, 0, vec![
-            "abcdefghijklmnopqrstuwxyzabc"
-        ]);
+        let mut vt = build_vt(3, 0, vec!["abcdefghijklmnopqrstuwxyzabc"]);
 
         vt.feed_str("\x1b[I");
 
@@ -2033,9 +1947,7 @@ mod tests {
 
     #[test]
     fn execute_cbt() {
-        let mut vt = build_vt(26, 0, vec![
-            "abcdefghijklmnopqrstuwxyzabc"
-        ]);
+        let mut vt = build_vt(26, 0, vec!["abcdefghijklmnopqrstuwxyzabc"]);
 
         vt.feed_str("\x1b[Z");
 
@@ -2217,15 +2129,18 @@ mod tests {
         // GL points to G0, G0 is set back to ascii
         vt.feed_str("\x1b(B\u{0f}alpty");
 
-        assert_eq!(dump_lines(&vt), vec![
-            "alpty ",
-            "▒┌⎻├≤ ",
-            "alpty ",
-            "▒┌⎻├≤ ",
-            "alpty ",
-            "alpty ",
-            "      ",
-        ]);
+        assert_eq!(
+            dump_lines(&vt),
+            vec![
+                "alpty ",
+                "▒┌⎻├≤ ",
+                "alpty ",
+                "▒┌⎻├≤ ",
+                "alpty ",
+                "alpty ",
+                "      ",
+            ]
+        );
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
@@ -2233,7 +2148,10 @@ mod tests {
         let input = fs::read_to_string(path).unwrap();
         let w: usize = env::var("W").unwrap().parse::<usize>().unwrap();
         let h: usize = env::var("H").unwrap().parse::<usize>().unwrap();
-        let step: usize = env::var("S").unwrap_or("1".to_owned()).parse::<usize>().unwrap();
+        let step: usize = env::var("S")
+            .unwrap_or("1".to_owned())
+            .parse::<usize>()
+            .unwrap();
 
         Ok((w, h, input, step))
     }
@@ -2253,10 +2171,7 @@ mod tests {
     }
 
     fn dump_lines(vt: &Vt) -> Vec<String> {
-        vt.buffer
-        .iter()
-        .map(|cells| dump_line(cells))
-        .collect()
+        vt.buffer.iter().map(|cells| dump_line(cells)).collect()
     }
 
     fn dump_line(line: &Line) -> String {
@@ -2270,13 +2185,22 @@ mod tests {
             assert_eq!(vt1.params, vt2.params);
         }
 
-        if vt1.state == State::EscapeIntermediate || vt1.state == State::CsiIntermediate || vt1.state == State::CsiParam || vt1.state == State::DcsIntermediate || vt1.state == State::DcsParam {
+        if vt1.state == State::EscapeIntermediate
+            || vt1.state == State::CsiIntermediate
+            || vt1.state == State::CsiParam
+            || vt1.state == State::DcsIntermediate
+            || vt1.state == State::DcsParam
+        {
             assert_eq!(vt1.intermediates, vt2.intermediates);
         }
 
         assert_eq!(vt1.active_buffer_type, vt2.active_buffer_type);
         assert_eq!(vt1.cursor_x, vt2.cursor_x);
-        assert_eq!(vt1.cursor_y, vt2.cursor_y, "margins: {} {}", vt1.top_margin, vt2.bottom_margin);
+        assert_eq!(
+            vt1.cursor_y, vt2.cursor_y,
+            "margins: {} {}",
+            vt1.top_margin, vt2.bottom_margin
+        );
         assert_eq!(vt1.cursor_visible, vt2.cursor_visible);
         assert_eq!(vt1.pen, vt2.pen);
         assert_eq!(vt1.charsets, vt2.charsets);
@@ -2299,7 +2223,10 @@ mod tests {
 
             BufferType::Alternate => {
                 // primary:
-                assert_eq!(buffer_as_string(&vt1.alternate_buffer), buffer_as_string(&vt2.alternate_buffer));
+                assert_eq!(
+                    buffer_as_string(&vt1.alternate_buffer),
+                    buffer_as_string(&vt2.alternate_buffer)
+                );
                 // alternate:
                 assert_eq!(buffer_as_string(&vt1.buffer), buffer_as_string(&vt2.buffer));
             }
