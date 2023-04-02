@@ -8,12 +8,14 @@ mod pen;
 mod cell;
 mod segment;
 mod line;
+mod charset;
 pub use color::Color;
 pub use pen::Pen;
 use pen::Intensity;
 use cell::Cell;
 pub use line::Line;
 pub use segment::Segment;
+use charset::Charset;
 
 trait Dump {
     fn dump(&self) -> String;
@@ -35,12 +37,6 @@ pub enum State {
     DcsIgnore,
     OscString,
     SosPmApcString,
-}
-
-#[derive(Debug, PartialEq)]
-enum Charset {
-    Ascii,
-    Drawing,
 }
 
 #[derive(Debug, PartialEq)]
@@ -90,26 +86,6 @@ pub struct Vt {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     affected_lines: Vec<bool>
-}
-
-const SPECIAL_GFX_CHARS: [char; 31] = [
-    '♦', '▒', '␉', '␌', '␍', '␊', '°', '±', '␤', '␋',
-    '┘', '┐', '┌', '└', '┼', '⎺', '⎻', '─', '⎼', '⎽',
-    '├', '┤', '┴', '┬', '│', '≤', '≥', 'π', '≠', '£',
-    '⋅'
-];
-
-impl Charset {
-    fn translate(&self, input: char) -> char {
-        if ('\x60'..'\x7f').contains(&input) {
-            match self {
-                Charset::Ascii => input,
-                Charset::Drawing => SPECIAL_GFX_CHARS[(input as usize) - 0x60],
-            }
-        } else {
-            input
-        }
-    }
 }
 
 impl SavedCtx {
