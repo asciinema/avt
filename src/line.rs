@@ -1,4 +1,6 @@
-use super::{Cell, Pen, Segment};
+use crate::cell::Cell;
+use crate::pen::Pen;
+use crate::segment::Segment;
 
 #[derive(Debug, Clone)]
 pub struct Line(pub(crate) Vec<Cell>);

@@ -1,7 +1,14 @@
 // The parser is based on Paul Williams' parser for ANSI-compatible video
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
-use super::{Cell, Charset, Color, Dump, Intensity, Line, Pen, SavedCtx, Segment};
+use crate::cell::Cell;
+use crate::charset::Charset;
+use crate::color::Color;
+use crate::dump::Dump;
+use crate::line::Line;
+use crate::pen::{Intensity, Pen};
+use crate::saved_ctx::SavedCtx;
+use crate::segment::Segment;
 use rgb::RGB8;
 use std::ops::Range;
 

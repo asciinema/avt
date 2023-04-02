@@ -1,4 +1,4 @@
-use super::Pen;
+use crate::pen::Pen;
 
 #[derive(Debug, PartialEq)]
 pub struct SavedCtx {

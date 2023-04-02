@@ -1,4 +1,5 @@
-use super::{Color, Dump};
+use crate::color::Color;
+use crate::dump::Dump;
 use serde::ser::{Serialize, SerializeMap, Serializer};
 
 #[derive(Debug, Copy, Clone, PartialEq)]

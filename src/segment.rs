@@ -1,4 +1,6 @@
-use super::{Color, Dump, Pen};
+use crate::color::Color;
+use crate::dump::Dump;
+use crate::pen::Pen;
 use serde::ser::{Serialize, SerializeTuple, Serializer};
 
 #[derive(Debug)]
