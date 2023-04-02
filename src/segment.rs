@@ -48,7 +48,7 @@ impl Segment {
 
 impl Dump for Segment {
     fn dump(&self) -> String {
-        let mut s = self.1.sgr_seq();
+        let mut s = self.1.dump();
         let text = self.0.iter().collect::<String>();
         s.push_str(&text);
 
