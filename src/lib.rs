@@ -9,6 +9,7 @@ mod cell;
 mod segment;
 mod line;
 mod charset;
+mod saved_ctx;
 pub use color::Color;
 pub use pen::Pen;
 use pen::Intensity;
@@ -16,6 +17,7 @@ use cell::Cell;
 pub use line::Line;
 pub use segment::Segment;
 use charset::Charset;
+use saved_ctx::SavedCtx;
 
 trait Dump {
     fn dump(&self) -> String;
@@ -43,15 +45,6 @@ pub enum State {
 enum BufferType {
     Primary,
     Alternate
-}
-
-#[derive(Debug, PartialEq)]
-struct SavedCtx {
-    cursor_x: usize,
-    cursor_y: usize,
-    pen: Pen,
-    origin_mode: bool,
-    auto_wrap_mode: bool
 }
 
 #[derive(Debug)]
@@ -86,18 +79,6 @@ pub struct Vt {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     affected_lines: Vec<bool>
-}
-
-impl SavedCtx {
-    fn new() -> SavedCtx {
-        SavedCtx {
-            cursor_x: 0,
-            cursor_y: 0,
-            pen: Pen::new(),
-            origin_mode: false,
-            auto_wrap_mode: true
-        }
-    }
 }
 
 impl Vt {
