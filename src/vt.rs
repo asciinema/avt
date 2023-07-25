@@ -8,6 +8,7 @@ use crate::dump::Dump;
 use crate::line::Line;
 use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
+use crate::tabs::Tabs;
 use rgb::RGB8;
 use std::ops::Range;
 
@@ -56,7 +57,7 @@ pub struct Vt {
     pen: Pen,
     charsets: [Charset; 2],
     active_charset: usize,
-    tabs: Vec<usize>,
+    tabs: Tabs,
     insert_mode: bool,
     origin_mode: bool,
     auto_wrap_mode: bool,
@@ -87,7 +88,7 @@ impl Vt {
             buffer,
             alternate_buffer,
             active_buffer_type: BufferType::Primary,
-            tabs: Vt::default_tabs(cols),
+            tabs: Tabs::new(cols),
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: true,
@@ -110,16 +111,6 @@ impl Vt {
 
     fn new_buffer(cols: usize, rows: usize) -> Vec<Line> {
         vec![Line::blank(cols, Pen::default()); rows]
-    }
-
-    fn default_tabs(cols: usize) -> Vec<usize> {
-        let mut tabs = vec![];
-
-        for t in (8..cols).step_by(8) {
-            tabs.push(t);
-        }
-
-        tabs
     }
 
     pub fn cursor(&self) -> Option<(usize, usize)> {
@@ -1129,7 +1120,12 @@ impl Vt {
                         line.contract(cols);
                     }
 
-                    self.cursor_x -= self.cols - cols;
+                    self.tabs.contract(cols);
+
+                    if self.cursor_x >= cols {
+                        self.cursor_x -= self.cols - cols;
+                    }
+
                     self.cols = cols;
                     self.resized = true;
                 }
@@ -1145,6 +1141,7 @@ impl Vt {
                         line.expand(cols - self.cols, &Pen::default());
                     }
 
+                    self.tabs.expand(self.cols, cols);
                     self.cols = cols;
                     self.resized = true;
                 }
@@ -1185,20 +1182,12 @@ impl Vt {
 
     fn set_tab(&mut self) {
         if 0 < self.cursor_x && self.cursor_x < self.cols {
-            match self.tabs.binary_search(&self.cursor_x) {
-                Ok(_pos) => (),
-                Err(pos) => self.tabs.insert(pos, self.cursor_x),
-            }
+            self.tabs.set(self.cursor_x);
         }
     }
 
     fn clear_tab(&mut self) {
-        match self.tabs.binary_search(&self.cursor_x) {
-            Ok(pos) => {
-                self.tabs.remove(pos);
-            }
-            Err(_pos) => (),
-        }
+        self.tabs.unset(self.cursor_x);
     }
 
     fn clear_all_tabs(&mut self) {
@@ -1306,29 +1295,12 @@ impl Vt {
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
-        let last_col = self.cols - 1;
-
-        let next_tab = *self
-            .tabs
-            .iter()
-            .skip_while(|&&t| self.cursor_x >= t)
-            .nth(n - 1)
-            .unwrap_or(&last_col);
-
+        let next_tab = self.tabs.after(self.cursor_x, n).unwrap_or(self.cols - 1);
         self.move_cursor_to_col(next_tab);
     }
 
     fn move_cursor_to_prev_tab(&mut self, n: usize) {
-        let first_col = 0;
-
-        let prev_tab = *self
-            .tabs
-            .iter()
-            .rev()
-            .skip_while(|&&t| self.cursor_x <= t)
-            .nth(n - 1)
-            .unwrap_or(&first_col);
-
+        let prev_tab = self.tabs.before(self.cursor_x, n).unwrap_or(0);
         self.move_cursor_to_col(prev_tab);
     }
 
@@ -1426,7 +1398,7 @@ impl Vt {
         self.buffer = buffer;
         self.alternate_buffer = alternate_buffer;
         self.active_buffer_type = BufferType::Primary;
-        self.tabs = Vt::default_tabs(self.cols);
+        self.tabs = Tabs::new(self.cols);
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.cursor_visible = true;
@@ -1807,15 +1779,6 @@ mod tests {
         TestResult::from_bool(!vt.next_print_wraps || vt.cursor_x == 10)
     }
 
-    #[test]
-    fn default_tabs() {
-        assert_eq!(Vt::default_tabs(1), vec![]);
-        assert_eq!(Vt::default_tabs(8), vec![]);
-        assert_eq!(Vt::default_tabs(9), vec![8]);
-        assert_eq!(Vt::default_tabs(16), vec![8]);
-        assert_eq!(Vt::default_tabs(17), vec![8, 16]);
-    }
-
     // #[test]
     // fn failed() {
     //     let mut vt = Vt::new(2, 2);
@@ -2181,6 +2144,15 @@ mod tests {
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
         assert_eq!(vt.cursor_x, 5);
         assert_eq!(vt.next_print_wraps, true);
+
+        vt.feed_str("\x1b[8;;10;t");
+        assert_eq!(vt.tabs, vec![8]);
+
+        vt.feed_str("\x1b[8;;30;t");
+        assert_eq!(vt.tabs, vec![8, 16, 24]);
+
+        vt.feed_str("\x1b[8;;20;t");
+        assert_eq!(vt.tabs, vec![8, 16]);
     }
 
     #[test]

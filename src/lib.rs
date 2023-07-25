@@ -6,6 +6,7 @@ mod line;
 mod pen;
 mod saved_ctx;
 mod segment;
+mod tabs;
 mod vt;
 pub use color::Color;
 pub use line::Line;
