@@ -1114,13 +1114,20 @@ impl Vt {
                         line.contract(cols);
                     }
 
-                    self.dirty_lines.extend(0..self.rows);
-                    self.tabs.contract(cols);
-
                     if self.cursor_x >= cols {
                         self.cursor_x -= self.cols - cols;
                     }
 
+                    if self.saved_ctx.cursor_x >= cols {
+                        self.saved_ctx.cursor_x = cols - 1;
+                    }
+
+                    if self.alternate_saved_ctx.cursor_x >= cols {
+                        self.alternate_saved_ctx.cursor_x = cols - 1;
+                    }
+
+                    self.dirty_lines.extend(0..self.rows);
+                    self.tabs.contract(cols);
                     self.cols = cols;
                     self.resized = true;
                 }
@@ -2143,6 +2150,31 @@ mod tests {
 
         vt.feed_str("\x1b[8;;20;t");
         assert_eq!(vt.tabs, vec![8, 16]);
+    }
+
+    #[test]
+    fn execute_xtwinops_saved_ctx_when_contracting() {
+        let mut vt = Vt::new(20, 5);
+
+        // move cursor to col 15
+        vt.feed_str("xxxxxxxxxxxxxxx");
+        assert_eq!(vt.cursor_x, 15);
+
+        // save cursor
+        vt.feed_str("\x1b7");
+        assert_eq!(vt.saved_ctx.cursor_x, 15);
+
+        // switch to alternate buffer
+        vt.feed_str("\x1b[?47h");
+
+        // save cursor
+        vt.feed_str("\x1b7");
+        assert_eq!(vt.saved_ctx.cursor_x, 15);
+
+        // resize to 10x5
+        vt.feed_str("\x1b[8;;10;t");
+        assert_eq!(vt.saved_ctx.cursor_x, 9);
+        assert_eq!(vt.alternate_saved_ctx.cursor_x, 9);
     }
 
     #[test]
