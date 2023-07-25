@@ -10,6 +10,7 @@ use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
 use crate::tabs::Tabs;
 use rgb::RGB8;
+use std::collections::HashSet;
 use std::ops::Range;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -67,7 +68,7 @@ pub struct Vt {
     bottom_margin: usize,
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
-    affected_lines: Vec<bool>,
+    dirty_lines: HashSet<usize>,
     resized: bool,
 }
 
@@ -78,6 +79,7 @@ impl Vt {
 
         let buffer = Vt::new_buffer(cols, rows);
         let alternate_buffer = buffer.clone();
+        let dirty_lines = HashSet::from_iter(0..rows);
 
         Vt {
             state: State::Ground,
@@ -104,7 +106,7 @@ impl Vt {
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
-            affected_lines: vec![true; rows],
+            dirty_lines,
             resized: false,
         }
     }
@@ -124,11 +126,8 @@ impl Vt {
     // parser
 
     pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
-        // reset affected lines vec
-        for l in &mut self.affected_lines[..] {
-            *l = false;
-        }
-
+        // reset change tracking vars
+        self.dirty_lines.clear();
         self.resized = false;
 
         // feed parser with chars
@@ -136,15 +135,9 @@ impl Vt {
             self.feed(c);
         }
 
-        // return affected line numbers
-        let affected_lines = self
-            .affected_lines
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &affected)| if affected { Some(i) } else { None })
-            .collect();
+        let dirty_lines = self.dirty_lines.iter().cloned().collect();
 
-        (affected_lines, self.resized)
+        (dirty_lines, self.resized)
     }
 
     pub fn feed(&mut self, input: char) {
@@ -493,7 +486,7 @@ impl Vt {
             self.do_move_cursor_to_col(next_column);
         }
 
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn collect(&mut self, input: char) {
@@ -597,7 +590,7 @@ impl Vt {
                 self.set_cell(x, y, Cell('\u{45}', Pen::default()));
             }
 
-            self.mark_affected_line(y);
+            self.dirty_lines.insert(y);
         }
     }
 
@@ -665,7 +658,7 @@ impl Vt {
             *cell = tpl;
         }
 
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_cuu(&mut self) {
@@ -713,20 +706,20 @@ impl Vt {
                 // clear to end of screen
                 self.clear_line(self.cursor_x..self.cols);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
-                self.mark_affected_lines(self.cursor_y..self.rows);
+                self.dirty_lines.extend(self.cursor_y..self.rows);
             }
 
             1 => {
                 // clear to beginning of screen
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.clear_lines(0..self.cursor_y);
-                self.mark_affected_lines(0..(self.cursor_y + 1));
+                self.dirty_lines.extend(0..(self.cursor_y + 1));
             }
 
             2 => {
                 // clear whole screen
                 self.clear_lines(0..self.rows);
-                self.mark_affected_lines(0..self.rows);
+                self.dirty_lines.extend(0..self.rows);
             }
 
             _ => (),
@@ -738,19 +731,19 @@ impl Vt {
             0 => {
                 // clear to end of line
                 self.clear_line(self.cursor_x..self.cols);
-                self.mark_affected_line(self.cursor_y);
+                self.dirty_lines.insert(self.cursor_y);
             }
 
             1 => {
                 // clear to begining of line
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
-                self.mark_affected_line(self.cursor_y);
+                self.dirty_lines.insert(self.cursor_y);
             }
 
             2 => {
                 // clear whole line
                 self.clear_line(0..self.cols);
-                self.mark_affected_line(self.cursor_y);
+                self.dirty_lines.insert(self.cursor_y);
             }
 
             _ => (),
@@ -764,12 +757,13 @@ impl Vt {
             n = n.min(self.bottom_margin + 1 - self.cursor_y);
             self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
-            self.mark_affected_lines(self.cursor_y..(self.bottom_margin + 1));
+            self.dirty_lines
+                .extend(self.cursor_y..(self.bottom_margin + 1));
         } else {
             n = n.min(self.rows - self.cursor_y);
             self.buffer[self.cursor_y..].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
-            self.mark_affected_lines(self.cursor_y..self.rows);
+            self.dirty_lines.extend(self.cursor_y..self.rows);
         }
     }
 
@@ -781,12 +775,12 @@ impl Vt {
             n = n.min(end_index - self.cursor_y);
             self.buffer[self.cursor_y..end_index].rotate_left(n);
             self.clear_lines((end_index - n)..end_index);
-            self.mark_affected_lines(self.cursor_y..end_index);
+            self.dirty_lines.extend(self.cursor_y..end_index);
         } else {
             n = n.min(self.rows - self.cursor_y);
             self.buffer[self.cursor_y..self.rows].rotate_left(n);
             self.clear_lines((self.rows - n)..self.rows);
-            self.mark_affected_lines(self.cursor_y..self.rows);
+            self.dirty_lines.extend(self.cursor_y..self.rows);
         }
     }
 
@@ -799,7 +793,7 @@ impl Vt {
         n = n.min(self.cols - self.cursor_x);
         self.buffer[self.cursor_y].0[self.cursor_x..].rotate_left(n);
         self.clear_line((self.cols - n)..self.cols);
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_su(&mut self) {
@@ -823,7 +817,7 @@ impl Vt {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
         self.clear_line(self.cursor_x..(self.cursor_x + n));
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_rep(&mut self) {
@@ -1164,8 +1158,7 @@ impl Vt {
                     let filler = std::iter::repeat(line).take(increment);
                     self.alternate_buffer.extend(filler);
 
-                    let filler = std::iter::repeat(true).take(increment);
-                    self.affected_lines.extend(filler);
+                    self.dirty_lines.extend(self.rows..rows);
 
                     self.rows = rows;
                     self.resized = true;
@@ -1341,7 +1334,7 @@ impl Vt {
         n = n.min(end_index - self.top_margin);
         self.buffer[self.top_margin..end_index].rotate_left(n);
         self.clear_lines((end_index - n)..end_index);
-        self.mark_affected_lines(self.top_margin..end_index);
+        self.dirty_lines.extend(self.top_margin..end_index);
     }
 
     fn scroll_down(&mut self, mut n: usize) {
@@ -1349,7 +1342,7 @@ impl Vt {
         n = n.min(end_index - self.top_margin);
         self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(self.top_margin..self.top_margin + n);
-        self.mark_affected_lines(self.top_margin..end_index);
+        self.dirty_lines.extend(self.top_margin..end_index);
     }
 
     // buffer switching
@@ -1360,7 +1353,7 @@ impl Vt {
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
             self.clear_lines(0..self.rows);
-            self.mark_affected_lines(0..self.rows);
+            self.dirty_lines.extend(0..self.rows);
         }
     }
 
@@ -1369,7 +1362,7 @@ impl Vt {
             self.active_buffer_type = BufferType::Primary;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
-            self.mark_affected_lines(0..self.rows);
+            self.dirty_lines.extend(0..self.rows);
         }
     }
 
@@ -1414,7 +1407,7 @@ impl Vt {
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
         self.alternate_saved_ctx = SavedCtx::default();
-        self.affected_lines = vec![true; self.rows];
+        self.dirty_lines = HashSet::from_iter(0..self.rows);
         self.resized = false;
     }
 
@@ -1707,18 +1700,6 @@ impl Vt {
 
     pub fn line(&self, n: usize) -> &Line {
         &self.buffer[n]
-    }
-
-    // line change tracking
-
-    fn mark_affected_lines(&mut self, range: Range<usize>) {
-        for l in &mut self.affected_lines[range] {
-            *l = true;
-        }
-    }
-
-    fn mark_affected_line(&mut self, line: usize) {
-        self.affected_lines[line] = true;
     }
 }
 
