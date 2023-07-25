@@ -67,6 +67,7 @@ pub struct Vt {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     affected_lines: Vec<bool>,
+    resized: bool,
 }
 
 impl Vt {
@@ -103,6 +104,7 @@ impl Vt {
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
             affected_lines: vec![true; rows],
+            resized: false,
         }
     }
 
@@ -130,11 +132,13 @@ impl Vt {
 
     // parser
 
-    pub fn feed_str(&mut self, s: &str) -> Vec<usize> {
+    pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
         // reset affected lines vec
         for l in &mut self.affected_lines[..] {
             *l = false;
         }
+
+        self.resized = false;
 
         // feed parser with chars
         for c in s.chars() {
@@ -142,11 +146,14 @@ impl Vt {
         }
 
         // return affected line numbers
-        self.affected_lines
+        let affected_lines = self
+            .affected_lines
             .iter()
             .enumerate()
             .filter_map(|(i, &affected)| if affected { Some(i) } else { None })
-            .collect()
+            .collect();
+
+        (affected_lines, self.resized)
     }
 
     pub fn feed(&mut self, input: char) {
@@ -562,6 +569,7 @@ impl Vt {
             (None, 'm') => self.execute_sgr(),
             (None, 'r') => self.execute_decstbm(),
             (None, 's') => self.execute_sc(),
+            (None, 't') => self.execute_xtwinops(),
             (None, 'u') => self.execute_rc(),
             (Some('!'), 'p') => self.execute_decstr(),
             (Some('?'), 'h') => self.execute_prv_sm(),
@@ -1106,6 +1114,69 @@ impl Vt {
         self.move_cursor_home();
     }
 
+    fn execute_xtwinops(&mut self) {
+        if self.get_param(0, 0) == 8 {
+            let cols = self.get_param(2, self.cols as u16) as usize;
+            let rows = self.get_param(1, self.rows as u16) as usize;
+
+            match cols.cmp(&self.cols) {
+                std::cmp::Ordering::Less => {
+                    for line in &mut self.buffer {
+                        line.contract(cols);
+                    }
+
+                    for line in &mut self.alternate_buffer {
+                        line.contract(cols);
+                    }
+
+                    self.cursor_x -= self.cols - cols;
+                    self.cols = cols;
+                    self.resized = true;
+                }
+
+                std::cmp::Ordering::Equal => (),
+
+                std::cmp::Ordering::Greater => {
+                    for line in &mut self.buffer {
+                        line.expand(cols - self.cols, &Pen::default());
+                    }
+
+                    for line in &mut self.alternate_buffer {
+                        line.expand(cols - self.cols, &Pen::default());
+                    }
+
+                    self.cols = cols;
+                    self.resized = true;
+                }
+            }
+
+            match rows.cmp(&self.rows) {
+                std::cmp::Ordering::Less => {
+                }
+
+                std::cmp::Ordering::Equal => (),
+
+                std::cmp::Ordering::Greater => {
+                    let increment = rows - self.rows;
+
+                    let line = Line::blank(self.cols, Pen::default());
+                    let filler = std::iter::repeat(line).take(increment);
+                    self.buffer.extend(filler);
+
+                    let line = Line::blank(self.cols, Pen::default());
+                    let filler = std::iter::repeat(line).take(increment);
+                    self.alternate_buffer.extend(filler);
+
+                    let filler = std::iter::repeat(true).take(increment);
+                    self.affected_lines.extend(filler);
+
+                    self.rows = rows;
+                    self.resized = true;
+                }
+            }
+        }
+    }
+
     // screen
 
     fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
@@ -1372,6 +1443,7 @@ impl Vt {
         self.saved_ctx = SavedCtx::default();
         self.alternate_saved_ctx = SavedCtx::default();
         self.affected_lines = vec![true; self.rows];
+        self.resized = false;
     }
 
     // full state dump
@@ -2044,6 +2116,71 @@ mod tests {
         assert!(vt.pen.blink);
         assert_eq!(vt.pen.foreground, Some(Color::RGB(RGB8::new(1, 101, 201))));
         assert_eq!(vt.pen.background, Some(Color::RGB(RGB8::new(2, 102, 202))));
+    }
+
+    #[test]
+    fn execute_xtwinops() {
+        let mut vt = build_vt(0, 3, vec!["abcdefgh", "ijklmnop", "qrstuwxy", "        "]);
+
+        let (_, resized) = vt.feed_str("AAA");
+        assert!(!resized);
+
+        let (_, resized) = vt.feed_str("\x1b[8;;;t");
+        assert!(!resized);
+
+        let (_, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abcdefgh\nijklmnop\nqrstuwxy\nAAA     \n        \n"
+        );
+        assert_eq!(vt.cursor_y, 3);
+
+        vt.feed_str("BBBBB");
+        assert_eq!(vt.cursor_x, 8);
+        assert_eq!(vt.next_print_wraps, true);
+
+        let (_, resized) = vt.feed_str("\x1b[8;;4;t");
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abcd\nijkl\nqrst\nAAAB\n    \n"
+        );
+        // expect same behaviour as xterm: keep cursor at the edge
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.next_print_wraps, true);
+
+        vt.feed_str("\rCCC");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.next_print_wraps, false);
+
+        vt.feed_str("\x1b[8;;3;t");
+        assert_eq!(buffer_as_string(&vt.buffer), "abc\nijk\nqrs\nCCC\n   \n");
+        // expect same behaviour as xterm: keep cursor left to the edge
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.next_print_wraps, false);
+
+        vt.feed_str("\x1b[8;;5;t");
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abc  \nijk  \nqrs  \nCCC  \n     \n"
+        );
+        // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.next_print_wraps, false);
+
+        vt.feed_str("DDD");
+        assert_eq!(vt.cursor_x, 5);
+        assert_eq!(vt.next_print_wraps, true);
+
+        vt.feed_str("\x1b[8;;6;t");
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abc   \nijk   \nqrs   \nCCDDD \n      \n"
+        );
+        // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
+        assert_eq!(vt.cursor_x, 5);
+        assert_eq!(vt.next_print_wraps, true);
     }
 
     #[test]
