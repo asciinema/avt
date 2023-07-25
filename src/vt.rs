@@ -1114,6 +1114,7 @@ impl Vt {
                         line.contract(cols);
                     }
 
+                    self.dirty_lines.extend(0..self.rows);
                     self.tabs.contract(cols);
 
                     if self.cursor_x >= cols {
@@ -1135,6 +1136,7 @@ impl Vt {
                         line.expand(cols - self.cols, &Pen::default());
                     }
 
+                    self.dirty_lines.extend(0..self.rows);
                     self.tabs.expand(self.cols, cols);
                     self.cols = cols;
                     self.resized = true;
@@ -2072,7 +2074,8 @@ mod tests {
         let (_, resized) = vt.feed_str("\x1b[8;;;t");
         assert!(!resized);
 
-        let (_, resized) = vt.feed_str("\x1b[8;5;;t");
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
         assert_eq!(
             buffer_as_string(&vt.buffer),
@@ -2084,7 +2087,9 @@ mod tests {
         assert_eq!(vt.cursor_x, 8);
         assert_eq!(vt.next_print_wraps, true);
 
-        let (_, resized) = vt.feed_str("\x1b[8;;4;t");
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;;4;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
         assert!(resized);
         assert_eq!(
             buffer_as_string(&vt.buffer),
@@ -2098,13 +2103,17 @@ mod tests {
         assert_eq!(vt.cursor_x, 3);
         assert_eq!(vt.next_print_wraps, false);
 
-        vt.feed_str("\x1b[8;;3;t");
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
         assert_eq!(buffer_as_string(&vt.buffer), "abc\nijk\nqrs\nCCC\n   \n");
         // expect same behaviour as xterm: keep cursor left to the edge
         assert_eq!(vt.cursor_x, 2);
         assert_eq!(vt.next_print_wraps, false);
 
-        vt.feed_str("\x1b[8;;5;t");
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
         assert_eq!(
             buffer_as_string(&vt.buffer),
             "abc  \nijk  \nqrs  \nCCC  \n     \n"
