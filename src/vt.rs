@@ -2141,6 +2141,12 @@ mod tests {
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
         assert_eq!(vt.cursor_x, 5);
         assert_eq!(vt.next_print_wraps, true);
+    }
+
+    #[test]
+    fn execute_xtwinops_tabs_when_resizing() {
+        let mut vt = Vt::new(6, 2);
+        assert_eq!(vt.tabs, vec![]);
 
         vt.feed_str("\x1b[8;;10;t");
         assert_eq!(vt.tabs, vec![8]);
