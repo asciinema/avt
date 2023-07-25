@@ -2257,7 +2257,7 @@ mod tests {
     }
 
     fn dump_lines(vt: &Vt) -> Vec<String> {
-        vt.buffer.iter().map(|cells| dump_line(cells)).collect()
+        vt.buffer.iter().map(dump_line).collect()
     }
 
     fn dump_line(line: &Line) -> String {
