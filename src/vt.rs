@@ -2144,6 +2144,22 @@ mod tests {
     }
 
     #[test]
+    fn execute_xtwinops_when_extending() {
+        let mut vt = Vt::new(6, 4);
+
+        vt.feed_str("AAA\n\rBBB\n\r");
+
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert_eq!(dirty_lines, vec![4]);
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "AAA   \nBBB   \n      \n      \n      \n"
+        );
+        assert_eq!(vt.cursor_y, 2);
+    }
+
+    #[test]
     fn execute_xtwinops_tabs_when_resizing() {
         let mut vt = Vt::new(6, 2);
         assert_eq!(vt.tabs, vec![]);
