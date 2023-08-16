@@ -1152,6 +1152,35 @@ impl Vt {
 
             match rows.cmp(&self.rows) {
                 std::cmp::Ordering::Less => {
+                    let decrement = self.rows - rows;
+                    let rot = decrement - decrement.min(self.rows - self.cursor_y - 1);
+
+                    if rot > 0 {
+                        self.buffer.rotate_left(rot);
+                        self.alternate_buffer.rotate_left(rot);
+                        self.dirty_lines.extend(0..rows);
+                    }
+
+                    self.buffer.truncate(rows);
+                    self.alternate_buffer.truncate(rows);
+
+                    if self.cursor_y >= rows {
+                        self.cursor_y = rows - 1;
+                    }
+
+                    if self.saved_ctx.cursor_y >= rows {
+                        self.saved_ctx.cursor_y = rows - 1;
+                    }
+
+                    if self.alternate_saved_ctx.cursor_y >= rows {
+                        self.alternate_saved_ctx.cursor_y = rows - 1;
+                    }
+
+                    self.dirty_lines.retain(|r| r < &rows);
+                    self.top_margin = 0;
+                    self.bottom_margin = rows - 1;
+                    self.rows = rows;
+                    self.resized = true;
                 }
 
                 std::cmp::Ordering::Equal => (),
@@ -1166,9 +1195,9 @@ impl Vt {
                     let line = Line::blank(self.cols, Pen::default());
                     let filler = std::iter::repeat(line).take(increment);
                     self.alternate_buffer.extend(filler);
-
                     self.dirty_lines.extend(self.rows..rows);
-
+                    self.top_margin = 0;
+                    self.bottom_margin = rows - 1;
                     self.rows = rows;
                     self.resized = true;
                 }
@@ -2157,6 +2186,36 @@ mod tests {
             "AAA   \nBBB   \n      \n      \n      \n"
         );
         assert_eq!(vt.cursor_y, 2);
+    }
+
+    #[test]
+    fn execute_xtwinops_when_retracting() {
+        let mut vt = Vt::new(6, 6);
+
+        vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
+
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert_eq!(dirty_lines, vec![]);
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "AAA   \nBBB   \nCCC   \n      \n      \n"
+        );
+        assert_eq!(vt.cursor_y, 3);
+
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;3;;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2]);
+        assert!(resized);
+        assert_eq!(buffer_as_string(&vt.buffer), "BBB   \nCCC   \n      \n");
+        assert_eq!(vt.cursor_y, 2);
+
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;2;;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1]);
+        assert!(resized);
+        assert_eq!(buffer_as_string(&vt.buffer), "CCC   \n      \n");
+        assert_eq!(vt.cursor_y, 1);
     }
 
     #[test]
