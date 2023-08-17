@@ -21,6 +21,16 @@ impl Line {
         }
     }
 
+    pub(crate) fn expand(&mut self, increment: usize, pen: &Pen) {
+        let tpl = Cell::blank(*pen);
+        let filler = std::iter::repeat(tpl).take(increment);
+        self.0.extend(filler);
+    }
+
+    pub(crate) fn contract(&mut self, len: usize) {
+        self.0.truncate(len);
+    }
+
     pub fn len(&self) -> usize {
         self.0.len()
     }

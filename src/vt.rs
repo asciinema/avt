@@ -8,7 +8,9 @@ use crate::dump::Dump;
 use crate::line::Line;
 use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
+use crate::tabs::Tabs;
 use rgb::RGB8;
+use std::collections::HashSet;
 use std::ops::Range;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -56,7 +58,7 @@ pub struct Vt {
     pen: Pen,
     charsets: [Charset; 2],
     active_charset: usize,
-    tabs: Vec<usize>,
+    tabs: Tabs,
     insert_mode: bool,
     origin_mode: bool,
     auto_wrap_mode: bool,
@@ -66,7 +68,8 @@ pub struct Vt {
     bottom_margin: usize,
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
-    affected_lines: Vec<bool>,
+    dirty_lines: HashSet<usize>,
+    resized: bool,
 }
 
 impl Vt {
@@ -76,6 +79,7 @@ impl Vt {
 
         let buffer = Vt::new_buffer(cols, rows);
         let alternate_buffer = buffer.clone();
+        let dirty_lines = HashSet::from_iter(0..rows);
 
         Vt {
             state: State::Ground,
@@ -86,7 +90,7 @@ impl Vt {
             buffer,
             alternate_buffer,
             active_buffer_type: BufferType::Primary,
-            tabs: Vt::default_tabs(cols),
+            tabs: Tabs::new(cols),
             cursor_x: 0,
             cursor_y: 0,
             cursor_visible: true,
@@ -102,22 +106,13 @@ impl Vt {
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
-            affected_lines: vec![true; rows],
+            dirty_lines,
+            resized: false,
         }
     }
 
     fn new_buffer(cols: usize, rows: usize) -> Vec<Line> {
         vec![Line::blank(cols, Pen::default()); rows]
-    }
-
-    fn default_tabs(cols: usize) -> Vec<usize> {
-        let mut tabs = vec![];
-
-        for t in (8..cols).step_by(8) {
-            tabs.push(t);
-        }
-
-        tabs
     }
 
     pub fn cursor(&self) -> Option<(usize, usize)> {
@@ -130,23 +125,19 @@ impl Vt {
 
     // parser
 
-    pub fn feed_str(&mut self, s: &str) -> Vec<usize> {
-        // reset affected lines vec
-        for l in &mut self.affected_lines[..] {
-            *l = false;
-        }
+    pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
+        // reset change tracking vars
+        self.dirty_lines.clear();
+        self.resized = false;
 
         // feed parser with chars
         for c in s.chars() {
             self.feed(c);
         }
 
-        // return affected line numbers
-        self.affected_lines
-            .iter()
-            .enumerate()
-            .filter_map(|(i, &affected)| if affected { Some(i) } else { None })
-            .collect()
+        let dirty_lines = self.dirty_lines.iter().cloned().collect();
+
+        (dirty_lines, self.resized)
     }
 
     pub fn feed(&mut self, input: char) {
@@ -495,7 +486,7 @@ impl Vt {
             self.do_move_cursor_to_col(next_column);
         }
 
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn collect(&mut self, input: char) {
@@ -562,6 +553,7 @@ impl Vt {
             (None, 'm') => self.execute_sgr(),
             (None, 'r') => self.execute_decstbm(),
             (None, 's') => self.execute_sc(),
+            (None, 't') => self.execute_xtwinops(),
             (None, 'u') => self.execute_rc(),
             (Some('!'), 'p') => self.execute_decstr(),
             (Some('?'), 'h') => self.execute_prv_sm(),
@@ -598,7 +590,7 @@ impl Vt {
                 self.set_cell(x, y, Cell('\u{45}', Pen::default()));
             }
 
-            self.mark_affected_line(y);
+            self.dirty_lines.insert(y);
         }
     }
 
@@ -666,7 +658,7 @@ impl Vt {
             *cell = tpl;
         }
 
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_cuu(&mut self) {
@@ -714,20 +706,20 @@ impl Vt {
                 // clear to end of screen
                 self.clear_line(self.cursor_x..self.cols);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
-                self.mark_affected_lines(self.cursor_y..self.rows);
+                self.dirty_lines.extend(self.cursor_y..self.rows);
             }
 
             1 => {
                 // clear to beginning of screen
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.clear_lines(0..self.cursor_y);
-                self.mark_affected_lines(0..(self.cursor_y + 1));
+                self.dirty_lines.extend(0..(self.cursor_y + 1));
             }
 
             2 => {
                 // clear whole screen
                 self.clear_lines(0..self.rows);
-                self.mark_affected_lines(0..self.rows);
+                self.dirty_lines.extend(0..self.rows);
             }
 
             _ => (),
@@ -739,19 +731,19 @@ impl Vt {
             0 => {
                 // clear to end of line
                 self.clear_line(self.cursor_x..self.cols);
-                self.mark_affected_line(self.cursor_y);
+                self.dirty_lines.insert(self.cursor_y);
             }
 
             1 => {
                 // clear to begining of line
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
-                self.mark_affected_line(self.cursor_y);
+                self.dirty_lines.insert(self.cursor_y);
             }
 
             2 => {
                 // clear whole line
                 self.clear_line(0..self.cols);
-                self.mark_affected_line(self.cursor_y);
+                self.dirty_lines.insert(self.cursor_y);
             }
 
             _ => (),
@@ -765,12 +757,13 @@ impl Vt {
             n = n.min(self.bottom_margin + 1 - self.cursor_y);
             self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
-            self.mark_affected_lines(self.cursor_y..(self.bottom_margin + 1));
+            self.dirty_lines
+                .extend(self.cursor_y..(self.bottom_margin + 1));
         } else {
             n = n.min(self.rows - self.cursor_y);
             self.buffer[self.cursor_y..].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
-            self.mark_affected_lines(self.cursor_y..self.rows);
+            self.dirty_lines.extend(self.cursor_y..self.rows);
         }
     }
 
@@ -782,12 +775,12 @@ impl Vt {
             n = n.min(end_index - self.cursor_y);
             self.buffer[self.cursor_y..end_index].rotate_left(n);
             self.clear_lines((end_index - n)..end_index);
-            self.mark_affected_lines(self.cursor_y..end_index);
+            self.dirty_lines.extend(self.cursor_y..end_index);
         } else {
             n = n.min(self.rows - self.cursor_y);
             self.buffer[self.cursor_y..self.rows].rotate_left(n);
             self.clear_lines((self.rows - n)..self.rows);
-            self.mark_affected_lines(self.cursor_y..self.rows);
+            self.dirty_lines.extend(self.cursor_y..self.rows);
         }
     }
 
@@ -800,7 +793,7 @@ impl Vt {
         n = n.min(self.cols - self.cursor_x);
         self.buffer[self.cursor_y].0[self.cursor_x..].rotate_left(n);
         self.clear_line((self.cols - n)..self.cols);
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_su(&mut self) {
@@ -824,7 +817,7 @@ impl Vt {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
         self.clear_line(self.cursor_x..(self.cursor_x + n));
-        self.mark_affected_line(self.cursor_y);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_rep(&mut self) {
@@ -1106,6 +1099,112 @@ impl Vt {
         self.move_cursor_home();
     }
 
+    fn execute_xtwinops(&mut self) {
+        if self.get_param(0, 0) == 8 {
+            let cols = self.get_param(2, self.cols as u16) as usize;
+            let rows = self.get_param(1, self.rows as u16) as usize;
+
+            match cols.cmp(&self.cols) {
+                std::cmp::Ordering::Less => {
+                    for line in &mut self.buffer {
+                        line.contract(cols);
+                    }
+
+                    for line in &mut self.alternate_buffer {
+                        line.contract(cols);
+                    }
+
+                    if self.cursor_x >= cols {
+                        self.cursor_x -= self.cols - cols;
+                    }
+
+                    if self.saved_ctx.cursor_x >= cols {
+                        self.saved_ctx.cursor_x = cols - 1;
+                    }
+
+                    if self.alternate_saved_ctx.cursor_x >= cols {
+                        self.alternate_saved_ctx.cursor_x = cols - 1;
+                    }
+
+                    self.dirty_lines.extend(0..self.rows);
+                    self.tabs.contract(cols);
+                    self.cols = cols;
+                    self.resized = true;
+                }
+
+                std::cmp::Ordering::Equal => (),
+
+                std::cmp::Ordering::Greater => {
+                    for line in &mut self.buffer {
+                        line.expand(cols - self.cols, &Pen::default());
+                    }
+
+                    for line in &mut self.alternate_buffer {
+                        line.expand(cols - self.cols, &Pen::default());
+                    }
+
+                    self.dirty_lines.extend(0..self.rows);
+                    self.tabs.expand(self.cols, cols);
+                    self.cols = cols;
+                    self.resized = true;
+                }
+            }
+
+            match rows.cmp(&self.rows) {
+                std::cmp::Ordering::Less => {
+                    let decrement = self.rows - rows;
+                    let rot = decrement - decrement.min(self.rows - self.cursor_y - 1);
+
+                    if rot > 0 {
+                        self.buffer.rotate_left(rot);
+                        self.alternate_buffer.rotate_left(rot);
+                        self.dirty_lines.extend(0..rows);
+                    }
+
+                    self.buffer.truncate(rows);
+                    self.alternate_buffer.truncate(rows);
+
+                    if self.cursor_y >= rows {
+                        self.cursor_y = rows - 1;
+                    }
+
+                    if self.saved_ctx.cursor_y >= rows {
+                        self.saved_ctx.cursor_y = rows - 1;
+                    }
+
+                    if self.alternate_saved_ctx.cursor_y >= rows {
+                        self.alternate_saved_ctx.cursor_y = rows - 1;
+                    }
+
+                    self.dirty_lines.retain(|r| r < &rows);
+                    self.top_margin = 0;
+                    self.bottom_margin = rows - 1;
+                    self.rows = rows;
+                    self.resized = true;
+                }
+
+                std::cmp::Ordering::Equal => (),
+
+                std::cmp::Ordering::Greater => {
+                    let increment = rows - self.rows;
+
+                    let line = Line::blank(self.cols, Pen::default());
+                    let filler = std::iter::repeat(line).take(increment);
+                    self.buffer.extend(filler);
+
+                    let line = Line::blank(self.cols, Pen::default());
+                    let filler = std::iter::repeat(line).take(increment);
+                    self.alternate_buffer.extend(filler);
+                    self.dirty_lines.extend(self.rows..rows);
+                    self.top_margin = 0;
+                    self.bottom_margin = rows - 1;
+                    self.rows = rows;
+                    self.resized = true;
+                }
+            }
+        }
+    }
+
     // screen
 
     fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
@@ -1114,20 +1213,12 @@ impl Vt {
 
     fn set_tab(&mut self) {
         if 0 < self.cursor_x && self.cursor_x < self.cols {
-            match self.tabs.binary_search(&self.cursor_x) {
-                Ok(_pos) => (),
-                Err(pos) => self.tabs.insert(pos, self.cursor_x),
-            }
+            self.tabs.set(self.cursor_x);
         }
     }
 
     fn clear_tab(&mut self) {
-        match self.tabs.binary_search(&self.cursor_x) {
-            Ok(pos) => {
-                self.tabs.remove(pos);
-            }
-            Err(_pos) => (),
-        }
+        self.tabs.unset(self.cursor_x);
     }
 
     fn clear_all_tabs(&mut self) {
@@ -1235,29 +1326,12 @@ impl Vt {
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
-        let last_col = self.cols - 1;
-
-        let next_tab = *self
-            .tabs
-            .iter()
-            .skip_while(|&&t| self.cursor_x >= t)
-            .nth(n - 1)
-            .unwrap_or(&last_col);
-
+        let next_tab = self.tabs.after(self.cursor_x, n).unwrap_or(self.cols - 1);
         self.move_cursor_to_col(next_tab);
     }
 
     fn move_cursor_to_prev_tab(&mut self, n: usize) {
-        let first_col = 0;
-
-        let prev_tab = *self
-            .tabs
-            .iter()
-            .rev()
-            .skip_while(|&&t| self.cursor_x <= t)
-            .nth(n - 1)
-            .unwrap_or(&first_col);
-
+        let prev_tab = self.tabs.before(self.cursor_x, n).unwrap_or(0);
         self.move_cursor_to_col(prev_tab);
     }
 
@@ -1298,7 +1372,7 @@ impl Vt {
         n = n.min(end_index - self.top_margin);
         self.buffer[self.top_margin..end_index].rotate_left(n);
         self.clear_lines((end_index - n)..end_index);
-        self.mark_affected_lines(self.top_margin..end_index);
+        self.dirty_lines.extend(self.top_margin..end_index);
     }
 
     fn scroll_down(&mut self, mut n: usize) {
@@ -1306,7 +1380,7 @@ impl Vt {
         n = n.min(end_index - self.top_margin);
         self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(self.top_margin..self.top_margin + n);
-        self.mark_affected_lines(self.top_margin..end_index);
+        self.dirty_lines.extend(self.top_margin..end_index);
     }
 
     // buffer switching
@@ -1317,7 +1391,7 @@ impl Vt {
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
             self.clear_lines(0..self.rows);
-            self.mark_affected_lines(0..self.rows);
+            self.dirty_lines.extend(0..self.rows);
         }
     }
 
@@ -1326,7 +1400,7 @@ impl Vt {
             self.active_buffer_type = BufferType::Primary;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
-            self.mark_affected_lines(0..self.rows);
+            self.dirty_lines.extend(0..self.rows);
         }
     }
 
@@ -1355,7 +1429,7 @@ impl Vt {
         self.buffer = buffer;
         self.alternate_buffer = alternate_buffer;
         self.active_buffer_type = BufferType::Primary;
-        self.tabs = Vt::default_tabs(self.cols);
+        self.tabs = Tabs::new(self.cols);
         self.cursor_x = 0;
         self.cursor_y = 0;
         self.cursor_visible = true;
@@ -1371,7 +1445,8 @@ impl Vt {
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
         self.alternate_saved_ctx = SavedCtx::default();
-        self.affected_lines = vec![true; self.rows];
+        self.dirty_lines = HashSet::from_iter(0..self.rows);
+        self.resized = false;
     }
 
     // full state dump
@@ -1664,18 +1739,6 @@ impl Vt {
     pub fn line(&self, n: usize) -> &Line {
         &self.buffer[n]
     }
-
-    // line change tracking
-
-    fn mark_affected_lines(&mut self, range: Range<usize>) {
-        for l in &mut self.affected_lines[range] {
-            *l = true;
-        }
-    }
-
-    fn mark_affected_line(&mut self, line: usize) {
-        self.affected_lines[line] = true;
-    }
 }
 
 #[cfg(test)]
@@ -1733,15 +1796,6 @@ mod tests {
         }
 
         TestResult::from_bool(!vt.next_print_wraps || vt.cursor_x == 10)
-    }
-
-    #[test]
-    fn default_tabs() {
-        assert_eq!(Vt::default_tabs(1), vec![]);
-        assert_eq!(Vt::default_tabs(8), vec![]);
-        assert_eq!(Vt::default_tabs(9), vec![8]);
-        assert_eq!(Vt::default_tabs(16), vec![8]);
-        assert_eq!(Vt::default_tabs(17), vec![8, 16]);
     }
 
     // #[test]
@@ -2047,6 +2101,164 @@ mod tests {
     }
 
     #[test]
+    fn execute_xtwinops() {
+        let mut vt = build_vt(0, 3, vec!["abcdefgh", "ijklmnop", "qrstuwxy", "        "]);
+
+        let (_, resized) = vt.feed_str("AAA");
+        assert!(!resized);
+
+        let (_, resized) = vt.feed_str("\x1b[8;;;t");
+        assert!(!resized);
+
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert_eq!(dirty_lines, vec![4]);
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abcdefgh\nijklmnop\nqrstuwxy\nAAA     \n        \n"
+        );
+        assert_eq!(vt.cursor_y, 3);
+
+        vt.feed_str("BBBBB");
+        assert_eq!(vt.cursor_x, 8);
+        assert_eq!(vt.next_print_wraps, true);
+
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;;4;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abcd\nijkl\nqrst\nAAAB\n    \n"
+        );
+        // expect same behaviour as xterm: keep cursor at the edge
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.next_print_wraps, true);
+
+        vt.feed_str("\rCCC");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.next_print_wraps, false);
+
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        assert_eq!(buffer_as_string(&vt.buffer), "abc\nijk\nqrs\nCCC\n   \n");
+        // expect same behaviour as xterm: keep cursor left to the edge
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.next_print_wraps, false);
+
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abc  \nijk  \nqrs  \nCCC  \n     \n"
+        );
+        // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.next_print_wraps, false);
+
+        vt.feed_str("DDD");
+        assert_eq!(vt.cursor_x, 5);
+        assert_eq!(vt.next_print_wraps, true);
+
+        vt.feed_str("\x1b[8;;6;t");
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "abc   \nijk   \nqrs   \nCCDDD \n      \n"
+        );
+        // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
+        assert_eq!(vt.cursor_x, 5);
+        assert_eq!(vt.next_print_wraps, true);
+    }
+
+    #[test]
+    fn execute_xtwinops_when_extending() {
+        let mut vt = Vt::new(6, 4);
+
+        vt.feed_str("AAA\n\rBBB\n\r");
+
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert_eq!(dirty_lines, vec![4]);
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "AAA   \nBBB   \n      \n      \n      \n"
+        );
+        assert_eq!(vt.cursor_y, 2);
+    }
+
+    #[test]
+    fn execute_xtwinops_when_retracting() {
+        let mut vt = Vt::new(6, 6);
+
+        vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
+
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        assert_eq!(dirty_lines, vec![]);
+        assert!(resized);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "AAA   \nBBB   \nCCC   \n      \n      \n"
+        );
+        assert_eq!(vt.cursor_y, 3);
+
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;3;;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2]);
+        assert!(resized);
+        assert_eq!(buffer_as_string(&vt.buffer), "BBB   \nCCC   \n      \n");
+        assert_eq!(vt.cursor_y, 2);
+
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;2;;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1]);
+        assert!(resized);
+        assert_eq!(buffer_as_string(&vt.buffer), "CCC   \n      \n");
+        assert_eq!(vt.cursor_y, 1);
+    }
+
+    #[test]
+    fn execute_xtwinops_tabs_when_resizing() {
+        let mut vt = Vt::new(6, 2);
+        assert_eq!(vt.tabs, vec![]);
+
+        vt.feed_str("\x1b[8;;10;t");
+        assert_eq!(vt.tabs, vec![8]);
+
+        vt.feed_str("\x1b[8;;30;t");
+        assert_eq!(vt.tabs, vec![8, 16, 24]);
+
+        vt.feed_str("\x1b[8;;20;t");
+        assert_eq!(vt.tabs, vec![8, 16]);
+    }
+
+    #[test]
+    fn execute_xtwinops_saved_ctx_when_contracting() {
+        let mut vt = Vt::new(20, 5);
+
+        // move cursor to col 15
+        vt.feed_str("xxxxxxxxxxxxxxx");
+        assert_eq!(vt.cursor_x, 15);
+
+        // save cursor
+        vt.feed_str("\x1b7");
+        assert_eq!(vt.saved_ctx.cursor_x, 15);
+
+        // switch to alternate buffer
+        vt.feed_str("\x1b[?47h");
+
+        // save cursor
+        vt.feed_str("\x1b7");
+        assert_eq!(vt.saved_ctx.cursor_x, 15);
+
+        // resize to 10x5
+        vt.feed_str("\x1b[8;;10;t");
+        assert_eq!(vt.saved_ctx.cursor_x, 9);
+        assert_eq!(vt.alternate_saved_ctx.cursor_x, 9);
+    }
+
+    #[test]
     fn dump_initial() {
         let vt1 = Vt::new(10, 4);
         let mut vt2 = Vt::new(10, 4);
@@ -2158,7 +2370,7 @@ mod tests {
     }
 
     fn dump_lines(vt: &Vt) -> Vec<String> {
-        vt.buffer.iter().map(|cells| dump_line(cells)).collect()
+        vt.buffer.iter().map(dump_line).collect()
     }
 
     fn dump_line(line: &Line) -> String {
