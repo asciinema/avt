@@ -1046,13 +1046,23 @@ impl Vt {
 
                 7 => self.auto_wrap_mode = true,
                 25 => self.cursor_visible = true,
-                47 => self.switch_to_alternate_buffer(),
-                1047 => self.switch_to_alternate_buffer(),
+
+                47 => {
+                    self.switch_to_alternate_buffer();
+                    self.adjust_to_new_size();
+                }
+
+                1047 => {
+                    self.switch_to_alternate_buffer();
+                    self.adjust_to_new_size();
+                }
+
                 1048 => self.save_cursor(),
 
                 1049 => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
+                    self.adjust_to_new_size();
                 }
                 _ => (),
             }
@@ -1069,13 +1079,23 @@ impl Vt {
 
                 7 => self.auto_wrap_mode = false,
                 25 => self.cursor_visible = false,
-                47 => self.switch_to_primary_buffer(),
-                1047 => self.switch_to_primary_buffer(),
+
+                47 => {
+                    self.switch_to_primary_buffer();
+                    self.adjust_to_new_size();
+                }
+
+                1047 => {
+                    self.switch_to_primary_buffer();
+                    self.adjust_to_new_size();
+                }
+
                 1048 => self.restore_cursor(),
 
                 1049 => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
+                    self.adjust_to_new_size();
                 }
 
                 _ => (),
@@ -1106,102 +1126,37 @@ impl Vt {
 
             match cols.cmp(&self.cols) {
                 std::cmp::Ordering::Less => {
-                    for line in &mut self.buffer {
-                        line.contract(cols);
-                    }
-
-                    for line in &mut self.alternate_buffer {
-                        line.contract(cols);
-                    }
-
-                    if self.cursor_x >= cols {
-                        self.cursor_x -= self.cols - cols;
-                    }
-
-                    if self.saved_ctx.cursor_x >= cols {
-                        self.saved_ctx.cursor_x = cols - 1;
-                    }
-
-                    if self.alternate_saved_ctx.cursor_x >= cols {
-                        self.alternate_saved_ctx.cursor_x = cols - 1;
-                    }
-
-                    self.dirty_lines.extend(0..self.rows);
                     self.tabs.contract(cols);
-                    self.cols = cols;
                     self.resized = true;
                 }
 
                 std::cmp::Ordering::Equal => (),
 
                 std::cmp::Ordering::Greater => {
-                    for line in &mut self.buffer {
-                        line.expand(cols - self.cols, &Pen::default());
-                    }
-
-                    for line in &mut self.alternate_buffer {
-                        line.expand(cols - self.cols, &Pen::default());
-                    }
-
-                    self.dirty_lines.extend(0..self.rows);
                     self.tabs.expand(self.cols, cols);
-                    self.cols = cols;
                     self.resized = true;
                 }
             }
 
             match rows.cmp(&self.rows) {
                 std::cmp::Ordering::Less => {
-                    let decrement = self.rows - rows;
-                    let rot = decrement - decrement.min(self.rows - self.cursor_y - 1);
-
-                    if rot > 0 {
-                        self.buffer.rotate_left(rot);
-                        self.alternate_buffer.rotate_left(rot);
-                        self.dirty_lines.extend(0..rows);
-                    }
-
-                    self.buffer.truncate(rows);
-                    self.alternate_buffer.truncate(rows);
-
-                    if self.cursor_y >= rows {
-                        self.cursor_y = rows - 1;
-                    }
-
-                    if self.saved_ctx.cursor_y >= rows {
-                        self.saved_ctx.cursor_y = rows - 1;
-                    }
-
-                    if self.alternate_saved_ctx.cursor_y >= rows {
-                        self.alternate_saved_ctx.cursor_y = rows - 1;
-                    }
-
-                    self.dirty_lines.retain(|r| r < &rows);
                     self.top_margin = 0;
                     self.bottom_margin = rows - 1;
-                    self.rows = rows;
                     self.resized = true;
                 }
 
                 std::cmp::Ordering::Equal => (),
 
                 std::cmp::Ordering::Greater => {
-                    let increment = rows - self.rows;
-
-                    let line = Line::blank(self.cols, Pen::default());
-                    let filler = std::iter::repeat(line).take(increment);
-                    self.buffer.extend(filler);
-
-                    let line = Line::blank(self.cols, Pen::default());
-                    let filler = std::iter::repeat(line).take(increment);
-                    self.alternate_buffer.extend(filler);
-                    self.dirty_lines.extend(self.rows..rows);
                     self.top_margin = 0;
                     self.bottom_margin = rows - 1;
-                    self.rows = rows;
                     self.resized = true;
                 }
             }
+
+            self.cols = cols;
+            self.rows = rows;
+            self.adjust_to_new_size();
         }
     }
 
@@ -1390,7 +1345,7 @@ impl Vt {
             self.active_buffer_type = BufferType::Alternate;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
-            self.clear_lines(0..self.rows);
+            self.clear_lines(0..self.buffer.len());
             self.dirty_lines.extend(0..self.rows);
         }
     }
@@ -1402,6 +1357,72 @@ impl Vt {
             std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
             self.dirty_lines.extend(0..self.rows);
         }
+    }
+
+    fn adjust_to_new_size(&mut self) {
+        let cols = self.buffer[0].len();
+
+        match self.cols.cmp(&cols) {
+            std::cmp::Ordering::Less => {
+                for line in &mut self.buffer {
+                    line.contract(self.cols);
+                }
+
+                if self.cursor_x >= self.cols {
+                    self.cursor_x -= cols - self.cols;
+                }
+
+                if self.saved_ctx.cursor_x >= self.cols {
+                    self.saved_ctx.cursor_x = self.cols - 1;
+                }
+
+                self.dirty_lines.extend(0..self.rows);
+            }
+
+            std::cmp::Ordering::Equal => (),
+
+            std::cmp::Ordering::Greater => {
+                for line in &mut self.buffer {
+                    line.expand(self.cols - cols, &Pen::default());
+                }
+
+                self.dirty_lines.extend(0..self.rows);
+            }
+        }
+
+        let rows = self.buffer.len();
+
+        match self.rows.cmp(&rows) {
+            std::cmp::Ordering::Less => {
+                let decrement = rows - self.rows;
+                let rot = decrement - decrement.min(rows - self.cursor_y - 1);
+
+                if rot > 0 {
+                    self.buffer.rotate_left(rot);
+                    self.dirty_lines.extend(0..self.rows);
+                }
+
+                self.buffer.truncate(self.rows);
+
+                if self.saved_ctx.cursor_y >= self.rows {
+                    self.saved_ctx.cursor_y = self.rows - 1;
+                }
+
+                self.dirty_lines.retain(|r| r < &self.rows);
+            }
+
+            std::cmp::Ordering::Equal => (),
+
+            std::cmp::Ordering::Greater => {
+                let increment = self.rows - rows;
+                let line = Line::blank(self.cols, Pen::default());
+                let filler = std::iter::repeat(line).take(increment);
+                self.buffer.extend(filler);
+                self.dirty_lines.extend(rows..self.rows);
+            }
+        }
+
+        self.cursor_y = self.cursor_y.min(self.rows - 1);
     }
 
     // resetting
@@ -2255,7 +2276,51 @@ mod tests {
         // resize to 10x5
         vt.feed_str("\x1b[8;;10;t");
         assert_eq!(vt.saved_ctx.cursor_x, 9);
-        assert_eq!(vt.alternate_saved_ctx.cursor_x, 9);
+    }
+
+    #[test]
+    fn execute_xtwinops_vs_buffer_switching() {
+        let mut vt = Vt::new(4, 4);
+
+        // fill primary buffer
+        vt.feed_str("aaa\n\rbbb\n\rc\n\rddd");
+        assert_eq!(vt.cursor_x, 3);
+
+        // resize to 4x5
+        vt.feed_str("\x1b[8;5;4;t");
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(
+            buffer_as_string(&vt.buffer),
+            "aaa \nbbb \nc   \nddd \n    \n"
+        );
+
+        // switch to alternate buffer
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[?1049h");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+
+        // resize to 4x2
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;2;4;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1]);
+
+        // resize to 2x3, we'll check later if primary buffer preserved more columns
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;3;2;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2]);
+
+        // resize to 3x3
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;3;3;t");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2]);
+
+        // switch back to primary buffer
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[?1049l");
+        dirty_lines.sort();
+        assert_eq!(dirty_lines, vec![0, 1, 2]);
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(buffer_as_string(&vt.buffer), "bbb\nc  \nddd\n");
     }
 
     #[test]
