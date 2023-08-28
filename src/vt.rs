@@ -1806,42 +1806,35 @@ mod tests {
 
     #[test]
     fn execute_lf() {
-        let mut vt = build_vt(8, 2, 3, 0, "abc     \r\n        ");
+        let mut vt = build_vt(8, 2, 3, 0, "abc");
 
         vt.feed_str("\n");
 
         assert_eq!(vt.cursor_x, 3);
         assert_eq!(vt.cursor_y, 1);
-
-        assert_eq!(dump_lines(&vt), vec!["abc     ", "        "]);
+        assert_eq!(text(&vt), "abc\n   |");
 
         vt.feed_str("d\n");
 
         assert_eq!(vt.cursor_x, 4);
         assert_eq!(vt.cursor_y, 1);
 
-        assert_eq!(dump_lines(&vt), vec!["   d    ", "        "]);
+        assert_eq!(text(&vt), "   d\n    |");
     }
 
     #[test]
     fn execute_ri() {
-        let mut vt = build_vt(4, 5, 0, 0, "abcd\r\nefgh\r\nijkl\r\nmnop\r\nqrst");
+        let mut vt = build_vt(8, 5, 0, 0, "abcd\r\nefgh\r\nijkl\r\nmnop\r\nqrst");
 
         vt.feed_str("\x1bM"); // RI
 
-        assert_eq!(
-            dump_lines(&vt),
-            vec!["    ", "abcd", "efgh", "ijkl", "mnop",]
-        );
+        assert_eq!(text(&vt), "|\nabcd\nefgh\nijkl\nmnop");
 
         vt.feed_str("\x1b[3;4r"); // use smaller scroll region
         vt.feed_str("\x1b[3;1H"); // place cursor on top margin
         vt.feed_str("\x1bM"); // RI
 
-        assert_eq!(
-            dump_lines(&vt),
-            vec!["    ", "abcd", "    ", "efgh", "mnop",]
-        );
+        assert_eq!(text(&vt), "\nabcd\n|\nefgh\nmnop");
     }
 
     #[test]
@@ -2611,5 +2604,33 @@ mod tests {
         }
 
         s
+    }
+
+    fn text(vt: &Vt) -> String {
+        let mut lines = Vec::new();
+        lines.extend(vt.buffer[0..vt.cursor_y].iter().map(|l| l.text()));
+        let cursor_line = &vt.buffer[vt.cursor_y];
+        let left = cursor_line.chars().take(vt.cursor_x);
+        let right = cursor_line.chars().skip(vt.cursor_x);
+        let mut line = String::from_iter(left);
+
+        if line.len() < vt.cursor_x {
+            let n = vt.cursor_x - line.len();
+
+            for _ in 0..n {
+                line.push('·');
+            }
+        }
+
+        line.push('|');
+        line.extend(right);
+        lines.push(line);
+        lines.extend(vt.buffer[vt.cursor_y + 1..].iter().map(|l| l.text()));
+
+        lines
+            .into_iter()
+            .map(|line| line.trim_end().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
     }
 }
