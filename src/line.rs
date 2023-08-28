@@ -49,6 +49,14 @@ impl Line {
             segment: None,
         }
     }
+
+    pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
+        self.0.iter().map(|cell| cell.0)
+    }
+
+    pub fn text(&self) -> String {
+        self.chars().collect()
+    }
 }
 
 struct Chunk<'a, I>
