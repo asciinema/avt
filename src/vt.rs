@@ -1847,7 +1847,7 @@ mod tests {
 
     #[test]
     fn execute_lf() {
-        let mut vt = build_vt(3, 0, vec!["abc     ", "        "]);
+        let mut vt = build_vt(8, 2, 3, 0, "abc     \r\n        ");
 
         vt.feed_str("\n");
 
@@ -1866,7 +1866,7 @@ mod tests {
 
     #[test]
     fn execute_ri() {
-        let mut vt = build_vt(0, 0, vec!["abcd", "efgh", "ijkl", "mnop", "qrst"]);
+        let mut vt = build_vt(4, 5, 0, 0, "abcd\r\nefgh\r\nijkl\r\nmnop\r\nqrst");
 
         vt.feed_str("\x1bM"); // RI
 
@@ -1887,7 +1887,7 @@ mod tests {
 
     #[test]
     fn execute_ich() {
-        let mut vt = build_vt(3, 0, vec!["abcdefgh", "ijklmnop"]);
+        let mut vt = build_vt(8, 2, 3, 0, "abcdefgh\r\nijklmnop");
 
         vt.feed_str("\x1b[@");
 
@@ -1903,7 +1903,7 @@ mod tests {
 
         assert_eq!(dump_lines(&vt), vec!["abc     ", "ijklmnop"]);
 
-        let mut vt = build_vt(7, 0, vec!["abcdefgh", "ijklmnop"]);
+        let mut vt = build_vt(8, 2, 7, 0, "abcdefgh\r\nijklmnop");
 
         vt.feed_str("\x1b[10@");
 
@@ -1912,7 +1912,7 @@ mod tests {
 
     #[test]
     fn execute_il() {
-        let mut vt = build_vt(3, 1, vec!["abcdefgh", "ijklmnop", "qrstuwxy"]);
+        let mut vt = build_vt(8, 3, 3, 1, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
 
         vt.feed_str("\x1b[L");
 
@@ -1936,7 +1936,7 @@ mod tests {
 
     #[test]
     fn execute_dl() {
-        let mut vt = build_vt(3, 1, vec!["abcdefgh", "ijklmnop", "qrstuwxy"]);
+        let mut vt = build_vt(8, 3, 3, 1, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
 
         vt.feed_str("\x1b[M");
 
@@ -1954,7 +1954,7 @@ mod tests {
 
     #[test]
     fn execute_dch() {
-        let mut vt = build_vt(3, 0, vec!["abcdefgh"]);
+        let mut vt = build_vt(8, 1, 3, 0, "abcdefgh");
 
         vt.feed_str("\x1b[P");
 
@@ -1973,7 +1973,7 @@ mod tests {
 
     #[test]
     fn execute_ech() {
-        let mut vt = build_vt(3, 0, vec!["abcdefgh"]);
+        let mut vt = build_vt(8, 1, 3, 0, "abcdefgh");
 
         vt.feed_str("\x1b[X");
 
@@ -1992,7 +1992,7 @@ mod tests {
 
     #[test]
     fn execute_cht() {
-        let mut vt = build_vt(3, 0, vec!["abcdefghijklmnopqrstuwxyzabc"]);
+        let mut vt = build_vt(28, 1, 3, 0, "abcdefghijklmnopqrstuwxyzabc");
 
         vt.feed_str("\x1b[I");
 
@@ -2009,7 +2009,7 @@ mod tests {
 
     #[test]
     fn execute_cbt() {
-        let mut vt = build_vt(26, 0, vec!["abcdefghijklmnopqrstuwxyzabc"]);
+        let mut vt = build_vt(28, 1, 26, 0, "abcdefghijklmnopqrstuwxyzabc");
 
         vt.feed_str("\x1b[Z");
 
@@ -2028,7 +2028,7 @@ mod tests {
     fn execute_sc_rc() {
         // DECSC/DECRC variant
 
-        let mut vt = build_vt(0, 0, vec!["    ", "    ", "    "]);
+        let mut vt = build_vt(4, 3, 0, 0, "");
 
         // move 2x right, 1 down
         vt.feed_str("  \n");
@@ -2047,7 +2047,7 @@ mod tests {
 
         // ansi.sys variant
 
-        let mut vt = build_vt(0, 0, vec!["    ", "    ", "    "]);
+        let mut vt = build_vt(4, 3, 0, 0, "");
 
         // move 2x right, 1 down
         vt.feed_str("  \n");
@@ -2067,7 +2067,7 @@ mod tests {
 
     #[test]
     fn execute_sgr() {
-        let mut vt = build_vt(0, 0, vec!["abcd"]);
+        let mut vt = build_vt(4, 1, 0, 0, "abcd");
 
         vt.feed_str("\x1b[1m");
         assert!(vt.pen.intensity == Intensity::Bold);
@@ -2123,7 +2123,7 @@ mod tests {
 
     #[test]
     fn execute_xtwinops() {
-        let mut vt = build_vt(0, 3, vec!["abcdefgh", "ijklmnop", "qrstuwxy", "        "]);
+        let mut vt = build_vt(8, 4, 0, 3, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
 
         let (_, resized) = vt.feed_str("AAA");
         assert!(!resized);
@@ -2373,7 +2373,7 @@ mod tests {
 
     #[test]
     fn charsets() {
-        let mut vt = build_vt(0, 0, vec!["      "; 7]);
+        let mut vt = build_vt(6, 7, 0, 0, "      ");
 
         // GL points to G0, G0 is set to ascii
         vt.feed_str("alpty\r\n");
@@ -2420,15 +2420,9 @@ mod tests {
         Ok((w, h, input, step))
     }
 
-    fn build_vt(cx: usize, cy: usize, lines: Vec<&str>) -> Vt {
-        let w = lines.first().unwrap().len();
-        let h = lines.len();
-        let mut vt = Vt::new(w, h);
-
-        for line in lines {
-            vt.feed_str(line);
-        }
-
+    fn build_vt(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Vt {
+        let mut vt = Vt::new(cols, rows);
+        vt.feed_str(init);
         vt.feed_str(&format!("\u{9b}{};{}H", cy + 1, cx + 1));
 
         vt
