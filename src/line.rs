@@ -5,20 +5,116 @@ use crate::dump::Dump;
 use crate::pen::Pen;
 use crate::segment::Segment;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Line(pub(crate) Vec<Cell>);
 
 impl Line {
     pub(crate) fn blank(cols: usize, pen: Pen) -> Self {
-        Line(vec![Cell::blank(pen); cols])
+        if pen.is_default() {
+            Line(Vec::new())
+        } else {
+            Line(vec![Cell::blank(pen); cols])
+        }
     }
 
-    pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
-        let tpl = Cell::blank(*pen);
+    pub(crate) fn clear(&mut self, mut range: Range<usize>, pen: &Pen) {
+        if range.start < self.0.len() {
+            let tpl = Cell::blank(*pen);
+            range.end = range.end.min(self.0.len());
 
-        for cell in &mut self.0[range] {
-            *cell = tpl;
+            for cell in &mut self.0[range] {
+                *cell = tpl;
+            }
         }
+    }
+
+    pub(crate) fn print(&mut self, col: usize, cell: Cell) -> bool {
+        if col >= self.0.len() && cell.is_default() {
+            return false;
+        }
+
+        match col.cmp(&self.0.len()) {
+            std::cmp::Ordering::Less => {
+                self.0[col] = cell;
+            }
+
+            std::cmp::Ordering::Equal => {
+                if !cell.is_default() {
+                    self.0.push(cell);
+                }
+            }
+
+            std::cmp::Ordering::Greater => {
+                if !cell.is_default() {
+                    for _ in (self.0.len())..col {
+                        self.0.push(Cell::default());
+                    }
+
+                    self.0.push(cell);
+                }
+            }
+        }
+
+        true
+    }
+
+    pub(crate) fn insert(&mut self, col: usize, n: usize, pen: &Pen) {
+        let cell = Cell::blank(*pen);
+
+        if col >= self.0.len() {
+            if pen.is_default() {
+                return;
+            }
+
+            let blank = Cell::default();
+
+            for _ in 0..col - self.0.len() {
+                self.0.push(blank);
+            }
+
+            for _ in 0..n {
+                self.0.push(cell);
+            }
+        } else {
+            for _ in 0..n {
+                self.0.insert(col, cell);
+            }
+        }
+    }
+
+    pub(crate) fn delete(&mut self, col: usize, mut n: usize) -> bool {
+        n = n.min(self.0.len() - col);
+        // TODO fix range below doesn't crash when line is shorter
+        self.0[col..].rotate_left(n);
+        self.0.truncate(self.0.len() - n);
+
+        true
+    }
+
+    pub(crate) fn erase(&mut self, col: usize, n: usize, pen: &Pen) -> bool {
+        if col < self.0.len() {
+            self.clear(col..(col + n), pen);
+
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn repeat(&mut self, col: usize, n: usize, pen: &Pen) -> bool {
+        if col == 0 || col > self.0.len() {
+            return false;
+        }
+
+        let ch = self.0[col - 1].0;
+        let mut changed = false;
+
+        for c in col..col + n {
+            let changed_ = self.print(c, Cell(ch, *pen));
+            changed = changed || changed_;
+        }
+
+        changed
     }
 
     pub(crate) fn expand(&mut self, increment: usize, pen: &Pen) {

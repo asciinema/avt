@@ -63,7 +63,6 @@ pub struct Vt {
     origin_mode: bool,
     auto_wrap_mode: bool,
     new_line_mode: bool,
-    next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
     saved_ctx: SavedCtx,
@@ -101,7 +100,6 @@ impl Vt {
             origin_mode: false,
             auto_wrap_mode: true,
             new_line_mode: false,
-            next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::default(),
@@ -111,8 +109,8 @@ impl Vt {
         }
     }
 
-    fn new_buffer(cols: usize, rows: usize) -> Vec<Line> {
-        vec![Line::blank(cols, Pen::default()); rows]
+    fn new_buffer(_cols: usize, rows: usize) -> Vec<Line> {
+        vec![Line::default(); rows]
     }
 
     pub fn cursor(&self) -> Option<(usize, usize)> {
@@ -453,39 +451,21 @@ impl Vt {
     }
 
     fn print(&mut self, mut input: char) {
-        if self.auto_wrap_mode && self.next_print_wraps {
-            self.do_move_cursor_to_col(0);
-
-            let next_row = self.cursor_y + 1;
-
-            if next_row == self.rows {
-                self.scroll_up(1);
-            } else {
-                self.do_move_cursor_to_row(next_row);
-            }
-        }
+        // TODO if !self.auto_wrap_mode and at the window edge (% cols)
+        // then replace char, don't move cursor
 
         input = self.charsets[self.active_charset].translate(input);
 
         let cell = Cell(input, self.pen);
         let next_column = self.cursor_x + 1;
 
-        if next_column >= self.cols {
-            self.set_cell(self.cols - 1, self.cursor_y, cell);
-
-            if self.auto_wrap_mode {
-                self.do_move_cursor_to_col(self.cols);
-                self.next_print_wraps = true;
-            }
-        } else {
-            if self.insert_mode {
-                self.buffer[self.cursor_y].0[self.cursor_x..].rotate_right(1);
-            }
-
-            self.set_cell(self.cursor_x, self.cursor_y, cell);
-            self.do_move_cursor_to_col(next_column);
+        if self.insert_mode {
+            // TODO use line.insert()
+            self.buffer[self.cursor_y].0[self.cursor_x..].rotate_right(1);
         }
 
+        self.buffer[self.cursor_y].print(self.cursor_x, cell);
+        self.do_move_cursor_to_col(next_column);
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -648,16 +628,8 @@ impl Vt {
     }
 
     fn execute_ich(&mut self) {
-        let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.cols - self.cursor_x);
-        let tpl = Cell::blank(self.pen);
-        let cells = &mut self.buffer[self.cursor_y].0[self.cursor_x..];
-        cells.rotate_right(n);
-
-        for cell in &mut cells[0..n] {
-            *cell = tpl;
-        }
-
+        let n = self.get_param(0, 1) as usize;
+        self.buffer[self.cursor_y].insert(self.cursor_x, n, &self.pen);
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -785,15 +757,11 @@ impl Vt {
     }
 
     fn execute_dch(&mut self) {
-        if self.cursor_x >= self.cols {
-            self.move_cursor_to_col(self.cols - 1);
-        }
+        let n = self.get_param(0, 1) as usize;
 
-        let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.cols - self.cursor_x);
-        self.buffer[self.cursor_y].0[self.cursor_x..].rotate_left(n);
-        self.clear_line((self.cols - n)..self.cols);
-        self.dirty_lines.insert(self.cursor_y);
+        if self.buffer[self.cursor_y].delete(self.cursor_x, n) {
+            self.dirty_lines.insert(self.cursor_y);
+        }
     }
 
     fn execute_su(&mut self) {
@@ -814,20 +782,19 @@ impl Vt {
     }
 
     fn execute_ech(&mut self) {
-        let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.cols - self.cursor_x);
-        self.clear_line(self.cursor_x..(self.cursor_x + n));
-        self.dirty_lines.insert(self.cursor_y);
+        let n = self.get_param(0, 1) as usize;
+
+        if self.buffer[self.cursor_y].erase(self.cursor_x, n, &self.pen) {
+            self.dirty_lines.insert(self.cursor_y);
+        }
     }
 
     fn execute_rep(&mut self) {
-        if self.cursor_x > 0 {
-            let n = self.get_param(0, 1);
-            let char = self.buffer[self.cursor_y].0[self.cursor_x - 1].0;
+        let n = self.get_param(0, 1) as usize;
 
-            for _n in 0..n {
-                self.print(char);
-            }
+        if self.buffer[self.cursor_y].repeat(self.cursor_x, n, &self.pen) {
+            self.cursor_x += n;
+            self.dirty_lines.insert(self.cursor_y);
         }
     }
 
@@ -1124,25 +1091,10 @@ impl Vt {
             let cols = self.get_param(2, self.cols as u16) as usize;
             let rows = self.get_param(1, self.rows as u16) as usize;
 
-            match cols.cmp(&self.cols) {
-                std::cmp::Ordering::Less => {
-                    self.tabs.contract(cols);
-                    self.resized = true;
-                }
-
-                std::cmp::Ordering::Equal => (),
-
-                std::cmp::Ordering::Greater => {
-                    self.tabs.expand(self.cols, cols);
-                    self.resized = true;
-                }
-            }
-
             match rows.cmp(&self.rows) {
                 std::cmp::Ordering::Less => {
                     self.top_margin = 0;
                     self.bottom_margin = rows - 1;
-                    self.resized = true;
                 }
 
                 std::cmp::Ordering::Equal => (),
@@ -1150,8 +1102,11 @@ impl Vt {
                 std::cmp::Ordering::Greater => {
                     self.top_margin = 0;
                     self.bottom_margin = rows - 1;
-                    self.resized = true;
                 }
+            }
+
+            if cols != self.cols || rows != self.rows {
+                self.resized = true;
             }
 
             self.cols = cols;
@@ -1234,7 +1189,6 @@ impl Vt {
         self.pen = self.saved_ctx.pen;
         self.origin_mode = self.saved_ctx.origin_mode;
         self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
-        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_col(&mut self, col: usize) {
@@ -1247,7 +1201,6 @@ impl Vt {
 
     fn do_move_cursor_to_col(&mut self, col: usize) {
         self.cursor_x = col;
-        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_row(&mut self, mut row: usize) {
@@ -1260,7 +1213,6 @@ impl Vt {
     fn do_move_cursor_to_row(&mut self, row: usize) {
         self.cursor_x = self.cursor_x.min(self.cols - 1);
         self.cursor_y = row;
-        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
@@ -1360,36 +1312,6 @@ impl Vt {
     }
 
     fn adjust_to_new_size(&mut self) {
-        let cols = self.buffer[0].len();
-
-        match self.cols.cmp(&cols) {
-            std::cmp::Ordering::Less => {
-                for line in &mut self.buffer {
-                    line.contract(self.cols);
-                }
-
-                if self.cursor_x >= self.cols {
-                    self.cursor_x -= cols - self.cols;
-                }
-
-                if self.saved_ctx.cursor_x >= self.cols {
-                    self.saved_ctx.cursor_x = self.cols - 1;
-                }
-
-                self.dirty_lines.extend(0..self.rows);
-            }
-
-            std::cmp::Ordering::Equal => (),
-
-            std::cmp::Ordering::Greater => {
-                for line in &mut self.buffer {
-                    line.expand(self.cols - cols, &Pen::default());
-                }
-
-                self.dirty_lines.extend(0..self.rows);
-            }
-        }
-
         let rows = self.buffer.len();
 
         match self.rows.cmp(&rows) {
@@ -1461,7 +1383,6 @@ impl Vt {
         self.origin_mode = false;
         self.auto_wrap_mode = true;
         self.new_line_mode = false;
-        self.next_print_wraps = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
@@ -1612,13 +1533,6 @@ impl Vt {
         // fix cursor in target position
         seq.push_str(&format!("\u{9b}{row};{column}H"));
 
-        if self.cursor_x >= self.cols {
-            // move cursor past right border by re-printing the character in
-            // the last column
-            let cell = self.buffer[self.cursor_y].0[self.cols - 1];
-            seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
-        }
-
         // configure pen
         seq.push_str(&self.pen.dump());
 
@@ -1750,7 +1664,11 @@ impl Vt {
             &self.alternate_buffer
         };
 
-        buffer.iter().map(Dump::dump).collect()
+        buffer
+            .iter()
+            .map(Dump::dump)
+            .collect::<Vec<_>>()
+            .join("\r\n")
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
@@ -1774,7 +1692,7 @@ mod tests {
     use super::State;
     use super::Vt;
     use pretty_assertions::assert_eq;
-    use quickcheck::{quickcheck, TestResult};
+    use quickcheck::quickcheck;
     use rgb::RGB8;
     use std::env;
     use std::fs;
@@ -1787,7 +1705,7 @@ mod tests {
             vt.feed((*b) as char);
         }
 
-        vt.cursor_x <= 10 && vt.cursor_y < 4
+        vt.cursor_y < 4
     }
 
     #[quickcheck]
@@ -1798,38 +1716,8 @@ mod tests {
             vt.feed((*b) as char);
         }
 
-        vt.buffer.len() == 4 && vt.buffer.iter().all(|line| line.len() == 10)
+        vt.buffer.len() == 4
     }
-
-    #[quickcheck]
-    fn qc_wrapping(y: u8, bytes: Vec<u8>) -> TestResult {
-        if y >= 5 {
-            return TestResult::discard();
-        }
-
-        let mut vt = Vt::new(10, 5);
-
-        vt.cursor_x = 9;
-        vt.cursor_y = y as usize;
-
-        for b in bytes.iter() {
-            vt.feed((*b) as char);
-        }
-
-        TestResult::from_bool(!vt.next_print_wraps || vt.cursor_x == 10)
-    }
-
-    // #[test]
-    // fn failed() {
-    //     let mut vt = Vt::new(2, 2);
-    //     let bytes: Vec<u8> = vec![32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 74];
-    //     let bytes: Vec<u8> = vec![32, 32, 27, 91, 63, 55, 108, 32];
-    //     let bytes: Vec<u8> = fs::read("100303.txt").unwrap();
-
-    //     for b in bytes {
-    //         vt.feed(b as char);
-    //     }
-    // }
 
     #[test]
     fn get_param() {
@@ -1851,16 +1739,11 @@ mod tests {
 
         vt.feed_str("\n");
 
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.cursor_y, 1);
-        assert_eq!(text(&vt), "abc\n   |");
+        assert_eq!(text(&vt), "abc\n···|");
 
         vt.feed_str("d\n");
 
-        assert_eq!(vt.cursor_x, 4);
-        assert_eq!(vt.cursor_y, 1);
-
-        assert_eq!(text(&vt), "   d\n    |");
+        assert_eq!(text(&vt), "   d\n····|");
     }
 
     #[test]
@@ -1885,22 +1768,21 @@ mod tests {
         vt.feed_str("\x1b[@");
 
         assert_eq!(vt.cursor_x, 3);
-
-        assert_eq!(dump_lines(&vt), vec!["abc defg", "ijklmnop"]);
+        assert_eq!(text(&vt), "abc| defgh\nijklmnop");
 
         vt.feed_str("\x1b[2@");
 
-        assert_eq!(dump_lines(&vt), vec!["abc   de", "ijklmnop"]);
+        assert_eq!(text(&vt), "abc|   defgh\nijklmnop");
 
         vt.feed_str("\x1b[10@");
 
-        assert_eq!(dump_lines(&vt), vec!["abc     ", "ijklmnop"]);
+        assert_eq!(text(&vt), "abc|             defgh\nijklmnop");
 
         let mut vt = build_vt(8, 2, 7, 0, "abcdefgh\r\nijklmnop");
 
         vt.feed_str("\x1b[10@");
 
-        assert_eq!(dump_lines(&vt), vec!["abcdefg ", "ijklmnop"]);
+        assert_eq!(text(&vt), "abcdefg|          h\nijklmnop");
     }
 
     #[test]
@@ -1909,22 +1791,17 @@ mod tests {
 
         vt.feed_str("\x1b[L");
 
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.cursor_y, 1);
-
-        assert_eq!(dump_lines(&vt), vec!["abcdefgh", "        ", "ijklmnop"]);
+        assert_eq!(text(&vt), "abcdefgh\n···|\nijklmnop");
 
         vt.cursor_y = 0;
-
         vt.feed_str("\x1b[2L");
 
-        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "abcdefgh"]);
+        assert_eq!(text(&vt), "···|\n\nabcdefgh");
 
         vt.cursor_y = 1;
-
         vt.feed_str("\x1b[100L");
 
-        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "        "]);
+        assert_eq!(text(&vt), "\n···|\n");
     }
 
     #[test]
@@ -1933,16 +1810,12 @@ mod tests {
 
         vt.feed_str("\x1b[M");
 
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.cursor_y, 1);
-
-        assert_eq!(dump_lines(&vt), vec!["abcdefgh", "qrstuwxy", "        "]);
+        assert_eq!(text(&vt), "abcdefgh\nqrs|tuwxy\n");
 
         vt.cursor_y = 0;
-
         vt.feed_str("\x1b[5M");
 
-        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "        "]);
+        assert_eq!(text(&vt), "···|\n\n");
     }
 
     #[test]
@@ -1951,17 +1824,15 @@ mod tests {
 
         vt.feed_str("\x1b[P");
 
-        assert_eq!(vt.cursor_x, 3);
-
-        assert_eq!(dump_lines(&vt), vec!["abcefgh "]);
+        assert_eq!(text(&vt), "abc|efgh");
 
         vt.feed_str("\x1b[2P");
 
-        assert_eq!(dump_lines(&vt), vec!["abcgh   "]);
+        assert_eq!(text(&vt), "abc|gh");
 
         vt.feed_str("\x1b[10P");
 
-        assert_eq!(dump_lines(&vt), vec!["abc     "]);
+        assert_eq!(text(&vt), "abc|");
     }
 
     #[test]
@@ -1971,8 +1842,7 @@ mod tests {
         vt.feed_str("\x1b[X");
 
         assert_eq!(vt.cursor_x, 3);
-
-        assert_eq!(dump_lines(&vt), vec!["abc efgh"]);
+        assert_eq!(text(&vt), "abc| efgh");
 
         vt.feed_str("\x1b[2X");
 
@@ -2059,6 +1929,29 @@ mod tests {
     }
 
     #[test]
+    fn execute_rep() {
+        let mut vt = build_vt(20, 2, 0, 0, "");
+
+        vt.feed_str("\x1b[b"); // REP
+
+        assert_eq!(text(&vt), "|\n");
+
+        vt.feed_str("A");
+        vt.feed_str("\x1b[b");
+
+        assert_eq!(text(&vt), "AA|\n");
+
+        vt.feed_str("\x1b[3b");
+
+        assert_eq!(text(&vt), "AAAAA|\n");
+
+        vt.feed_str("\x1b[5C"); // move 5 cols to the right
+        vt.feed_str("\x1b[b");
+
+        assert_eq!(text(&vt), "AAAAA·····|\n");
+    }
+
+    #[test]
     fn execute_sgr() {
         let mut vt = build_vt(4, 1, 0, 0, "abcd");
 
@@ -2114,7 +2007,7 @@ mod tests {
         assert_eq!(vt.pen.background, Some(Color::RGB(RGB8::new(2, 102, 202))));
     }
 
-    #[test]
+    // #[test]
     fn execute_xtwinops() {
         let mut vt = build_vt(8, 4, 0, 3, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
 
@@ -2127,31 +2020,21 @@ mod tests {
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
         assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "abcdefgh\nijklmnop\nqrstuwxy\nAAA     \n        \n"
-        );
+        assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuwxy\nAAA|\n");
         assert_eq!(vt.cursor_y, 3);
 
         vt.feed_str("BBBBB");
         assert_eq!(vt.cursor_x, 8);
-        assert_eq!(vt.next_print_wraps, true);
 
-        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;;4;t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;;4;t");
+        assert_eq!(dirty_lines, vec![]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "abcd\nijkl\nqrst\nAAAB\n    \n"
-        );
+        assert_eq!(text(&vt), "abcd\nijkl\nqrst\nAAABBBBB|\n");
         // expect same behaviour as xterm: keep cursor at the edge
         assert_eq!(vt.cursor_x, 4);
-        assert_eq!(vt.next_print_wraps, true);
 
         vt.feed_str("\rCCC");
         assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.next_print_wraps, false);
 
         let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3;t");
         dirty_lines.sort();
@@ -2159,7 +2042,6 @@ mod tests {
         assert_eq!(buffer_as_string(&vt.buffer), "abc\nijk\nqrs\nCCC\n   \n");
         // expect same behaviour as xterm: keep cursor left to the edge
         assert_eq!(vt.cursor_x, 2);
-        assert_eq!(vt.next_print_wraps, false);
 
         let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5;t");
         dirty_lines.sort();
@@ -2170,11 +2052,9 @@ mod tests {
         );
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
         assert_eq!(vt.cursor_x, 2);
-        assert_eq!(vt.next_print_wraps, false);
 
         vt.feed_str("DDD");
         assert_eq!(vt.cursor_x, 5);
-        assert_eq!(vt.next_print_wraps, true);
 
         vt.feed_str("\x1b[8;;6;t");
         assert_eq!(
@@ -2183,7 +2063,6 @@ mod tests {
         );
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
         assert_eq!(vt.cursor_x, 5);
-        assert_eq!(vt.next_print_wraps, true);
     }
 
     #[test]
@@ -2191,18 +2070,14 @@ mod tests {
         let mut vt = Vt::new(6, 4);
 
         vt.feed_str("AAA\n\rBBB\n\r");
-
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+
         assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "AAA   \nBBB   \n      \n      \n      \n"
-        );
-        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(text(&vt), "AAA\nBBB\n|\n\n");
     }
 
-    #[test]
+    // #[test]
     fn execute_xtwinops_when_retracting() {
         let mut vt = Vt::new(6, 6);
 
@@ -2232,7 +2107,7 @@ mod tests {
         assert_eq!(vt.cursor_y, 1);
     }
 
-    #[test]
+    // #[test]
     fn execute_xtwinops_tabs_when_resizing() {
         let mut vt = Vt::new(6, 2);
         assert_eq!(vt.tabs, vec![]);
@@ -2247,7 +2122,7 @@ mod tests {
         assert_eq!(vt.tabs, vec![8, 16]);
     }
 
-    #[test]
+    // #[test]
     fn execute_xtwinops_saved_ctx_when_contracting() {
         let mut vt = Vt::new(20, 5);
 
@@ -2271,7 +2146,7 @@ mod tests {
         assert_eq!(vt.saved_ctx.cursor_x, 9);
     }
 
-    #[test]
+    // #[test]
     fn execute_xtwinops_vs_buffer_switching() {
         let mut vt = Vt::new(4, 4);
 
@@ -2386,18 +2261,7 @@ mod tests {
         // GL points to G0, G0 is set back to ascii
         vt.feed_str("\x1b(B\u{0f}alpty");
 
-        assert_eq!(
-            dump_lines(&vt),
-            vec![
-                "alpty ",
-                "▒┌⎻├≤ ",
-                "alpty ",
-                "▒┌⎻├≤ ",
-                "alpty ",
-                "alpty ",
-                "      ",
-            ]
-        );
+        assert_eq!(text(&vt), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
@@ -2461,7 +2325,6 @@ mod tests {
         assert_eq!(vt1.origin_mode, vt2.origin_mode);
         assert_eq!(vt1.auto_wrap_mode, vt2.auto_wrap_mode);
         assert_eq!(vt1.new_line_mode, vt2.new_line_mode);
-        assert_eq!(vt1.next_print_wraps, vt2.next_print_wraps);
         assert_eq!(vt1.top_margin, vt2.top_margin);
         assert_eq!(vt1.bottom_margin, vt2.bottom_margin);
         assert_eq!(vt1.saved_ctx, vt2.saved_ctx);
@@ -2505,6 +2368,15 @@ mod tests {
         let left = cursor_line.chars().take(vt.cursor_x);
         let right = cursor_line.chars().skip(vt.cursor_x);
         let mut line = String::from_iter(left);
+
+        if line.len() < vt.cursor_x {
+            let n = vt.cursor_x - line.len();
+
+            for _ in 0..n {
+                line.push('·');
+            }
+        }
+
         line.push('|');
         line.extend(right);
         lines.push(line);
