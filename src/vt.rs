@@ -68,6 +68,7 @@ pub struct Vt {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     dirty_lines: HashSet<usize>,
+    resizable: bool,
     resized: bool,
 }
 
@@ -105,6 +106,7 @@ impl Vt {
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
+            resizable: false,
             resized: false,
         }
     }
@@ -1087,7 +1089,7 @@ impl Vt {
     }
 
     fn execute_xtwinops(&mut self) {
-        if self.get_param(0, 0) == 8 {
+        if self.resizable && self.get_param(0, 0) == 8 {
             let cols = self.get_param(2, self.cols as u16) as usize;
             let rows = self.get_param(1, self.rows as u16) as usize;
 
@@ -2039,6 +2041,7 @@ mod tests {
     #[test]
     fn execute_xtwinops_when_extending() {
         let mut vt = Vt::new(6, 4);
+        vt.resizable = true;
 
         vt.feed_str("AAA\n\rBBB\n\r");
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
