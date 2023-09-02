@@ -2343,6 +2343,20 @@ mod tests {
             assert!(vt.cursor_y < 5);
             assert_eq!(vt.buffer.len(), 5);
         }
+
+        #[test]
+        fn prop_dump(input in gen_input()) {
+            let mut vt1 = Vt::new(10, 5);
+
+            for c in input {
+                vt1.feed(c);
+            }
+
+            let mut vt2 = Vt::new(vt1.cols, vt1.rows);
+            vt2.feed_str(&vt1.dump());
+
+            assert_vts_eq(&vt1, &vt2);
+        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
