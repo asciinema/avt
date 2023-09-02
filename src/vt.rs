@@ -567,7 +567,7 @@ impl Vt {
     fn execute_decaln(&mut self) {
         for y in 0..self.rows {
             for x in 0..self.cols {
-                self.set_cell(x, y, Cell('\u{45}', Pen::default()));
+                self.buffer[y].print(x, Cell('\u{45}', Pen::default()));
             }
 
             self.dirty_lines.insert(y);
@@ -1116,10 +1116,6 @@ impl Vt {
     }
 
     // screen
-
-    fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
-        self.buffer[y].0[x] = cell;
-    }
 
     fn set_tab(&mut self) {
         if 0 < self.cursor_x && self.cursor_x < self.cols {
