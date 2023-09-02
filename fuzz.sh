@@ -2,7 +2,7 @@
 
 while true
 do
-    QUICKCHECK_TESTS=1000000 RUST_BACKTRACE=1 cargo test qc_
+    PROPTEST_CASES=1000000 RUST_BACKTRACE=1 cargo test prop_
 
     if [[ x$? != x0 ]] ; then
         exit $?
