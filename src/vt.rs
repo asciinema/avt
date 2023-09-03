@@ -2294,7 +2294,16 @@ mod tests {
 
     fn gen_csi_seq() -> impl Strategy<Value = Vec<char>> {
         (gen_params(), gen_csi_finalizer()).prop_map(|(params, fin)| {
-            vec![vec![0x1b as char, 0x5b as char], params, vec![fin]]
+            vec![vec![0x1b as char, '['], params, vec![fin]]
+                .into_iter()
+                .flatten()
+                .collect()
+        })
+    }
+
+    fn gen_sgr_seq() -> impl Strategy<Value = Vec<char>> {
+        gen_params().prop_map(|params| {
+            vec![vec![0x1b as char, '['], params, vec!['m']]
                 .into_iter()
                 .flatten()
                 .collect()
@@ -2326,7 +2335,7 @@ mod tests {
             gen_ctl_seq(),
             gen_esc_seq(),
             gen_csi_seq(),
-            // TODO gen_sgr_seq(),
+            gen_sgr_seq(),
             gen_text()
         ]
     }
