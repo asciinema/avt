@@ -462,11 +462,11 @@ impl Vt {
         let next_column = self.cursor_x + 1;
 
         if self.insert_mode {
-            // TODO use line.insert()
-            self.buffer[self.cursor_y].0[self.cursor_x..].rotate_right(1);
+            self.buffer[self.cursor_y].insert(self.cursor_x, 1, cell);
+        } else {
+            self.buffer[self.cursor_y].print(self.cursor_x, cell);
         }
 
-        self.buffer[self.cursor_y].print(self.cursor_x, cell);
         self.do_move_cursor_to_col(next_column);
         self.dirty_lines.insert(self.cursor_y);
     }
@@ -631,7 +631,7 @@ impl Vt {
 
     fn execute_ich(&mut self) {
         let n = self.get_param(0, 1) as usize;
-        self.buffer[self.cursor_y].insert(self.cursor_x, n, &self.pen);
+        self.buffer[self.cursor_y].insert(self.cursor_x, n, Cell::blank(self.pen));
         self.dirty_lines.insert(self.cursor_y);
     }
 

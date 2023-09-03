@@ -58,11 +58,9 @@ impl Line {
         true
     }
 
-    pub(crate) fn insert(&mut self, col: usize, n: usize, pen: &Pen) {
-        let cell = Cell::blank(*pen);
-
+    pub(crate) fn insert(&mut self, col: usize, n: usize, cell: Cell) {
         if col >= self.0.len() {
-            if pen.is_default() {
+            if cell.is_default() {
                 return;
             }
 
