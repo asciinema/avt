@@ -63,6 +63,7 @@ pub struct Vt {
     origin_mode: bool,
     auto_wrap_mode: bool,
     new_line_mode: bool,
+    next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
     saved_ctx: SavedCtx,
@@ -101,6 +102,7 @@ impl Vt {
             origin_mode: false,
             auto_wrap_mode: true,
             new_line_mode: false,
+            next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::default(),
@@ -453,9 +455,6 @@ impl Vt {
     }
 
     fn print(&mut self, mut input: char) {
-        // TODO if !self.auto_wrap_mode and at the window edge (% cols)
-        // then replace char, don't move cursor
-
         input = self.charsets[self.active_charset].translate(input);
 
         let cell = Cell(input, self.pen);
@@ -467,7 +466,8 @@ impl Vt {
             self.buffer[self.cursor_y].print(self.cursor_x, cell);
         }
 
-        self.do_move_cursor_to_col(next_column);
+        self.cursor_x = next_column;
+        self.next_print_wraps = self.is_fold(next_column);
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -644,11 +644,24 @@ impl Vt {
     }
 
     fn execute_cuf(&mut self) {
+        // TODO stop at multiply of self.cols
         self.move_cursor_to_rel_col(self.get_param(0, 1) as isize);
     }
 
     fn execute_cub(&mut self) {
-        self.move_cursor_to_rel_col(-(self.get_param(0, 1) as isize));
+        let mut n = self.get_param(0, 1) as usize;
+
+        if self.next_print_wraps {
+            n += 1;
+        }
+
+        let col = if n > self.cursor_x {
+            0
+        } else {
+            self.cursor_x - n
+        };
+
+        self.move_cursor_to_col(col);
     }
 
     fn execute_cnl(&mut self) {
@@ -796,6 +809,7 @@ impl Vt {
 
         if self.buffer[self.cursor_y].repeat(self.cursor_x, n, &self.pen) {
             self.cursor_x += n;
+            self.next_print_wraps = self.is_fold(self.cursor_x);
             self.dirty_lines.insert(self.cursor_y);
         }
     }
@@ -1155,6 +1169,18 @@ impl Vt {
         }
     }
 
+    fn is_fold(&self, col: usize) -> bool {
+        col % self.cols == 0
+    }
+
+    fn prev_fold(&self, col: usize) -> usize {
+        (col / self.cols) * self.cols
+    }
+
+    fn next_fold(&self, col: usize) -> usize {
+        (col / self.cols + 1) * self.cols
+    }
+
     fn actual_top_margin(&self) -> usize {
         if self.origin_mode {
             self.top_margin
@@ -1187,18 +1213,35 @@ impl Vt {
         self.pen = self.saved_ctx.pen;
         self.origin_mode = self.saved_ctx.origin_mode;
         self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
+        self.next_print_wraps = false;
     }
 
-    fn move_cursor_to_col(&mut self, col: usize) {
-        if col >= self.cols {
-            self.do_move_cursor_to_col(self.cols - 1);
-        } else {
-            self.do_move_cursor_to_col(col);
+    fn move_cursor_to_col(&mut self, mut col: usize) {
+        match col.cmp(&self.cursor_x) {
+            std::cmp::Ordering::Less => {
+                let mut left_fold = self.prev_fold(self.cursor_x);
+
+                if left_fold > 0 && self.next_print_wraps {
+                    left_fold -= self.cols;
+                }
+
+                col = left_fold.max(col);
+                self.do_move_cursor_to_col(col);
+            }
+
+            std::cmp::Ordering::Equal => (),
+
+            std::cmp::Ordering::Greater => {
+                let right_fold = self.next_fold(self.cursor_x) - 1;
+                col = right_fold.min(col);
+                self.do_move_cursor_to_col(col);
+            }
         }
     }
 
     fn do_move_cursor_to_col(&mut self, col: usize) {
         self.cursor_x = col;
+        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_row(&mut self, mut row: usize) {
@@ -1211,6 +1254,7 @@ impl Vt {
     fn do_move_cursor_to_row(&mut self, row: usize) {
         self.cursor_x = self.cursor_x.min(self.cols - 1);
         self.cursor_y = row;
+        self.next_print_wraps = false;
     }
 
     fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
@@ -1381,6 +1425,7 @@ impl Vt {
         self.origin_mode = false;
         self.auto_wrap_mode = true;
         self.new_line_mode = false;
+        self.next_print_wraps = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
@@ -1756,6 +1801,32 @@ mod tests {
         vt.feed_str("\x1bM"); // RI
 
         assert_eq!(text(&vt), "\nabcd\n|\nefgh\nmnop");
+    }
+
+    #[test]
+    fn execute_cub() {
+        let mut vt = Vt::new(8, 2);
+
+        vt.feed_str("abcd");
+        vt.feed_str("\x1b[2D");
+
+        assert_eq!(text(&vt), "ab|cd\n");
+
+        vt.feed_str("cdefghijkl");
+        vt.feed_str("\x1b[2D");
+
+        assert_eq!(text(&vt), "abcdefghij|kl\n");
+
+        vt.feed_str("\x1b[10D");
+
+        assert_eq!(text(&vt), "abcdefgh|ijkl\n");
+
+        let mut vt = Vt::new(4, 2);
+
+        vt.feed_str("abcd");
+        vt.feed_str("\x1b[D");
+
+        assert_eq!(text(&vt), "ab|cd\n");
     }
 
     #[test]
@@ -2462,6 +2533,7 @@ mod tests {
         assert_eq!(vt1.origin_mode, vt2.origin_mode);
         assert_eq!(vt1.auto_wrap_mode, vt2.auto_wrap_mode);
         assert_eq!(vt1.new_line_mode, vt2.new_line_mode);
+        assert_eq!(vt1.next_print_wraps, vt2.next_print_wraps);
         assert_eq!(vt1.top_margin, vt2.top_margin);
         assert_eq!(vt1.bottom_margin, vt2.bottom_margin);
         assert_eq!(vt1.saved_ctx, vt2.saved_ctx);
