@@ -83,12 +83,15 @@ impl Line {
     }
 
     pub(crate) fn delete(&mut self, col: usize, mut n: usize) -> bool {
-        n = n.min(self.0.len() - col);
-        // TODO fix range below doesn't crash when line is shorter
-        self.0[col..].rotate_left(n);
-        self.0.truncate(self.0.len() - n);
+        if col < self.0.len() {
+            n = n.min(self.0.len() - col);
+            self.0[col..].rotate_left(n);
+            self.0.truncate(self.0.len() - n);
 
-        true
+            true
+        } else {
+            false
+        }
     }
 
     pub(crate) fn erase(&mut self, col: usize, n: usize, pen: &Pen) -> bool {

@@ -1830,6 +1830,11 @@ mod tests {
         vt.feed_str("\x1b[10P");
 
         assert_eq!(text(&vt), "abc|");
+
+        vt.feed_str("\x1b[10C");
+        vt.feed_str("\x1b[10P");
+
+        assert_eq!(text(&vt), "abc····|");
     }
 
     #[test]
