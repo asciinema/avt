@@ -2354,19 +2354,23 @@ mod tests {
         prop::collection::vec(gen_char(), 1..10)
     }
 
-    fn gen_input() -> impl Strategy<Value = Vec<char>> {
-        prop_oneof![
-            gen_ctl_seq(),
-            gen_esc_seq(),
-            gen_csi_seq(),
-            gen_sgr_seq(),
-            gen_text()
-        ]
+    fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(
+            prop_oneof![
+                gen_ctl_seq(),
+                gen_esc_seq(),
+                gen_csi_seq(),
+                gen_sgr_seq(),
+                gen_text()
+            ],
+            1..=max_len,
+        )
+        .prop_map(|inputs| inputs.into_iter().flatten().collect())
     }
 
     proptest! {
         #[test]
-        fn prop_feed(input in gen_input()) {
+        fn prop_feed(input in gen_input(25)) {
             let mut vt = Vt::new(10, 5);
 
             for c in input {
@@ -2378,7 +2382,7 @@ mod tests {
         }
 
         #[test]
-        fn prop_dump(input in gen_input()) {
+        fn prop_dump(input in gen_input(25)) {
             let mut vt1 = Vt::new(10, 5);
 
             for c in input {
