@@ -2607,6 +2607,17 @@ mod tests {
 
             assert!(!vt.next_print_wraps || vt.cursor_x % vt.cols == 0);
         }
+
+        #[test]
+        fn prop_no_trailing_blanks(input in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+
+            for c in input {
+                vt.feed(c);
+            }
+
+            assert!(vt.buffer.iter().all(|line| line.is_empty() || !line.segments().last().unwrap().1.is_default()));
+        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
