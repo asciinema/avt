@@ -2569,14 +2569,6 @@ mod tests {
         vt
     }
 
-    fn dump_lines(vt: &Vt) -> Vec<String> {
-        vt.buffer.iter().map(dump_line).collect()
-    }
-
-    fn dump_line(line: &Line) -> String {
-        line.cells().map(|cell| cell.0).collect()
-    }
-
     fn assert_vts_eq(vt1: &Vt, vt2: &Vt) {
         assert_eq!(vt1.state, vt2.state);
 
