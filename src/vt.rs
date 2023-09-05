@@ -1302,16 +1302,28 @@ impl Vt {
         self.do_move_cursor_to_row(new_y);
     }
 
-    fn cursor_up(&mut self, n: usize) {
-        let mut new_y = (self.cursor_y as isize) - (n as isize);
+    fn cursor_up(&mut self, mut n: usize) {
+        if self.next_print_wraps {
+            self.cursor_x -= 1;
+            self.next_print_wraps = false;
+        }
 
-        new_y = if self.cursor_y < self.top_margin {
-            new_y.max(0)
-        } else {
-            new_y.max(self.top_margin as isize)
-        };
+        while n > 0 && self.cursor_x > self.cols {
+            self.cursor_x -= self.cols;
+            n -= 1;
+        }
 
-        self.do_move_cursor_to_row(new_y as usize);
+        if n > 0 {
+            let mut new_y = (self.cursor_y as isize) - (n as isize);
+
+            new_y = if self.cursor_y < self.top_margin {
+                new_y.max(0)
+            } else {
+                new_y.max(self.top_margin as isize)
+            };
+
+            self.cursor_y = new_y as usize;
+        }
     }
 
     // scrolling
@@ -1801,6 +1813,34 @@ mod tests {
         vt.feed_str("\x1bM"); // RI
 
         assert_eq!(text(&vt), "\nabcd\n|\nefgh\nmnop");
+    }
+
+    #[test]
+    fn execute_cuu() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("abcd\n\n\n");
+
+        vt.feed_str("\x1b[A");
+        assert_eq!(text(&vt), "abcd\n\n····|\n");
+
+        vt.feed_str("\x1b[2A");
+        assert_eq!(text(&vt), "abcd|\n\n\n");
+    }
+
+    #[test]
+    fn execute_cuu_on_wrapped_lines() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("\n1234567812345678123456781234");
+        assert_eq!(text(&vt), "\n1234567812345678123456781234|\n\n");
+
+        vt.feed_str("\x1b[A");
+        assert_eq!(text(&vt), "\n12345678123456781234|56781234\n\n");
+
+        vt.feed_str("\x1b[2A");
+        assert_eq!(text(&vt), "\n1234|567812345678123456781234\n\n");
+
+        vt.feed_str("\x1b[A");
+        assert_eq!(text(&vt), "····|\n1234567812345678123456781234\n\n");
     }
 
     #[test]
