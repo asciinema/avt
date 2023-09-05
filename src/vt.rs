@@ -671,7 +671,7 @@ impl Vt {
 
     fn execute_cpl(&mut self) {
         self.cursor_up(self.get_param(0, 1) as usize);
-        self.do_move_cursor_to_col(0);
+        self.do_move_cursor_to_col(self.prev_fold(self.cursor_x));
     }
 
     fn execute_cha(&mut self) {
@@ -1308,7 +1308,7 @@ impl Vt {
             self.next_print_wraps = false;
         }
 
-        while n > 0 && self.cursor_x > self.cols {
+        while n > 0 && self.cursor_x >= self.cols {
             self.cursor_x -= self.cols;
             n -= 1;
         }
@@ -1841,6 +1841,34 @@ mod tests {
 
         vt.feed_str("\x1b[A");
         assert_eq!(text(&vt), "····|\n1234567812345678123456781234\n\n");
+    }
+
+    #[test]
+    fn execute_cpl() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("abcd\n\n\n");
+
+        vt.feed_str("\x1b[F");
+        assert_eq!(text(&vt), "abcd\n\n|\n");
+
+        vt.feed_str("\x1b[2F");
+        assert_eq!(text(&vt), "|abcd\n\n\n");
+    }
+
+    #[test]
+    fn execute_cpl_on_wrapped_lines() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("\n1234567812345678123456781234");
+        assert_eq!(text(&vt), "\n1234567812345678123456781234|\n\n");
+
+        vt.feed_str("\x1b[F");
+        assert_eq!(text(&vt), "\n1234567812345678|123456781234\n\n");
+
+        vt.feed_str("\x1b[2F");
+        assert_eq!(text(&vt), "\n|1234567812345678123456781234\n\n");
+
+        vt.feed_str("\x1b[F");
+        assert_eq!(text(&vt), "|\n1234567812345678123456781234\n\n");
     }
 
     #[test]
