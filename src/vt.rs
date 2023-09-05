@@ -2315,7 +2315,7 @@ mod tests {
 
     #[test]
     fn charsets() {
-        let mut vt = build_vt(6, 7, 0, 0, "      ");
+        let mut vt = build_vt(6, 7, 0, 0, "");
 
         // GL points to G0, G0 is set to ascii
         vt.feed_str("alpty\r\n");
