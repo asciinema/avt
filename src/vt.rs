@@ -716,20 +716,23 @@ impl Vt {
     fn execute_el(&mut self) {
         match self.get_param(0, 0) {
             0 => {
-                // clear to end of line
-                self.clear_line(self.cursor_x..self.cols);
+                // clear to the end of line
+                self.clear_line(self.cursor_x..self.next_fold(self.cursor_x));
+                // TODO split at the right fold into separate lines
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             1 => {
-                // clear to begining of line
-                self.clear_line(0..(self.cursor_x + 1).min(self.cols));
+                // clear to the begining of line
+                self.clear_line(self.prev_fold(self.cursor_x)..(self.cursor_x + 1));
+                // TODO split at the left fold into separate lines
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             2 => {
-                // clear whole line
-                self.clear_line(0..self.cols);
+                // clear the whole line
+                self.clear_line(self.prev_fold(self.cursor_x)..self.next_fold(self.cursor_x));
+                // TODO split at the both folds into separate lines
                 self.dirty_lines.insert(self.cursor_y);
             }
 
@@ -1950,6 +1953,64 @@ mod tests {
         vt.feed_str("\x1b[5M");
 
         assert_eq!(text(&vt), "···|\n\n");
+    }
+
+    #[test]
+    fn execute_el() {
+        // clear to the end of line
+
+        let mut vt = build_vt(4, 2, 2, 0, "abcd");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "ab|\n");
+
+        let mut vt = build_vt(4, 2, 2, 0, "a");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "a·|\n");
+
+        // clear to the beginning of line
+
+        let mut vt = build_vt(4, 2, 2, 0, "abcd");
+        vt.feed_str("\x1b[1K");
+        assert_eq!(text(&vt), "  | d\n");
+
+        // clear the whole line
+
+        let mut vt = build_vt(4, 2, 2, 0, "abcd");
+        vt.feed_str("\x1b[2K");
+        assert_eq!(text(&vt), "··|\n");
+    }
+
+    #[test]
+    fn execute_el_on_wrapped_lines() {
+        // clear to the end of line
+
+        let mut vt = Vt::new(4, 1);
+        vt.feed_str("abcdefgh\x1b[2D");
+        assert_eq!(text(&vt), "abcde|fgh");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "abcde|");
+
+        let mut vt = Vt::new(4, 1);
+        vt.feed_str("abcdefghij\x1b[A");
+        assert_eq!(text(&vt), "abcdef|ghij");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "abcdef|  ij");
+
+        // clear to the beginning of line
+
+        let mut vt = Vt::new(4, 1);
+        vt.feed_str("abcdefghij\x1b[A");
+        assert_eq!(text(&vt), "abcdef|ghij");
+        vt.feed_str("\x1b[1K");
+        assert_eq!(text(&vt), "abcd  | hij");
+
+        // clear the whole line
+
+        let mut vt = Vt::new(4, 1);
+        vt.feed_str("abcdefghij\x1b[A");
+        assert_eq!(text(&vt), "abcdef|ghij");
+        vt.feed_str("\x1b[2K");
+        assert_eq!(text(&vt), "abcd  |  ij");
     }
 
     #[test]
