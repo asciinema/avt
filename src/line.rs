@@ -17,13 +17,16 @@ impl Line {
         }
     }
 
-    pub(crate) fn clear(&mut self, mut range: Range<usize>, pen: &Pen) {
-        if range.start < self.0.len() {
-            let tpl = Cell::blank(*pen);
-            range.end = range.end.min(self.0.len());
+    pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
+        assert!(range.start <= range.end);
 
-            for cell in &mut self.0[range] {
-                *cell = tpl;
+        if pen.is_default() && range.end >= self.0.len() {
+            self.0.truncate(range.start);
+        } else {
+            let cell = Cell::blank(*pen);
+
+            for col in range {
+                self.print(col, cell);
             }
         }
     }
@@ -85,16 +88,6 @@ impl Line {
             n = n.min(self.0.len() - col);
             self.0[col..].rotate_left(n);
             self.0.truncate(self.0.len() - n);
-
-            true
-        } else {
-            false
-        }
-    }
-
-    pub(crate) fn erase(&mut self, col: usize, n: usize, pen: &Pen) -> bool {
-        if col < self.0.len() {
-            self.clear(col..(col + n), pen);
 
             true
         } else {

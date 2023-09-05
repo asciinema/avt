@@ -798,10 +798,8 @@ impl Vt {
 
     fn execute_ech(&mut self) {
         let n = self.get_param(0, 1) as usize;
-
-        if self.buffer[self.cursor_y].erase(self.cursor_x, n, &self.pen) {
-            self.dirty_lines.insert(self.cursor_y);
-        }
+        self.buffer[self.cursor_y].clear(self.cursor_x..self.cursor_x + n, &self.pen);
+        self.dirty_lines.insert(self.cursor_y);
     }
 
     fn execute_rep(&mut self) {
@@ -1981,17 +1979,16 @@ mod tests {
         let mut vt = build_vt(8, 1, 3, 0, "abcdefgh");
 
         vt.feed_str("\x1b[X");
-
-        assert_eq!(vt.cursor_x, 3);
         assert_eq!(text(&vt), "abc| efgh");
 
         vt.feed_str("\x1b[2X");
-
-        assert_eq!(dump_lines(&vt), vec!["abc  fgh"]);
+        assert_eq!(text(&vt), "abc|  fgh");
 
         vt.feed_str("\x1b[10X");
+        assert_eq!(text(&vt), "abc|");
 
-        assert_eq!(dump_lines(&vt), vec!["abc     "]);
+        vt.feed_str("\x1b[3C\x1b[X");
+        assert_eq!(text(&vt), "abc···|");
     }
 
     #[test]
