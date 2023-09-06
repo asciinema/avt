@@ -646,8 +646,8 @@ impl Vt {
     }
 
     fn execute_cuf(&mut self) {
-        // TODO stop at multiply of self.cols
-        self.move_cursor_to_rel_col(self.get_param(0, 1) as isize);
+        let n = self.get_param(0, 1) as usize;
+        self.move_cursor_to_col(self.cursor_x + n);
     }
 
     fn execute_cub(&mut self) {
@@ -1258,18 +1258,6 @@ impl Vt {
         self.cursor_x = self.cursor_x.min(self.cols - 1);
         self.cursor_y = row;
         self.next_print_wraps = false;
-    }
-
-    fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
-        let new_col = self.cursor_x as isize + rel_col;
-
-        if new_col < 0 {
-            self.do_move_cursor_to_col(0);
-        } else if new_col as usize >= self.cols {
-            self.do_move_cursor_to_col(self.cols - 1);
-        } else {
-            self.do_move_cursor_to_col(new_col as usize);
-        }
     }
 
     fn move_cursor_home(&mut self) {
@@ -1936,6 +1924,21 @@ mod tests {
 
         vt.feed_str("\x1b[B");
         assert_eq!(text(&vt), "1234567812345678123456781234\n···|\n");
+    }
+
+    #[test]
+    fn execute_cuf() {
+        let mut vt = Vt::new(4, 1);
+
+        vt.feed_str("\x1b[2C");
+        assert_eq!(text(&vt), "··|");
+
+        vt.feed_str("\x1b[2C");
+        assert_eq!(text(&vt), "···|");
+
+        vt.feed_str("ab");
+        vt.feed_str("\x1b[10C");
+        assert_eq!(text(&vt), "   ab··|");
     }
 
     #[test]
