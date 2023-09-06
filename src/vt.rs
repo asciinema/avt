@@ -1255,7 +1255,10 @@ impl Vt {
     }
 
     fn do_move_cursor_to_row(&mut self, row: usize) {
-        self.cursor_x = self.cursor_x.min(self.cols - 1);
+        if self.next_print_wraps {
+            self.cursor_x -= 1;
+        }
+
         self.cursor_y = row;
         self.next_print_wraps = false;
     }
