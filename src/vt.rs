@@ -585,7 +585,9 @@ impl Vt {
     }
 
     fn execute_bs(&mut self) {
-        self.move_cursor_to_rel_col(-1);
+        if self.cursor_x > self.prev_fold(self.cursor_x) {
+            self.do_move_cursor_to_col(self.cursor_x - 1);
+        }
     }
 
     fn execute_ht(&mut self) {
@@ -1826,6 +1828,29 @@ mod tests {
         vt.feed_str("\x1bM"); // RI
 
         assert_eq!(text(&vt), "\nabcd\n|\nefgh\nmnop");
+    }
+
+    #[test]
+    fn execute_bs() {
+        let mut vt = Vt::new(4, 1);
+        vt.feed_str("a");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "|a");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "|a");
+
+        vt.feed_str("abcdef");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "abcde|f");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "abcd|ef");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "abcd|ef");
     }
 
     #[test]
