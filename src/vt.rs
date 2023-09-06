@@ -1596,21 +1596,34 @@ impl Vt {
         };
 
         // fix cursor in target position
-        seq.push_str(&format!("\u{9b}{};{}H", row + 1, self.cursor_x + 1));
 
-        // extra care needed to put cursor past the last column
-        if self.cursor_x >= self.cols {
-            let line = &self.primary_buffer()[self.cursor_y];
-            seq.push_str(&format!("\u{9b}{};{}H", row + 1, 1));
-            seq.push_str(&line.dump());
+        seq.push_str(&format!("\u{9b}{};{}H", row + 1, 1));
 
-            if self.cursor_x > line.len() {
-                seq.push_str("\x1b[0m");
+        let line = &self.primary_buffer()[self.cursor_y];
 
-                for _ in line.len()..self.cursor_x {
-                    seq.push(' ');
-                }
+        for segment in line.segments_until(self.cursor_x) {
+            seq.push_str(&segment.dump());
+        }
+
+        if self.cursor_x > line.len() {
+            seq.push_str("\x1b[0m");
+
+            for _ in line.len()..self.cursor_x {
+                seq.push(' ');
             }
+        }
+
+        if self.cursor_x > 0 && self.is_fold(self.cursor_x) && !self.next_print_wraps {
+            let fold = self.prev_fold(self.cursor_x);
+
+            let cell = self.buffer[self.cursor_y]
+                .0
+                .get(fold)
+                .cloned()
+                .unwrap_or_else(|| Cell::blank(self.pen));
+
+            seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
+            seq.push_str("\x1b[D");
         }
 
         // configure pen

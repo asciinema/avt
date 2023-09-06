@@ -141,9 +141,16 @@ impl Line {
     }
 
     pub fn segments(&self) -> impl Iterator<Item = Segment> + '_ {
-        Chunk {
+        Segments {
             iter: self.0.iter(),
-            segment: None,
+            current: None,
+        }
+    }
+
+    pub fn segments_until(&self, col: usize) -> impl Iterator<Item = Segment> + '_ {
+        Segments {
+            iter: self.0.iter().take(col),
+            current: None,
         }
     }
 
@@ -156,35 +163,35 @@ impl Line {
     }
 }
 
-struct Chunk<'a, I>
+struct Segments<'a, I>
 where
     I: Iterator<Item = &'a Cell>,
 {
     iter: I,
-    segment: Option<Segment>,
+    current: Option<Segment>,
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>> Iterator for Chunk<'a, I> {
+impl<'a, I: Iterator<Item = &'a Cell>> Iterator for Segments<'a, I> {
     type Item = Segment;
 
     fn next(&mut self) -> Option<Self::Item> {
         for cell in self.iter.by_ref() {
-            match self.segment.as_mut() {
+            match self.current.as_mut() {
                 Some(segment) => {
                     if cell.1 == segment.1 {
                         segment.0.push(cell.0);
                     } else {
-                        return self.segment.replace(Segment(vec![cell.0], cell.1));
+                        return self.current.replace(Segment(vec![cell.0], cell.1));
                     }
                 }
 
                 None => {
-                    self.segment = Some(Segment(vec![cell.0], cell.1));
+                    self.current = Some(Segment(vec![cell.0], cell.1));
                 }
             }
         }
 
-        self.segment.take()
+        self.current.take()
     }
 }
 
