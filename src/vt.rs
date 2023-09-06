@@ -1293,14 +1293,26 @@ impl Vt {
         }
     }
 
-    fn cursor_down(&mut self, n: usize) {
-        let new_y = if self.cursor_y > self.bottom_margin {
-            (self.rows - 1).min(self.cursor_y + n)
-        } else {
-            self.bottom_margin.min(self.cursor_y + n)
-        };
+    fn cursor_down(&mut self, mut n: usize) {
+        if self.next_print_wraps {
+            self.cursor_x -= 1;
+            self.next_print_wraps = false;
+        }
 
-        self.do_move_cursor_to_row(new_y);
+        while n > 0 && self.cursor_x + self.cols < self.buffer[self.cursor_y].len() {
+            self.cursor_x += self.cols;
+            n -= 1;
+        }
+
+        if n > 0 {
+            self.cursor_x %= self.cols;
+
+            self.cursor_y = if self.cursor_y > self.bottom_margin {
+                (self.rows - 1).min(self.cursor_y + n)
+            } else {
+                self.bottom_margin.min(self.cursor_y + n)
+            };
+        }
     }
 
     fn cursor_up(&mut self, mut n: usize) {
@@ -1870,6 +1882,35 @@ mod tests {
 
         vt.feed_str("\x1b[F");
         assert_eq!(text(&vt), "|\n1234567812345678123456781234\n\n");
+    }
+
+    #[test]
+    fn execute_cud() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("abcd");
+
+        vt.feed_str("\x1b[B");
+        assert_eq!(text(&vt), "abcd\n····|\n\n");
+
+        vt.feed_str("\x1b[2B");
+        assert_eq!(text(&vt), "abcd\n\n\n····|");
+    }
+
+    #[test]
+    fn execute_cud_on_wrapped_lines() {
+        let mut vt = Vt::new(8, 3);
+        vt.feed_str("1234567812345678123456781234");
+        vt.cursor_x = 3;
+        assert_eq!(text(&vt), "123|4567812345678123456781234\n\n");
+
+        vt.feed_str("\x1b[B");
+        assert_eq!(text(&vt), "12345678123|45678123456781234\n\n");
+
+        vt.feed_str("\x1b[2B");
+        assert_eq!(text(&vt), "123456781234567812345678123|4\n\n");
+
+        vt.feed_str("\x1b[B");
+        assert_eq!(text(&vt), "1234567812345678123456781234\n···|\n");
     }
 
     #[test]
