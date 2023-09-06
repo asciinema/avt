@@ -2605,7 +2605,7 @@ mod tests {
                 vt.feed(c);
             }
 
-            assert!(!vt.next_print_wraps || vt.cursor_x % vt.cols == 0);
+            assert!(!vt.next_print_wraps || vt.cursor_x > 0 && vt.cursor_x % vt.cols == 0);
         }
 
         #[test]
