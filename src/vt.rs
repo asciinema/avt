@@ -647,6 +647,11 @@ impl Vt {
 
     fn execute_cuf(&mut self) {
         let n = self.get_param(0, 1) as usize;
+
+        if self.next_print_wraps {
+            self.cursor_x -= 1;
+        }
+
         self.move_cursor_to_col(self.cursor_x + n);
     }
 
@@ -1938,6 +1943,14 @@ mod tests {
 
         vt.feed_str("\x1b[2C");
         assert_eq!(text(&vt), "···|");
+
+        vt.feed_str("a");
+        assert_eq!(text(&vt), "   a|");
+        assert!(vt.next_print_wraps);
+
+        vt.feed_str("\x1b[5C");
+        assert_eq!(text(&vt), "   |a");
+        assert!(!vt.next_print_wraps);
 
         vt.feed_str("ab");
         vt.feed_str("\x1b[10C");
