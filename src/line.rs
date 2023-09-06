@@ -31,6 +31,12 @@ impl Line {
         }
     }
 
+    pub(crate) fn clear_from(&mut self, start: usize, pen: &Pen) {
+        if start < self.0.len() {
+            self.clear(start..self.0.len(), pen);
+        }
+    }
+
     pub(crate) fn print(&mut self, col: usize, cell: Cell) -> bool {
         if col >= self.0.len() && cell.is_default() {
             return false;

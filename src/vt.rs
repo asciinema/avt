@@ -690,21 +690,21 @@ impl Vt {
     fn execute_ed(&mut self) {
         match self.get_param(0, 0) {
             0 => {
-                // clear to end of screen
-                self.clear_line(self.cursor_x..self.cols);
+                // clear to the end of screen
+                self.buffer[self.cursor_y].clear_from(self.cursor_x, &self.pen);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
                 self.dirty_lines.extend(self.cursor_y..self.rows);
             }
 
             1 => {
-                // clear to beginning of screen
-                self.clear_line(0..(self.cursor_x + 1).min(self.cols));
+                // clear to the beginning of screen
+                self.clear_line(0..(self.cursor_x + 1));
                 self.clear_lines(0..self.cursor_y);
                 self.dirty_lines.extend(0..(self.cursor_y + 1));
             }
 
             2 => {
-                // clear whole screen
+                // clear the whole screen
                 self.clear_lines(0..self.rows);
                 self.dirty_lines.extend(0..self.rows);
             }
@@ -1957,7 +1957,7 @@ mod tests {
 
     #[test]
     fn execute_el() {
-        // clear to the end of line
+        // clear to the end of the line
 
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
         vt.feed_str("\x1b[0K");
@@ -1967,7 +1967,7 @@ mod tests {
         vt.feed_str("\x1b[0K");
         assert_eq!(text(&vt), "a·|\n");
 
-        // clear to the beginning of line
+        // clear to the beginning of the line
 
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
         vt.feed_str("\x1b[1K");
@@ -1982,7 +1982,7 @@ mod tests {
 
     #[test]
     fn execute_el_on_wrapped_lines() {
-        // clear to the end of line
+        // clear to the end of the line
 
         let mut vt = Vt::new(4, 1);
         vt.feed_str("abcdefgh\x1b[2D");
@@ -1996,7 +1996,7 @@ mod tests {
         vt.feed_str("\x1b[0K");
         assert_eq!(text(&vt), "abcdef|  ij");
 
-        // clear to the beginning of line
+        // clear to the beginning of the line
 
         let mut vt = Vt::new(4, 1);
         vt.feed_str("abcdefghij\x1b[A");
@@ -2011,6 +2011,52 @@ mod tests {
         assert_eq!(text(&vt), "abcdef|ghij");
         vt.feed_str("\x1b[2K");
         assert_eq!(text(&vt), "abcd  |  ij");
+    }
+
+    #[test]
+    fn execute_ed() {
+        // clear to the end of the screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+        vt.feed_str("\x1b[0J");
+        assert_eq!(text(&vt), "abc\nd|\n");
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\n\r\nghi");
+        vt.feed_str("\x1b[0J");
+        assert_eq!(text(&vt), "abc\n·|\n");
+
+        // clear to the beginning of the screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+        vt.feed_str("\x1b[1J");
+        assert_eq!(text(&vt), "\n | f\nghi");
+
+        // clear the whole screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+        vt.feed_str("\x1b[2J");
+        assert_eq!(text(&vt), "\n·|\n");
+    }
+
+    #[test]
+    fn execute_ed_on_wrapped_lines() {
+        // clear to the end of the screen
+
+        let mut vt = build_vt(4, 3, 2, 1, "abc\r\ndefghijklm\r\nnop");
+        vt.feed_str("\x1b[0J");
+        assert_eq!(text(&vt), "abc\nde|\n");
+
+        // clear to the beginning of the screen
+
+        let mut vt = build_vt(4, 3, 2, 1, "abc\r\ndefghijklm\r\nnop");
+        vt.feed_str("\x1b[1J");
+        assert_eq!(text(&vt), "\n  | ghijklm\nnop");
+
+        // clear the whole screen
+
+        let mut vt = build_vt(4, 3, 2, 1, "abc\r\ndefghijklm\r\nnop");
+        vt.feed_str("\x1b[2J");
+        assert_eq!(text(&vt), "\n··|\n");
     }
 
     #[test]
