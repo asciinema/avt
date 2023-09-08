@@ -1501,6 +1501,9 @@ impl Vt {
 
         // 2. setup tab stops
 
+        // move cursor to top-left corner
+        seq.push_str("\u{9b}1;1H");
+
         // clear all tab stops
         seq.push_str("\u{9b}5W");
 
