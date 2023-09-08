@@ -136,6 +136,16 @@ impl Line {
         self.len() == 0
     }
 
+    pub fn vrows(&self, cols: usize) -> usize {
+        let len = self.len();
+
+        if len == 0 || len % cols != 0 {
+            len / cols + 1
+        } else {
+            len / cols
+        }
+    }
+
     pub fn cells(&self) -> impl Iterator<Item = (char, Pen)> + '_ {
         self.0.iter().map(|cell| (cell.0, cell.1))
     }
