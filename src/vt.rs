@@ -637,8 +637,36 @@ impl Vt {
         self.dirty_lines.insert(self.cursor_y);
     }
 
+    fn cursor_v(&self) -> (usize, usize) {
+        (self.cursor_vcol(), self.cursor_vrow())
+    }
+
+    fn cursor_vcol(&self) -> usize {
+        if self.next_print_wraps {
+            self.cols
+        } else {
+            self.cursor_x % self.cols
+        }
+    }
+
+    fn cursor_vrow(&self) -> usize {
+        let mut vrow: usize = self
+            .lines()
+            .skip(self.cursor_y + 1)
+            .map(|line| line.vrows(self.cols))
+            .sum();
+
+        vrow += 1 + self.buffer[self.cursor_y].vrows_after(self.cols, self.cursor_x);
+
+        self.rows - vrow.min(self.rows)
+    }
+
     fn execute_cuu(&mut self) {
-        self.cursor_up(self.get_param(0, 1) as usize);
+        let n = self.get_param(0, 1) as usize;
+        let (vcol, vrow) = self.cursor_v();
+        let new_vrow = if n < vrow { vrow - n } else { 0 };
+
+        self.set_cursor_v(vcol, new_vrow);
     }
 
     fn execute_cud(&mut self) {
@@ -677,8 +705,11 @@ impl Vt {
     }
 
     fn execute_cpl(&mut self) {
-        self.cursor_up(self.get_param(0, 1) as usize);
-        self.do_move_cursor_to_col(self.prev_fold(self.cursor_x));
+        let n = self.get_param(0, 1) as usize;
+        let vrow = self.cursor_vrow();
+        let new_vrow = if n < vrow { vrow - n } else { 0 };
+
+        self.set_cursor_v(0, new_vrow);
     }
 
     fn execute_cha(&mut self) {
@@ -686,10 +717,16 @@ impl Vt {
     }
 
     fn execute_cup(&mut self) {
-        let vcol = (self.get_param(1, 1) as usize - 1).min(self.cols - 1);
-        let mut vrow = self.get_param(0, 1) as usize - 1;
+        let vcol = self.get_param(1, 1) as usize - 1;
+        let vrow = self.get_param(0, 1) as usize - 1;
+
+        self.set_cursor_v(vcol, vrow);
+    }
+
+    fn cursor_l(&self, mut vcol: usize, mut vrow: usize) -> (usize, usize) {
+        vcol = vcol.min(self.cols - 1);
         let vrows_per_line = self.vrows_per_line();
-        vrow = vrows_per_line.iter().sum::<usize>() - self.rows + self.adjust_row(vrow);
+        vrow = vrows_per_line.iter().sum::<usize>() - self.rows + self.adjust_vrow(vrow);
         let mut lrow = 0;
         let mut lcol_offset = 0;
 
@@ -706,8 +743,11 @@ impl Vt {
             }
         }
 
-        self.cursor_x = vcol + lcol_offset;
-        self.cursor_y = lrow;
+        (vcol + lcol_offset, lrow)
+    }
+
+    fn set_cursor_v(&mut self, vcol: usize, vrow: usize) {
+        (self.cursor_x, self.cursor_y) = self.cursor_l(vcol, vrow);
         self.next_print_wraps = false;
     }
 
@@ -1226,7 +1266,7 @@ impl Vt {
         }
     }
 
-    fn adjust_row(&self, row: usize) -> usize {
+    fn adjust_vrow(&self, row: usize) -> usize {
         let top = self.actual_top_margin();
         let bottom = self.actual_bottom_margin();
 
@@ -1284,10 +1324,6 @@ impl Vt {
         self.next_print_wraps = false;
     }
 
-    fn move_cursor_to_row(&mut self, mut row: usize) {
-        self.do_move_cursor_to_row(self.adjust_row(row));
-    }
-
     fn do_move_cursor_to_row(&mut self, row: usize) {
         if self.next_print_wraps {
             self.cursor_x -= 1;
@@ -1298,8 +1334,7 @@ impl Vt {
     }
 
     fn move_cursor_home(&mut self) {
-        self.do_move_cursor_to_col(0);
-        self.do_move_cursor_to_row(self.actual_top_margin());
+        self.set_cursor_v(0, self.actual_top_margin());
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
@@ -1339,30 +1374,6 @@ impl Vt {
             } else {
                 self.bottom_margin.min(self.cursor_y + n)
             };
-        }
-    }
-
-    fn cursor_up(&mut self, mut n: usize) {
-        if self.next_print_wraps {
-            self.cursor_x -= 1;
-            self.next_print_wraps = false;
-        }
-
-        while n > 0 && self.cursor_x >= self.cols {
-            self.cursor_x -= self.cols;
-            n -= 1;
-        }
-
-        if n > 0 {
-            let mut new_y = (self.cursor_y as isize) - (n as isize);
-
-            new_y = if self.cursor_y < self.top_margin {
-                new_y.max(0)
-            } else {
-                new_y.max(self.top_margin as isize)
-            };
-
-            self.cursor_y = new_y as usize;
         }
     }
 
@@ -1932,54 +1943,89 @@ mod tests {
         vt.feed_str("abcd\n\n\n");
 
         vt.feed_str("\x1b[A");
-        assert_eq!(text(&vt), "abcd\n\n····|\n");
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(vt.cursor_v(), (4, 2));
 
         vt.feed_str("\x1b[2A");
-        assert_eq!(text(&vt), "abcd|\n\n\n");
-    }
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.cursor_y, 0);
+        assert_eq!(vt.cursor_v(), (4, 0));
 
-    #[test]
-    fn execute_cuu_on_wrapped_lines() {
-        let mut vt = Vt::new(8, 4);
-        vt.feed_str("\n1234567812345678123456781234");
-        assert_eq!(text(&vt), "\n1234567812345678123456781234|\n\n");
+        // long lines
+
+        let mut vt = Vt::new(4, 8);
+        vt.feed_str("aa\r\nbbbbbbbbbb\r\ncc\r\ndddddd\r\nee\r\nff");
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 5);
+        assert_eq!(vt.cursor_v(), (2, 5));
 
         vt.feed_str("\x1b[A");
-        assert_eq!(text(&vt), "\n12345678123456781234|56781234\n\n");
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 4);
+        assert_eq!(vt.cursor_v(), (2, 4));
+
+        vt.feed_str("\x1b[A");
+        assert_eq!(vt.cursor_x, 6);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (2, 3));
 
         vt.feed_str("\x1b[2A");
-        assert_eq!(text(&vt), "\n1234|567812345678123456781234\n\n");
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(vt.cursor_v(), (2, 1));
 
-        vt.feed_str("\x1b[A");
-        assert_eq!(text(&vt), "····|\n1234567812345678123456781234\n\n");
+        vt.feed_str("\x1b[5A");
+        assert_eq!(vt.cursor_x, 10);
+        assert_eq!(vt.cursor_y, 1);
+        assert_eq!(vt.cursor_v(), (2, 0));
     }
 
     #[test]
     fn execute_cpl() {
         let mut vt = Vt::new(8, 4);
-        vt.feed_str("abcd\n\n\n");
+        vt.feed_str("abcd\r\n\r\n\r\n");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (0, 3));
 
         vt.feed_str("\x1b[F");
-        assert_eq!(text(&vt), "abcd\n\n|\n");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(vt.cursor_v(), (0, 2));
 
         vt.feed_str("\x1b[2F");
-        assert_eq!(text(&vt), "|abcd\n\n\n");
-    }
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 0);
+        assert_eq!(vt.cursor_v(), (0, 0));
 
-    #[test]
-    fn execute_cpl_on_wrapped_lines() {
-        let mut vt = Vt::new(8, 4);
-        vt.feed_str("\n1234567812345678123456781234");
-        assert_eq!(text(&vt), "\n1234567812345678123456781234|\n\n");
+        // long lines
+
+        let mut vt = Vt::new(8, 5);
+        vt.feed_str("\r\n\r\n\r\n\r\n1234567812345678123456781234");
+        assert_eq!(vt.cursor_x, 28);
+        assert_eq!(vt.cursor_y, 4);
+        assert_eq!(vt.cursor_v(), (4, 4));
 
         vt.feed_str("\x1b[F");
-        assert_eq!(text(&vt), "\n1234567812345678|123456781234\n\n");
+        assert_eq!(vt.cursor_x, 16);
+        assert_eq!(vt.cursor_y, 4);
+        assert_eq!(vt.cursor_v(), (0, 3));
 
         vt.feed_str("\x1b[2F");
-        assert_eq!(text(&vt), "\n|1234567812345678123456781234\n\n");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 4);
+        assert_eq!(vt.cursor_v(), (0, 1));
 
         vt.feed_str("\x1b[F");
-        assert_eq!(text(&vt), "|\n1234567812345678123456781234\n\n");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (0, 0));
+
+        vt.feed_str("\x1b[F");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (0, 0));
     }
 
     #[test]
@@ -2597,6 +2643,27 @@ mod tests {
         assert_eq!(vt.cursor_x, 2);
         assert_eq!(vt.cursor_y, 2);
         assert_eq!(buffer_as_string(&vt.buffer), "bbb\nc  \nddd\n");
+    }
+
+    #[test]
+    fn cursor_v() {
+        let mut vt = Vt::new(4, 5);
+
+        assert_eq!(vt.cursor_v(), (0, 0));
+
+        vt.feed_str("a\r\nb\r\nc\r\nd\r\ne");
+        assert_eq!(vt.cursor_v(), (1, 4));
+
+        let mut vt = Vt::new(4, 5);
+
+        vt.feed_str("a\r\nbbbbbb\r\n");
+        assert_eq!(vt.cursor_v(), (0, 2));
+
+        vt.feed_str("c\r\nd\r\neeeeee");
+        assert_eq!(vt.cursor_v(), (2, 4));
+
+        vt.feed_str("ee");
+        assert_eq!(vt.cursor_v(), (4, 4));
     }
 
     #[test]

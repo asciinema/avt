@@ -146,6 +146,13 @@ impl Line {
         }
     }
 
+    pub fn vrows_after(&self, cols: usize, col: usize) -> usize {
+        let len = self.len();
+        let rest = len - ((col / cols) * cols).min(len);
+
+        rest / cols
+    }
+
     pub fn cells(&self) -> impl Iterator<Item = (char, Pen)> + '_ {
         self.0.iter().map(|cell| (cell.0, cell.1))
     }
