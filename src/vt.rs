@@ -900,7 +900,7 @@ impl Vt {
     }
 
     fn execute_sm(&mut self) {
-        for param in self.params.clone() {
+        for param in &self.params {
             match param {
                 4 => self.insert_mode = true,
                 20 => self.new_line_mode = true,
@@ -910,7 +910,7 @@ impl Vt {
     }
 
     fn execute_rm(&mut self) {
-        for param in self.params.clone() {
+        for param in &self.params {
             match param {
                 4 => self.insert_mode = false,
                 20 => self.new_line_mode = false,
