@@ -2893,6 +2893,31 @@ mod tests {
 
             assert!(vt.buffer.iter().all(|line| line.is_empty() || !line.segments().last().unwrap().1.is_default()));
         }
+
+        #[test]
+        fn prop_cursor_v(input in gen_input(25), x in 0..10usize, y in 0..5usize) {
+            let mut vt = Vt::new(10, 5);
+
+            for c in input {
+                vt.feed(c);
+            }
+
+            vt.feed_str(&format!("\x1b[{};{}H", y + 1, x + 1));
+
+            assert_eq!(vt.cursor_v(), (x, y));
+        }
+
+        #[test]
+        fn prop_cursor_row(input in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+
+            for c in input {
+                vt.feed(c);
+            }
+
+            let (_, min_lrow) = vt.cursor_l(0, 0);
+            assert!(vt.cursor_y >= min_lrow);
+        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
