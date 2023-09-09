@@ -892,7 +892,8 @@ impl Vt {
     }
 
     fn execute_vpa(&mut self) {
-        self.move_cursor_to_row((self.get_param(0, 1) - 1) as usize);
+        let vrow = (self.get_param(0, 1) - 1) as usize;
+        self.set_cursor_v(self.cursor_vcol(), vrow);
     }
 
     fn execute_tbc(&mut self) {
@@ -2071,6 +2072,38 @@ mod tests {
         assert_eq!(vt.cursor_x, 0);
         assert_eq!(vt.cursor_y, 4);
         assert_eq!(vt.cursor_v(), (0, 4));
+    }
+
+    #[test]
+    fn execute_vpa() {
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("\r\n\r\naaa\r\nbbb");
+
+        vt.feed_str("\x1b[d");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 0);
+
+        vt.feed_str("\x1b[10d");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 3);
+
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("\r\n\r\naaa\r\nbbbbbbbbbb");
+
+        vt.feed_str("\x1b[4d");
+        assert_eq!(vt.cursor_x, 10);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (2, 3));
+
+        vt.feed_str("\x1b[2d");
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (2, 1));
+
+        vt.feed_str("\x1b[1d");
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(vt.cursor_v(), (2, 0));
     }
 
     #[test]
