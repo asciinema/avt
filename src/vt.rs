@@ -700,14 +700,18 @@ impl Vt {
     }
 
     fn execute_cnl(&mut self) {
-        self.cursor_down(self.get_param(0, 1) as usize);
-        self.do_move_cursor_to_col(0);
+        let n = self.get_param(0, 1) as usize;
+        let new_vrow = (self.cursor_vrow() + n).min(self.rows - 1);
+        // TODO is bottom margin check needed?
+
+        self.set_cursor_v(0, new_vrow);
     }
 
     fn execute_cpl(&mut self) {
         let n = self.get_param(0, 1) as usize;
         let vrow = self.cursor_vrow();
         let new_vrow = if n < vrow { vrow - n } else { 0 };
+        // TODO is top margin check needed?
 
         self.set_cursor_v(0, new_vrow);
     }
@@ -1984,10 +1988,11 @@ mod tests {
     #[test]
     fn execute_cpl() {
         let mut vt = Vt::new(8, 4);
-        vt.feed_str("abcd\r\n\r\n\r\n");
-        assert_eq!(vt.cursor_x, 0);
+
+        vt.feed_str("abcd\r\n\r\n\r\nef");
+        assert_eq!(vt.cursor_x, 2);
         assert_eq!(vt.cursor_y, 3);
-        assert_eq!(vt.cursor_v(), (0, 3));
+        assert_eq!(vt.cursor_v(), (2, 3));
 
         vt.feed_str("\x1b[F");
         assert_eq!(vt.cursor_x, 0);
@@ -2002,6 +2007,7 @@ mod tests {
         // long lines
 
         let mut vt = Vt::new(8, 5);
+
         vt.feed_str("\r\n\r\n\r\n\r\n1234567812345678123456781234");
         assert_eq!(vt.cursor_x, 28);
         assert_eq!(vt.cursor_y, 4);
@@ -2026,6 +2032,45 @@ mod tests {
         assert_eq!(vt.cursor_x, 0);
         assert_eq!(vt.cursor_y, 3);
         assert_eq!(vt.cursor_v(), (0, 0));
+    }
+
+    #[test]
+    fn execute_cnl() {
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("ab");
+
+        vt.feed_str("\x1b[E");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 1);
+        assert_eq!(vt.cursor_v(), (0, 1));
+
+        vt.feed_str("\x1b[3E");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(vt.cursor_v(), (0, 3));
+
+        // long lines
+
+        let mut vt = build_vt(4, 5, 3, 0, "\r\naaaaaaaaaa\r\ncccccc\r\ndd\r\nee");
+        assert_eq!(vt.cursor_x, 11);
+        assert_eq!(vt.cursor_y, 1);
+        assert_eq!(vt.cursor_v(), (3, 0));
+
+        vt.feed_str("\x1b[E");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(vt.cursor_v(), (0, 1));
+
+        vt.feed_str("\x1b[E");
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.cursor_y, 2);
+        println!("{}", text(&vt));
+        assert_eq!(vt.cursor_v(), (0, 2));
+
+        vt.feed_str("\x1b[3E");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 4);
+        assert_eq!(vt.cursor_v(), (0, 4));
     }
 
     #[test]
