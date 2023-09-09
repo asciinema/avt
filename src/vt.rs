@@ -2243,7 +2243,7 @@ mod tests {
 
     #[test]
     fn execute_el() {
-        // clear to the end of the line
+        // a) clear to the end of the line
 
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
         vt.feed_str("\x1b[0K");
@@ -2253,22 +2253,21 @@ mod tests {
         vt.feed_str("\x1b[0K");
         assert_eq!(text(&vt), "a·|\n");
 
-        // clear to the beginning of the line
+        // b) clear to the beginning of the line
 
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
         vt.feed_str("\x1b[1K");
         assert_eq!(text(&vt), "  | d\n");
 
-        // clear the whole line
+        // c) clear the whole line
 
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
         vt.feed_str("\x1b[2K");
         assert_eq!(text(&vt), "··|\n");
-    }
 
-    #[test]
-    fn execute_el_on_wrapped_lines() {
-        // clear to the end of the line
+        // long lines
+
+        // a) clear to the end of the line
 
         let mut vt = Vt::new(4, 1);
         vt.feed_str("abcdefgh\x1b[2D");
@@ -2276,27 +2275,35 @@ mod tests {
         vt.feed_str("\x1b[0K");
         assert_eq!(text(&vt), "abcde|");
 
-        let mut vt = Vt::new(4, 1);
-        vt.feed_str("abcdefghij\x1b[A");
-        assert_eq!(text(&vt), "abcdef|ghij");
+        let mut vt = Vt::new(4, 2);
+        vt.feed_str("\r\nabcdefghij\x1b[A");
+        assert_eq!(vt.cursor_x, 6);
+        assert_eq!(vt.cursor_y, 1);
+        assert_eq!(vt.cursor_v(), (2, 0));
+
         vt.feed_str("\x1b[0K");
-        assert_eq!(text(&vt), "abcdef|  ij");
+        assert_eq!(text(&vt), "\nabcdef|  ij");
 
-        // clear to the beginning of the line
+        // b) clear to the beginning of the line
 
-        let mut vt = Vt::new(4, 1);
-        vt.feed_str("abcdefghij\x1b[A");
-        assert_eq!(text(&vt), "abcdef|ghij");
+        let mut vt = Vt::new(4, 2);
+        vt.feed_str("\r\nabcdefghij\x1b[A");
+        assert_eq!(vt.cursor_x, 6);
+        assert_eq!(vt.cursor_y, 1);
+        assert_eq!(vt.cursor_v(), (2, 0));
+
         vt.feed_str("\x1b[1K");
-        assert_eq!(text(&vt), "abcd  | hij");
+        assert_eq!(text(&vt), "\nabcd  | hij");
 
-        // clear the whole line
+        // c) clear the whole line
 
-        let mut vt = Vt::new(4, 1);
-        vt.feed_str("abcdefghij\x1b[A");
-        assert_eq!(text(&vt), "abcdef|ghij");
+        let mut vt = Vt::new(4, 2);
+        vt.feed_str("\r\nabcdefghij\x1b[A");
+        assert_eq!(vt.cursor_x, 6);
+        assert_eq!(vt.cursor_y, 1);
+
         vt.feed_str("\x1b[2K");
-        assert_eq!(text(&vt), "abcd  |  ij");
+        assert_eq!(text(&vt), "\nabcd  |  ij");
     }
 
     #[test]
