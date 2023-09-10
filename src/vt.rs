@@ -2116,10 +2116,9 @@ mod tests {
 
         vt.feed_str("\x1b[2B");
         assert_eq!(text(&vt), "abcd\n\n\n····|");
-    }
 
-    #[test]
-    fn execute_cud_on_wrapped_lines() {
+        // long lines
+
         let mut vt = Vt::new(8, 3);
         vt.feed_str("1234567812345678123456781234");
         vt.cursor_x = 3;
