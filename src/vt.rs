@@ -2308,7 +2308,7 @@ mod tests {
 
     #[test]
     fn execute_ed() {
-        // clear to the end of the screen
+        // a) clear to the end of the screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
         vt.feed_str("\x1b[0J");
@@ -2318,34 +2318,33 @@ mod tests {
         vt.feed_str("\x1b[0J");
         assert_eq!(text(&vt), "abc\n·|\n");
 
-        // clear to the beginning of the screen
+        // b) clear to the beginning of the screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
         vt.feed_str("\x1b[1J");
         assert_eq!(text(&vt), "\n | f\nghi");
 
-        // clear the whole screen
+        // c) clear the whole screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
         vt.feed_str("\x1b[2J");
         assert_eq!(text(&vt), "\n·|\n");
-    }
 
-    #[test]
-    fn execute_ed_on_wrapped_lines() {
-        // clear to the end of the screen
+        // long lines
+
+        // a) clear to the end of the screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndefghi\r\nnop");
         vt.feed_str("\x1b[0J");
         assert_eq!(text(&vt), "abc\ndefgh|\n");
 
-        // clear to the beginning of the screen
+        // b) clear to the beginning of the screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndefghi\r\nnop");
         vt.feed_str("\x1b[1J");
         assert_eq!(text(&vt), "\n·····|\nnop");
 
-        // clear the whole screen
+        // c) clear the whole screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndefghi\r\nnop");
         vt.feed_str("\x1b[2J");
