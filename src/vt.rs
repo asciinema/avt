@@ -1384,12 +1384,74 @@ impl Vt {
 
     // scrolling
 
-    fn scroll_up(&mut self, mut n: usize) {
-        let end_index = self.bottom_margin + 1;
-        n = n.min(end_index - self.top_margin);
-        self.buffer[self.top_margin..end_index].rotate_left(n);
-        self.clear_lines((end_index - n)..end_index);
-        self.dirty_lines.extend(self.top_margin..end_index);
+    fn scroll_up(&mut self, n: usize) {
+        // backup visual cursor
+
+        let (vcol, vrow) = self.cursor_v();
+
+        // split off at the top margin
+
+        let (top_lcol, mut top_lrow) = self.cursor_l(0, self.top_margin);
+        let (bottom_lcol, mut bottom_lrow) = self.cursor_l(0, self.bottom_margin + 1);
+
+        if top_lcol > 0 {
+            let rest = self.buffer[top_lrow].split_off(top_lcol);
+            top_lrow += 1;
+            bottom_lrow += 1;
+            self.buffer.insert(top_lrow, rest);
+        }
+
+        // move lines up
+
+        let mut remaining = n;
+
+        while remaining > 0 {
+            let top_line = &mut self.buffer[top_lrow];
+            let vrows = top_line.vrows(self.cols);
+
+            if remaining < vrows {
+                let col = remaining * self.cols;
+                let rest = top_line.split_off(col);
+                self.buffer[top_lrow] = rest;
+                remaining = 0;
+            } else {
+                self.buffer.remove(top_lrow);
+                remaining -= vrows;
+                bottom_lrow -= 1;
+            }
+        }
+
+        // split off at the bottom margin
+
+        let tpl = Line::blank(self.cols, self.pen);
+
+        if self.bottom_margin < self.rows - 1 {
+            if bottom_lcol > 0 {
+                let bottom_line = &mut self.buffer[bottom_lrow];
+                let rest = bottom_line.split_off(bottom_lcol);
+                self.buffer.insert(bottom_lrow + 1, rest);
+                bottom_lrow += 1;
+            }
+
+            // add n blank lines at the bottom margin
+
+            for _ in 0..n {
+                self.buffer.insert(bottom_lrow, tpl.clone());
+            }
+        } else {
+            // add n blank lines at the bottom of the screen
+
+            for _ in 0..n {
+                self.buffer.push(tpl.clone());
+            }
+        }
+
+        // restore visual cursor
+
+        self.set_cursor_v(vcol, vrow);
+
+        // TODO mark only affected lines as dirty
+        self.dirty_lines.extend(0..self.rows);
     }
 
     fn scroll_down(&mut self, mut n: usize) {
@@ -1870,6 +1932,53 @@ mod tests {
         vt.feed_str("d\n");
 
         assert_eq!(text(&vt), "   d\n····|");
+    }
+
+    #[test]
+    fn execute_su() {
+        // short lines, default margins
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "cc\ndd\nee\nff\n\n··|");
+
+        // short lines, margins at 1 (top) and 4 (bottom)
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "|aa\ndd\nee\n\n\nff");
+
+        // long lines, default margins
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nffffffffff");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "aa\nbb\nee\nffffffffff\n\n··|");
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncccccccccc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[S");
+        assert_eq!(text(&vt), "aa\nbb\ncccccc\ndd\nee\nff\n··|");
+
+        // long lines, margins at 1 (top) and 4 (bottom)
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nffffffffff");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "aa\nbb\n|cc\nffffffff\n\n\nff");
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncccccccccc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[S");
+        assert_eq!(text(&vt), "aa\nbb\n|cccc\ncc\ndd\nee\n\nff");
     }
 
     #[test]

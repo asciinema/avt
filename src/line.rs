@@ -17,6 +17,10 @@ impl Line {
         }
     }
 
+    pub(crate) fn split_off(&mut self, at: usize) -> Self {
+        Line(self.0.split_off(at))
+    }
+
     pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
         assert!(range.start <= range.end);
 
