@@ -35,6 +35,10 @@ impl Line {
         self.0.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
     pub fn cells(&self) -> impl Iterator<Item = (char, Pen)> + '_ {
         self.0.iter().map(|cell| (cell.0, cell.1))
     }
