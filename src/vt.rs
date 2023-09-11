@@ -2621,15 +2621,6 @@ mod tests {
         let left = cursor_line.chars().take(vt.cursor_x);
         let right = cursor_line.chars().skip(vt.cursor_x);
         let mut line = String::from_iter(left);
-
-        if line.len() < vt.cursor_x {
-            let n = vt.cursor_x - line.len();
-
-            for _ in 0..n {
-                line.push('·');
-            }
-        }
-
         line.push('|');
         line.extend(right);
         lines.push(line);
