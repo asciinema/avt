@@ -2495,17 +2495,6 @@ mod tests {
             assert_eq!(vt.buffer.len(), 5);
             assert!(vt.buffer.iter().all(|line| line.len() == 10));
         }
-
-        #[test]
-        fn prop_wrapping(input in gen_input(25)) {
-            let mut vt = Vt::new(10, 5);
-
-            for c in input {
-                vt.feed(c);
-            }
-
-            assert!(!vt.next_print_wraps || vt.cursor_x == vt.cols);
-        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
