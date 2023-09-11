@@ -69,6 +69,7 @@ pub struct Vt {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     dirty_lines: HashSet<usize>,
+    resizable: bool,
     resized: bool,
 }
 
@@ -107,6 +108,7 @@ impl Vt {
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
+            resizable: false,
             resized: false,
         }
     }
@@ -1120,7 +1122,7 @@ impl Vt {
     }
 
     fn execute_xtwinops(&mut self) {
-        if self.get_param(0, 0) == 8 {
+        if self.resizable && self.get_param(0, 0) == 8 {
             let cols = self.get_param(2, self.cols as u16) as usize;
             let rows = self.get_param(1, self.rows as u16) as usize;
 
@@ -2081,6 +2083,7 @@ mod tests {
     #[test]
     fn execute_xtwinops() {
         let mut vt = build_vt(0, 3, vec!["abcdefgh", "ijklmnop", "qrstuwxy", "        "]);
+        vt.resizable = true;
 
         let (_, resized) = vt.feed_str("AAA");
         assert!(!resized);
@@ -2153,6 +2156,7 @@ mod tests {
     #[test]
     fn execute_xtwinops_when_extending() {
         let mut vt = Vt::new(6, 4);
+        vt.resizable = true;
 
         vt.feed_str("AAA\n\rBBB\n\r");
 
@@ -2169,6 +2173,7 @@ mod tests {
     #[test]
     fn execute_xtwinops_when_retracting() {
         let mut vt = Vt::new(6, 6);
+        vt.resizable = true;
 
         vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
 
@@ -2199,6 +2204,7 @@ mod tests {
     #[test]
     fn execute_xtwinops_tabs_when_resizing() {
         let mut vt = Vt::new(6, 2);
+        vt.resizable = true;
         assert_eq!(vt.tabs, vec![]);
 
         vt.feed_str("\x1b[8;;10;t");
@@ -2214,6 +2220,7 @@ mod tests {
     #[test]
     fn execute_xtwinops_saved_ctx_when_contracting() {
         let mut vt = Vt::new(20, 5);
+        vt.resizable = true;
 
         // move cursor to col 15
         vt.feed_str("xxxxxxxxxxxxxxx");
@@ -2238,6 +2245,7 @@ mod tests {
     #[test]
     fn execute_xtwinops_vs_buffer_switching() {
         let mut vt = Vt::new(4, 4);
+        vt.resizable = true;
 
         // fill primary buffer
         vt.feed_str("aaa\n\rbbb\n\rc\n\rddd");
