@@ -1837,6 +1837,48 @@ mod tests {
     }
 
     #[test]
+    fn execute_su() {
+        // short lines, default margins
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "cc\ndd\nee\nff\n\n  |");
+
+        // short lines, margins at 1 (top) and 4 (bottom)
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "|aa\ndd\nee\n\n\nff");
+    }
+
+    #[test]
+    fn execute_bs() {
+        let mut vt = Vt::new(4, 2);
+        vt.feed_str("a");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "|a\n");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "|a\n");
+
+        vt.feed_str("abcdef");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "abcd\ne|f");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "abcd\n|ef");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "abcd\n|ef");
+    }
+
+    #[test]
     fn execute_ich() {
         let mut vt = build_vt(8, 2, 3, 0, "abcdefgh\r\nijklmnop");
 
