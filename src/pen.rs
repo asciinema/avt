@@ -57,6 +57,17 @@ impl Pen {
     pub fn is_inverse(&self) -> bool {
         self.inverse
     }
+
+    pub fn is_default(&self) -> bool {
+        self.foreground.is_none()
+            && self.background.is_none()
+            && self.intensity == Intensity::Normal
+            && !self.italic
+            && !self.underline
+            && !self.strikethrough
+            && !self.blink
+            && !self.inverse
+    }
 }
 
 impl Default for Pen {
