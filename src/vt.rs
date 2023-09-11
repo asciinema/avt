@@ -1471,7 +1471,8 @@ impl Vt {
 
         // 1. dump primary screen buffer
 
-        let mut seq: String = self.dump_buffer(BufferType::Primary);
+        // TODO don't include trailing empty lines
+        let mut seq: String = self.dump_buffer(self.primary_buffer());
 
         // 2. setup tab stops
 
@@ -1528,7 +1529,7 @@ impl Vt {
             seq.push_str("\u{9b}1;1H");
 
             // dump alternate buffer
-            seq.push_str(&self.dump_buffer(BufferType::Alternate));
+            seq.push_str(&self.dump_buffer(self.alternate_buffer()));
         }
 
         // 5. configure saved context for alternate screen
@@ -1734,13 +1735,22 @@ impl Vt {
         seq
     }
 
-    fn dump_buffer(&self, buffer_type: BufferType) -> String {
-        let buffer = if self.active_buffer_type == buffer_type {
+    fn primary_buffer(&self) -> &Vec<Line> {
+        if self.active_buffer_type == BufferType::Primary {
             &self.buffer
         } else {
             &self.alternate_buffer
-        };
+        }
+    }
 
+    fn alternate_buffer(&self) -> &Vec<Line> {
+        if self.active_buffer_type == BufferType::Alternate {
+            &self.buffer
+        } else {
+            &self.alternate_buffer
+        }
+    }
+    fn dump_buffer(&self, buffer: &[Line]) -> String {
         buffer.iter().map(Dump::dump).collect()
     }
 
