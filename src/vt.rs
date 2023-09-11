@@ -670,7 +670,13 @@ impl Vt {
     }
 
     fn execute_cub(&mut self) {
-        self.move_cursor_to_rel_col(-(self.get_param(0, 1) as isize));
+        let mut rel_col = -(self.get_param(0, 1) as isize);
+
+        if self.next_print_wraps {
+            rel_col -= 1;
+        }
+
+        self.move_cursor_to_rel_col(rel_col);
     }
 
     fn execute_cnl(&mut self) {
@@ -1879,28 +1885,154 @@ mod tests {
     }
 
     #[test]
+    fn execute_cup() {
+        let mut vt = Vt::new(4, 2);
+        vt.feed_str("abc\r\ndef");
+
+        vt.feed_str("\x1b[1;1;H");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 0);
+
+        vt.feed_str("\x1b[10;10;H");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 1);
+    }
+
+    #[test]
+    fn execute_cuu() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("abcd\n\n\n");
+
+        vt.feed_str("\x1b[A");
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.cursor_y, 2);
+
+        vt.feed_str("\x1b[2A");
+        assert_eq!(vt.cursor_x, 4);
+        assert_eq!(vt.cursor_y, 0);
+    }
+
+    #[test]
+    fn execute_cpl() {
+        let mut vt = Vt::new(8, 4);
+
+        vt.feed_str("abcd\r\n\r\n\r\nef");
+        assert_eq!(vt.cursor_x, 2);
+        assert_eq!(vt.cursor_y, 3);
+
+        vt.feed_str("\x1b[F");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 2);
+
+        vt.feed_str("\x1b[2F");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 0);
+    }
+
+    #[test]
+    fn execute_cnl() {
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("ab");
+
+        vt.feed_str("\x1b[E");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 1);
+
+        vt.feed_str("\x1b[3E");
+        assert_eq!(vt.cursor_x, 0);
+        assert_eq!(vt.cursor_y, 3);
+    }
+
+    #[test]
+    fn execute_vpa() {
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("\r\n\r\naaa\r\nbbb");
+
+        vt.feed_str("\x1b[d");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 0);
+
+        vt.feed_str("\x1b[10d");
+        assert_eq!(vt.cursor_x, 3);
+        assert_eq!(vt.cursor_y, 3);
+    }
+
+    #[test]
+    fn execute_cud() {
+        let mut vt = Vt::new(8, 4);
+        vt.feed_str("abcd");
+
+        vt.feed_str("\x1b[B");
+        assert_eq!(text(&vt), "abcd\n    |\n\n");
+
+        vt.feed_str("\x1b[2B");
+        assert_eq!(text(&vt), "abcd\n\n\n    |");
+    }
+
+    #[test]
+    fn execute_cuf() {
+        let mut vt = Vt::new(4, 1);
+
+        vt.feed_str("\x1b[2C");
+        assert_eq!(text(&vt), "  |");
+
+        vt.feed_str("\x1b[2C");
+        assert_eq!(text(&vt), "   |");
+
+        vt.feed_str("a");
+        assert_eq!(text(&vt), "   a|");
+        assert!(vt.next_print_wraps);
+
+        vt.feed_str("\x1b[5C");
+        assert_eq!(text(&vt), "   |a");
+        assert!(!vt.next_print_wraps);
+
+        vt.feed_str("ab");
+        vt.feed_str("\x1b[10C");
+        assert_eq!(text(&vt), "b  |");
+    }
+
+    #[test]
+    fn execute_cub() {
+        let mut vt = Vt::new(8, 2);
+
+        vt.feed_str("abcd");
+        vt.feed_str("\x1b[2D");
+        assert_eq!(text(&vt), "ab|cd\n");
+
+        vt.feed_str("cdef");
+        vt.feed_str("\x1b[2D");
+        assert_eq!(text(&vt), "abcd|ef\n");
+
+        vt.feed_str("\x1b[10D");
+        assert_eq!(text(&vt), "|abcdef\n");
+
+        let mut vt = Vt::new(4, 2);
+
+        vt.feed_str("abcd");
+        vt.feed_str("\x1b[D");
+        assert_eq!(text(&vt), "ab|cd\n");
+    }
+
+    #[test]
     fn execute_ich() {
-        let mut vt = build_vt(8, 2, 3, 0, "abcdefgh\r\nijklmnop");
+        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijklmnop");
 
         vt.feed_str("\x1b[@");
 
         assert_eq!(vt.cursor_x, 3);
-
-        assert_eq!(dump_lines(&vt), vec!["abc defg", "ijklmnop"]);
+        assert_eq!(text(&vt), "abc| defg\nijklmnop");
 
         vt.feed_str("\x1b[2@");
-
-        assert_eq!(dump_lines(&vt), vec!["abc   de", "ijklmnop"]);
-
-        vt.feed_str("\x1b[10@");
-
-        assert_eq!(dump_lines(&vt), vec!["abc     ", "ijklmnop"]);
-
-        let mut vt = build_vt(8, 2, 7, 0, "abcdefgh\r\nijklmnop");
+        assert_eq!(text(&vt), "abc|   de\nijklmnop");
 
         vt.feed_str("\x1b[10@");
+        assert_eq!(text(&vt), "abc|\nijklmnop");
 
-        assert_eq!(dump_lines(&vt), vec!["abcdefg ", "ijklmnop"]);
+        let mut vt = build_vt(8, 2, 7, 0, "abcdefghijklmnop");
+
+        vt.feed_str("\x1b[10@");
+        assert_eq!(text(&vt), "abcdefg|\nijklmnop");
     }
 
     #[test]
@@ -1908,23 +2040,17 @@ mod tests {
         let mut vt = build_vt(8, 3, 3, 1, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
 
         vt.feed_str("\x1b[L");
-
         assert_eq!(vt.cursor_x, 3);
         assert_eq!(vt.cursor_y, 1);
-
-        assert_eq!(dump_lines(&vt), vec!["abcdefgh", "        ", "ijklmnop"]);
+        assert_eq!(text(&vt), "abcdefgh\n   |\nijklmnop");
 
         vt.cursor_y = 0;
-
         vt.feed_str("\x1b[2L");
-
-        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "abcdefgh"]);
+        assert_eq!(text(&vt), "   |\n\nabcdefgh");
 
         vt.cursor_y = 1;
-
         vt.feed_str("\x1b[100L");
-
-        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "        "]);
+        assert_eq!(text(&vt), "\n   |\n");
     }
 
     #[test]
@@ -1932,17 +2058,61 @@ mod tests {
         let mut vt = build_vt(8, 3, 3, 1, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
 
         vt.feed_str("\x1b[M");
-
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.cursor_y, 1);
-
-        assert_eq!(dump_lines(&vt), vec!["abcdefgh", "qrstuwxy", "        "]);
+        assert_eq!(text(&vt), "abcdefgh\nqrs|tuwxy\n");
 
         vt.cursor_y = 0;
-
         vt.feed_str("\x1b[5M");
+        assert_eq!(text(&vt), "   |\n\n");
+    }
 
-        assert_eq!(dump_lines(&vt), vec!["        ", "        ", "        "]);
+    #[test]
+    fn execute_el() {
+        // a) clear to the end of the line
+
+        let mut vt = build_vt(4, 2, 2, 0, "abcd");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "ab|\n");
+
+        let mut vt = build_vt(4, 2, 2, 0, "a");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "a |\n");
+
+        // b) clear to the beginning of the line
+
+        let mut vt = build_vt(4, 2, 2, 0, "abcd");
+        vt.feed_str("\x1b[1K");
+        assert_eq!(text(&vt), "  | d\n");
+
+        // c) clear the whole line
+
+        let mut vt = build_vt(4, 2, 2, 0, "abcd");
+        vt.feed_str("\x1b[2K");
+        assert_eq!(text(&vt), "  |\n");
+    }
+
+    #[test]
+    fn execute_ed() {
+        // a) clear to the end of the screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+        vt.feed_str("\x1b[0J");
+        assert_eq!(text(&vt), "abc\nd|\n");
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\n\r\nghi");
+        vt.feed_str("\x1b[0J");
+        assert_eq!(text(&vt), "abc\n |\n");
+
+        // b) clear to the beginning of the screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+        vt.feed_str("\x1b[1J");
+        assert_eq!(text(&vt), "\n | f\nghi");
+
+        // c) clear the whole screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+        vt.feed_str("\x1b[2J");
+        assert_eq!(text(&vt), "\n |\n");
     }
 
     #[test]
@@ -1950,18 +2120,17 @@ mod tests {
         let mut vt = build_vt(8, 1, 3, 0, "abcdefgh");
 
         vt.feed_str("\x1b[P");
-
-        assert_eq!(vt.cursor_x, 3);
-
-        assert_eq!(dump_lines(&vt), vec!["abcefgh "]);
+        assert_eq!(text(&vt), "abc|efgh");
 
         vt.feed_str("\x1b[2P");
-
-        assert_eq!(dump_lines(&vt), vec!["abcgh   "]);
+        assert_eq!(text(&vt), "abc|gh");
 
         vt.feed_str("\x1b[10P");
+        assert_eq!(text(&vt), "abc|");
 
-        assert_eq!(dump_lines(&vt), vec!["abc     "]);
+        vt.feed_str("\x1b[10C");
+        vt.feed_str("\x1b[10P");
+        assert_eq!(text(&vt), "abc    |");
     }
 
     #[test]
@@ -1971,16 +2140,16 @@ mod tests {
         vt.feed_str("\x1b[X");
 
         assert_eq!(vt.cursor_x, 3);
-
-        assert_eq!(dump_lines(&vt), vec!["abc efgh"]);
+        assert_eq!(text(&vt), "abc| efgh");
 
         vt.feed_str("\x1b[2X");
-
-        assert_eq!(dump_lines(&vt), vec!["abc  fgh"]);
+        assert_eq!(text(&vt), "abc|  fgh");
 
         vt.feed_str("\x1b[10X");
+        assert_eq!(text(&vt), "abc|");
 
-        assert_eq!(dump_lines(&vt), vec!["abc     "]);
+        vt.feed_str("\x1b[3C\x1b[X");
+        assert_eq!(text(&vt), "abc   |");
     }
 
     #[test]
@@ -1988,15 +2157,12 @@ mod tests {
         let mut vt = build_vt(28, 1, 3, 0, "abcdefghijklmnopqrstuwxyzabc");
 
         vt.feed_str("\x1b[I");
-
         assert_eq!(vt.cursor_x, 8);
 
         vt.feed_str("\x1b[2I");
-
         assert_eq!(vt.cursor_x, 24);
 
         vt.feed_str("\x1b[I");
-
         assert_eq!(vt.cursor_x, 27);
     }
 
@@ -2005,15 +2171,12 @@ mod tests {
         let mut vt = build_vt(28, 1, 26, 0, "abcdefghijklmnopqrstuwxyzabc");
 
         vt.feed_str("\x1b[Z");
-
         assert_eq!(vt.cursor_x, 24);
 
         vt.feed_str("\x1b[2Z");
-
         assert_eq!(vt.cursor_x, 8);
 
         vt.feed_str("\x1b[Z");
-
         assert_eq!(vt.cursor_x, 0);
     }
 
@@ -2411,18 +2574,7 @@ mod tests {
         // GL points to G0, G0 is set back to ascii
         vt.feed_str("\x1b(B\u{0f}alpty");
 
-        assert_eq!(
-            dump_lines(&vt),
-            vec![
-                "alpty ",
-                "▒┌⎻├≤ ",
-                "alpty ",
-                "▒┌⎻├≤ ",
-                "alpty ",
-                "alpty ",
-                "      ",
-            ]
-        );
+        assert_eq!(text(&vt), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
     }
 
     fn gen_ctl_seq() -> impl Strategy<Value = Vec<char>> {
@@ -2576,14 +2728,6 @@ mod tests {
         vt.feed_str(&format!("\u{9b}{};{}H", cy + 1, cx + 1));
 
         vt
-    }
-
-    fn dump_lines(vt: &Vt) -> Vec<String> {
-        vt.buffer.iter().map(dump_line).collect()
-    }
-
-    fn dump_line(line: &Line) -> String {
-        line.cells().map(|cell| cell.0).collect()
     }
 
     fn assert_vts_eq(vt1: &Vt, vt2: &Vt) {
