@@ -14,11 +14,22 @@ impl Line {
     }
 
     pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
-        let tpl = Cell::blank(*pen);
+        self.0[range].fill(Cell::blank(*pen));
+    }
 
-        for cell in &mut self.0[range] {
-            *cell = tpl;
-        }
+    pub(crate) fn print(&mut self, col: usize, cell: Cell) {
+        self.0[col] = cell;
+    }
+
+    pub(crate) fn insert(&mut self, col: usize, n: usize, cell: Cell) {
+        self.0[col..].rotate_right(n);
+        self.0[col..col + n].fill(cell);
+    }
+
+    pub(crate) fn delete(&mut self, col: usize, n: usize, pen: &Pen) {
+        self.0[col..].rotate_left(n);
+        let start = self.0.len() - n;
+        self.0[start..].fill(Cell::blank(*pen));
     }
 
     pub(crate) fn expand(&mut self, increment: usize, pen: &Pen) {

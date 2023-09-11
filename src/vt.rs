@@ -473,7 +473,7 @@ impl Vt {
         let next_column = self.cursor_x + 1;
 
         if next_column >= self.cols {
-            self.set_cell(self.cols - 1, self.cursor_y, cell);
+            self.buffer[self.cursor_y].print(self.cols - 1, cell);
 
             if self.auto_wrap_mode {
                 self.do_move_cursor_to_col(self.cols);
@@ -481,10 +481,11 @@ impl Vt {
             }
         } else {
             if self.insert_mode {
-                self.buffer[self.cursor_y].0[self.cursor_x..].rotate_right(1);
+                self.buffer[self.cursor_y].insert(self.cursor_x, 1, cell);
+            } else {
+                self.buffer[self.cursor_y].print(self.cursor_x, cell);
             }
 
-            self.set_cell(self.cursor_x, self.cursor_y, cell);
             self.do_move_cursor_to_col(next_column);
         }
 
@@ -587,12 +588,12 @@ impl Vt {
     }
 
     fn execute_decaln(&mut self) {
-        for y in 0..self.rows {
-            for x in 0..self.cols {
-                self.set_cell(x, y, Cell('\u{45}', Pen::default()));
+        for row in 0..self.rows {
+            for col in 0..self.cols {
+                self.buffer[row].print(col, Cell('\u{45}', Pen::default()));
             }
 
-            self.dirty_lines.insert(y);
+            self.dirty_lines.insert(row);
         }
     }
 
@@ -652,14 +653,7 @@ impl Vt {
     fn execute_ich(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
-        let tpl = Cell::blank(self.pen);
-        let cells = &mut self.buffer[self.cursor_y].0[self.cursor_x..];
-        cells.rotate_right(n);
-
-        for cell in &mut cells[0..n] {
-            *cell = tpl;
-        }
-
+        self.buffer[self.cursor_y].insert(self.cursor_x, n, Cell::blank(self.pen));
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -705,21 +699,21 @@ impl Vt {
     fn execute_ed(&mut self) {
         match self.get_param(0, 0) {
             0 => {
-                // clear to end of screen
-                self.clear_line(self.cursor_x..self.cols);
+                // clear to the end of the screen
+                self.buffer[self.cursor_y].clear(self.cursor_x..self.cols, &self.pen);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
                 self.dirty_lines.extend(self.cursor_y..self.rows);
             }
 
             1 => {
-                // clear to beginning of screen
+                // clear to the beginning of the screen
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.clear_lines(0..self.cursor_y);
                 self.dirty_lines.extend(0..(self.cursor_y + 1));
             }
 
             2 => {
-                // clear whole screen
+                // clear the whole screen
                 self.clear_lines(0..self.rows);
                 self.dirty_lines.extend(0..self.rows);
             }
@@ -731,19 +725,19 @@ impl Vt {
     fn execute_el(&mut self) {
         match self.get_param(0, 0) {
             0 => {
-                // clear to end of line
+                // clear to the end of current line
                 self.clear_line(self.cursor_x..self.cols);
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             1 => {
-                // clear to begining of line
+                // clear to the begining of current line
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             2 => {
-                // clear whole line
+                // clear whole current line
                 self.clear_line(0..self.cols);
                 self.dirty_lines.insert(self.cursor_y);
             }
@@ -793,8 +787,7 @@ impl Vt {
 
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
-        self.buffer[self.cursor_y].0[self.cursor_x..].rotate_left(n);
-        self.clear_line((self.cols - n)..self.cols);
+        self.buffer[self.cursor_y].delete(self.cursor_x, n, &self.pen);
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -1163,10 +1156,6 @@ impl Vt {
     }
 
     // screen
-
-    fn set_cell(&mut self, x: usize, y: usize, cell: Cell) {
-        self.buffer[y].0[x] = cell;
-    }
 
     fn set_tab(&mut self) {
         if 0 < self.cursor_x && self.cursor_x < self.cols {
