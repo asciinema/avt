@@ -1763,9 +1763,6 @@ impl Vt {
 }
 
 #[cfg(test)]
-extern crate quickcheck;
-
-#[cfg(test)]
 mod tests {
     use super::BufferType;
     use super::Color;
@@ -1774,50 +1771,10 @@ mod tests {
     use super::State;
     use super::Vt;
     use pretty_assertions::assert_eq;
-    use quickcheck::{quickcheck, TestResult};
+    use proptest::prelude::*;
     use rgb::RGB8;
     use std::env;
     use std::fs;
-
-    #[quickcheck]
-    fn qc_cursor_position(bytes: Vec<u8>) -> bool {
-        let mut vt = Vt::new(10, 4);
-
-        for b in bytes.iter() {
-            vt.feed((*b) as char);
-        }
-
-        vt.cursor_x <= 10 && vt.cursor_y < 4
-    }
-
-    #[quickcheck]
-    fn qc_buffer_size(bytes: Vec<u8>) -> bool {
-        let mut vt = Vt::new(10, 4);
-
-        for b in bytes.iter() {
-            vt.feed((*b) as char);
-        }
-
-        vt.buffer.len() == 4 && vt.buffer.iter().all(|line| line.len() == 10)
-    }
-
-    #[quickcheck]
-    fn qc_wrapping(y: u8, bytes: Vec<u8>) -> TestResult {
-        if y >= 5 {
-            return TestResult::discard();
-        }
-
-        let mut vt = Vt::new(10, 5);
-
-        vt.cursor_x = 9;
-        vt.cursor_y = y as usize;
-
-        for b in bytes.iter() {
-            vt.feed((*b) as char);
-        }
-
-        TestResult::from_bool(!vt.next_print_wraps || vt.cursor_x == 10)
-    }
 
     // #[test]
     // fn failed() {
@@ -2405,6 +2362,149 @@ mod tests {
                 "      ",
             ]
         );
+    }
+
+    fn gen_ctl_seq() -> impl Strategy<Value = Vec<char>> {
+        let opts = vec![0x00..0x18, 0x19..0x1a, 0x1c..0x20];
+        let vals: Vec<_> = opts.into_iter().flatten().collect();
+
+        prop::sample::select(vals).prop_map(|v: u8| vec![v as char])
+    }
+
+    fn gen_intermediate() -> impl Strategy<Value = char> {
+        (0x20..0x30u8).prop_map(|v| v as char)
+    }
+
+    fn gen_esc_finalizer() -> impl Strategy<Value = char> {
+        let opts = vec![
+            0x30..0x50,
+            0x51..0x58,
+            0x59..0x5a,
+            0x5a..0x5b,
+            0x5c..0x5d,
+            0x60..0x7f,
+        ];
+
+        let vals: Vec<_> = opts.into_iter().flatten().collect();
+
+        prop::sample::select(vals).prop_map(|v: u8| v as char)
+    }
+
+    fn gen_esc_seq() -> impl Strategy<Value = Vec<char>> {
+        (
+            prop::collection::vec(gen_intermediate(), 0..=2),
+            gen_esc_finalizer(),
+        )
+            .prop_map(|(inters, fin)| {
+                vec![vec![0x1b as char], inters, vec![fin]]
+                    .into_iter()
+                    .flatten()
+                    .collect()
+            })
+    }
+
+    fn gen_param() -> impl Strategy<Value = char> {
+        (0x30..0x3au8).prop_map(|v| v as char)
+    }
+
+    fn gen_params() -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(
+            prop_oneof![gen_param(), gen_param(), prop::sample::select(vec![';'])],
+            0..=5,
+        )
+    }
+
+    fn gen_csi_finalizer() -> impl Strategy<Value = char> {
+        (0x40..0x7fu8).prop_map(|v| v as char)
+    }
+
+    fn gen_csi_seq() -> impl Strategy<Value = Vec<char>> {
+        (gen_params(), gen_csi_finalizer()).prop_map(|(params, fin)| {
+            vec![vec![0x1b as char, '['], params, vec![fin]]
+                .into_iter()
+                .flatten()
+                .collect()
+        })
+    }
+
+    fn gen_sgr_seq() -> impl Strategy<Value = Vec<char>> {
+        gen_params().prop_map(|params| {
+            vec![vec![0x1b as char, '['], params, vec!['m']]
+                .into_iter()
+                .flatten()
+                .collect()
+        })
+    }
+
+    fn gen_ascii_char() -> impl Strategy<Value = char> {
+        (0x20..=0x7fu8).prop_map(|v| v as char)
+    }
+
+    fn gen_char() -> impl Strategy<Value = char> {
+        prop_oneof![
+            gen_ascii_char(),
+            gen_ascii_char(),
+            gen_ascii_char(),
+            gen_ascii_char(),
+            gen_ascii_char(),
+            (0x80..=0xd7ffu32).prop_map(|v| char::from_u32(v).unwrap()),
+            (0xf900..=0xffffu32).prop_map(|v| char::from_u32(v).unwrap())
+        ]
+    }
+
+    fn gen_text() -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(gen_char(), 1..10)
+    }
+
+    fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(
+            prop_oneof![
+                gen_ctl_seq(),
+                gen_esc_seq(),
+                gen_csi_seq(),
+                gen_sgr_seq(),
+                gen_text()
+            ],
+            1..=max_len,
+        )
+        .prop_map(|inputs| inputs.into_iter().flatten().collect())
+    }
+
+    proptest! {
+        #[test]
+        fn prop_cursor_position(input in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+
+            for c in input {
+                vt.feed(c);
+            }
+
+            assert!(vt.cursor_x < 10 || vt.next_print_wraps && vt.cursor_x == 10);
+            assert!(vt.cursor_y < 5);
+        }
+
+        #[test]
+        fn prop_buffer_size(input in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+
+            for c in input {
+                vt.feed(c);
+            }
+
+            assert_eq!(vt.buffer.len(), 5);
+            assert!(vt.buffer.iter().all(|line| line.len() == 10));
+        }
+
+        #[test]
+        fn prop_wrapping(input in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+
+            for c in input {
+                vt.feed(c);
+            }
+
+            assert!(!vt.next_print_wraps || vt.cursor_x == vt.cols);
+        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {

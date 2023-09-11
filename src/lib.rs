@@ -13,7 +13,3 @@ pub use line::Line;
 pub use pen::Pen;
 pub use segment::Segment;
 pub use vt::Vt;
-
-#[cfg(test)]
-#[macro_use(quickcheck)]
-extern crate quickcheck_macros;
