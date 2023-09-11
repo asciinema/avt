@@ -2018,6 +2018,25 @@ mod tests {
     }
 
     #[test]
+    fn execute_rep() {
+        let mut vt = build_vt(20, 2, 0, 0, "");
+
+        vt.feed_str("\x1b[b"); // REP
+        assert_eq!(text(&vt), "|\n");
+
+        vt.feed_str("A");
+        vt.feed_str("\x1b[b");
+        assert_eq!(text(&vt), "AA|\n");
+
+        vt.feed_str("\x1b[3b");
+        assert_eq!(text(&vt), "AAAAA|\n");
+
+        vt.feed_str("\x1b[5C"); // move 5 cols to the right
+        vt.feed_str("\x1b[b");
+        assert_eq!(text(&vt), "AAAAA      |\n");
+    }
+
+    #[test]
     fn execute_sgr() {
         let mut vt = build_vt(4, 1, 0, 0, "abcd");
 
