@@ -545,7 +545,7 @@ impl Vt {
             (None, 'a') => self.execute_cuf(),
             (None, 'b') => self.execute_rep(),
             (None, 'd') => self.execute_vpa(),
-            (None, 'e') => self.execute_cuu(),
+            (None, 'e') => self.execute_cud(),
             (None, 'f') => self.execute_cup(),
             (None, 'g') => self.execute_tbc(),
             (None, 'h') => self.execute_sm(),
