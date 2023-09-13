@@ -606,7 +606,11 @@ impl Vt {
     }
 
     fn execute_bs(&mut self) {
-        self.move_cursor_to_rel_col(-1);
+        if self.next_print_wraps {
+            self.move_cursor_to_rel_col(-2);
+        } else {
+            self.move_cursor_to_rel_col(-1);
+        }
     }
 
     fn execute_ht(&mut self) {
@@ -1868,7 +1872,12 @@ mod tests {
         vt.feed_str("\x08");
         assert_eq!(text(&vt), "|a\n");
 
-        vt.feed_str("abcdef");
+        vt.feed_str("abcd");
+
+        vt.feed_str("\x08");
+        assert_eq!(text(&vt), "ab|cd\n");
+
+        vt.feed_str("cdef");
 
         vt.feed_str("\x08");
         assert_eq!(text(&vt), "abcd\ne|f");
