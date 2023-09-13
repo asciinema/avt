@@ -1182,11 +1182,7 @@ impl Vt {
     }
 
     fn clear_lines(&mut self, range: Range<usize>) {
-        let tpl = Line::blank(self.cols, self.pen);
-
-        for line in &mut self.buffer[range] {
-            *line = tpl.clone();
-        }
+        self.buffer[range].fill(Line::blank(self.cols, self.pen));
     }
 
     fn get_param(&self, n: usize, default: u16) -> u16 {
