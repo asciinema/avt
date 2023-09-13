@@ -801,6 +801,7 @@ impl Vt {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
         self.buffer[self.cursor_y].delete(self.cursor_x, n, &self.pen);
+        self.buffer[self.cursor_y].wrapped = false;
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -2271,20 +2272,22 @@ mod tests {
 
     #[test]
     fn execute_dch() {
-        let mut vt = build_vt(8, 1, 3, 0, "abcdefgh");
+        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijkl");
 
         vt.feed_str("\x1b[P");
-        assert_eq!(text(&vt), "abc|efgh");
+        assert_eq!(text(&vt), "abc|efgh\nijkl");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
 
         vt.feed_str("\x1b[2P");
-        assert_eq!(text(&vt), "abc|gh");
+        assert_eq!(text(&vt), "abc|gh\nijkl");
 
         vt.feed_str("\x1b[10P");
-        assert_eq!(text(&vt), "abc|");
+        assert_eq!(text(&vt), "abc|\nijkl");
 
         vt.feed_str("\x1b[10C");
         vt.feed_str("\x1b[10P");
-        assert_eq!(text(&vt), "abc    |");
+        assert_eq!(text(&vt), "abc    |\nijkl");
     }
 
     #[test]
