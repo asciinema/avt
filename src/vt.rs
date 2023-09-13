@@ -2789,10 +2789,7 @@ mod tests {
         let mut s = "".to_owned();
 
         for line in buffer {
-            for cell in &line.0 {
-                s.push(cell.0);
-            }
-
+            s.push_str(&line.text());
             s.push('\n');
         }
 
