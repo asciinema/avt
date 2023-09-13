@@ -548,7 +548,7 @@ impl Vt {
             (None, 'a') => self.execute_cuf(),
             (None, 'b') => self.execute_rep(),
             (None, 'd') => self.execute_vpa(),
-            (None, 'e') => self.execute_cud(),
+            (None, 'e') => self.execute_vpr(),
             (None, 'f') => self.execute_cup(),
             (None, 'g') => self.execute_tbc(),
             (None, 'h') => self.execute_sm(),
@@ -842,6 +842,10 @@ impl Vt {
 
     fn execute_vpa(&mut self) {
         self.move_cursor_to_row((self.get_param(0, 1) - 1) as usize);
+    }
+
+    fn execute_vpr(&mut self) {
+        self.cursor_down(self.get_param(0, 1) as usize);
     }
 
     fn execute_tbc(&mut self) {
