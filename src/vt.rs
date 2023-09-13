@@ -1346,6 +1346,14 @@ impl Vt {
         self.buffer[self.top_margin..end_index].rotate_right(n);
         self.clear_lines(self.top_margin..self.top_margin + n);
         self.dirty_lines.extend(self.top_margin..end_index);
+
+        if self.top_margin > 0 {
+            self.buffer[self.top_margin - 1].wrapped = false;
+        }
+
+        if self.bottom_margin < self.rows - 1 {
+            self.buffer[self.bottom_margin].wrapped = false;
+        }
     }
 
     // buffer switching
@@ -1894,6 +1902,53 @@ mod tests {
         vt.feed_str("\x1b[1;1H");
         vt.feed_str("\x1b[2S");
         assert_eq!(text(&vt), "|aaaa\nbb\ncccc\n\n\ncc");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
+        assert!(!vt.buffer[4].wrapped);
+        assert!(!vt.buffer[5].wrapped);
+    }
+
+    #[test]
+    fn execute_sd() {
+        // short lines, default margins
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2T");
+        assert_eq!(text(&vt), "\n\naa\nbb\ncc\ndd|");
+
+        // short lines, margins at 1 (top) and 4 (bottom)
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[2T");
+        assert_eq!(text(&vt), "|aa\n\n\nbb\ncc\nff");
+
+        // wrapped lines, default margins
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
+        vt.feed_str("\x1b[2T");
+        assert_eq!(text(&vt), "\n\naaaa\naa\nbbbb\nbb|");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
+        assert!(vt.buffer[4].wrapped);
+        assert!(!vt.buffer[5].wrapped);
+
+        // wrapped lines, margins at 1 (top) and 4 (bottom)
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[2T");
+        assert_eq!(text(&vt), "|aaaa\n\n\naa\nbbbb\ncc");
         assert!(!vt.buffer[0].wrapped);
         assert!(!vt.buffer[1].wrapped);
         assert!(!vt.buffer[2].wrapped);
