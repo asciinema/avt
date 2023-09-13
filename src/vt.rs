@@ -824,7 +824,7 @@ impl Vt {
     fn execute_rep(&mut self) {
         if self.cursor_x > 0 {
             let n = self.get_param(0, 1);
-            let char = self.buffer[self.cursor_y].0[self.cursor_x - 1].0;
+            let char = self.buffer[self.cursor_y][self.cursor_x - 1].0;
 
             for _n in 0..n {
                 self.print(char);
@@ -1613,7 +1613,7 @@ impl Vt {
         if self.cursor_x >= self.cols {
             // move cursor past right border by re-printing the character in
             // the last column
-            let cell = self.buffer[self.cursor_y].0[self.cols - 1];
+            let cell = self.buffer[self.cursor_y][self.cols - 1];
             seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
         }
 
