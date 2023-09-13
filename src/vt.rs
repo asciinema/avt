@@ -2137,23 +2137,24 @@ mod tests {
 
     #[test]
     fn execute_ich() {
-        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijklmnop");
+        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijklmn");
 
         vt.feed_str("\x1b[@");
-
         assert_eq!(vt.cursor_x, 3);
-        assert_eq!(text(&vt), "abc| defg\nijklmnop");
+        assert_eq!(text(&vt), "abc| defg\nijklmn");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
 
         vt.feed_str("\x1b[2@");
-        assert_eq!(text(&vt), "abc|   de\nijklmnop");
+        assert_eq!(text(&vt), "abc|   de\nijklmn");
 
         vt.feed_str("\x1b[10@");
-        assert_eq!(text(&vt), "abc|\nijklmnop");
+        assert_eq!(text(&vt), "abc|\nijklmn");
 
-        let mut vt = build_vt(8, 2, 7, 0, "abcdefghijklmnop");
+        let mut vt = build_vt(8, 2, 7, 0, "abcdefghijklmn");
 
         vt.feed_str("\x1b[10@");
-        assert_eq!(text(&vt), "abcdefg|\nijklmnop");
+        assert_eq!(text(&vt), "abcdefg|\nijklmn");
     }
 
     #[test]
