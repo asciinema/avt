@@ -8,12 +8,14 @@ use crate::segment::Segment;
 #[derive(Debug, Clone)]
 pub struct Line {
     pub(crate) cells: Vec<Cell>,
+    pub(crate) wrapped: bool,
 }
 
 impl Line {
     pub(crate) fn blank(cols: usize, pen: Pen) -> Self {
         Line {
             cells: vec![Cell::blank(pen); cols],
+            wrapped: false,
         }
     }
 

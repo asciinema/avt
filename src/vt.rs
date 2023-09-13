@@ -456,6 +456,7 @@ impl Vt {
 
     fn print(&mut self, mut input: char) {
         if self.auto_wrap_mode && self.next_print_wraps {
+            self.buffer[self.cursor_y].wrapped = true;
             self.do_move_cursor_to_col(0);
 
             let next_row = self.cursor_y + 1;
@@ -1324,6 +1325,14 @@ impl Vt {
     // scrolling
 
     fn scroll_up(&mut self, mut n: usize) {
+        if self.top_margin > 0 {
+            self.buffer[self.top_margin - 1].wrapped = false;
+        }
+
+        if self.bottom_margin < self.rows - 1 {
+            self.buffer[self.bottom_margin].wrapped = false;
+        }
+
         let end_index = self.bottom_margin + 1;
         n = n.min(end_index - self.top_margin);
         self.buffer[self.top_margin..end_index].rotate_left(n);
@@ -1863,6 +1872,34 @@ mod tests {
         vt.feed_str("\x1b[1;1H");
         vt.feed_str("\x1b[2S");
         assert_eq!(text(&vt), "|aa\ndd\nee\n\n\nff");
+
+        // wrapped lines, default margins
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "bbbb\nbb\ncccc\ncc\n\n  |");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
+        assert!(!vt.buffer[4].wrapped);
+        assert!(!vt.buffer[5].wrapped);
+
+        // wrapped lines, margins at 1 (top) and 4 (bottom)
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
+        vt.feed_str("\x1b[2;5r");
+        vt.feed_str("\x1b[1;1H");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "|aaaa\nbb\ncccc\n\n\ncc");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
+        assert!(!vt.buffer[4].wrapped);
+        assert!(!vt.buffer[5].wrapped);
     }
 
     #[test]
