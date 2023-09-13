@@ -736,13 +736,14 @@ impl Vt {
     fn execute_el(&mut self) {
         match self.get_param(0, 0) {
             0 => {
-                // clear to the end of current line
+                // clear to the end of the current line
                 self.clear_line(self.cursor_x..self.cols);
+                self.buffer[self.cursor_y].wrapped = false;
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             1 => {
-                // clear to the begining of current line
+                // clear to the begining of the current line
                 self.clear_line(0..(self.cursor_x + 1).min(self.cols));
                 self.dirty_lines.insert(self.cursor_y);
             }
@@ -750,6 +751,7 @@ impl Vt {
             2 => {
                 // clear whole current line
                 self.clear_line(0..self.cols);
+                self.buffer[self.cursor_y].wrapped = false;
                 self.dirty_lines.insert(self.cursor_y);
             }
 
@@ -2185,6 +2187,8 @@ mod tests {
 
     #[test]
     fn execute_el() {
+        // short lines
+
         // a) clear to the end of the line
 
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
@@ -2206,6 +2210,38 @@ mod tests {
         let mut vt = build_vt(4, 2, 2, 0, "abcd");
         vt.feed_str("\x1b[2K");
         assert_eq!(text(&vt), "  |\n");
+
+        // wrapped lines
+
+        // a) clear to the end of the line
+
+        let mut vt = Vt::new(4, 3);
+        vt.feed_str("abcdefghij\x1b[A");
+        vt.feed_str("\x1b[0K");
+        assert_eq!(text(&vt), "abcd\nef|\nij");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+
+        // b) clear to the beginning of the line
+
+        let mut vt = Vt::new(4, 3);
+        vt.feed_str("abcdefghij\x1b[A");
+        vt.feed_str("\x1b[1K");
+        assert_eq!(text(&vt), "abcd\n  | h\nij");
+        assert!(vt.buffer[0].wrapped);
+        assert!(vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+
+        // c) clear the whole line
+
+        let mut vt = Vt::new(4, 3);
+        vt.feed_str("abcdefghij\x1b[A");
+        vt.feed_str("\x1b[2K");
+        assert_eq!(text(&vt), "abcd\n  |\nij");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
     }
 
     #[test]
