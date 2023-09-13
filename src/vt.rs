@@ -1831,6 +1831,23 @@ mod tests {
     }
 
     #[test]
+    fn auto_wrap_mode() {
+        // auto wrap
+
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("\x1b[?7h");
+        vt.feed_str("abcdef");
+        assert_eq!(text(&vt), "abcd\nef|\n\n");
+
+        // no auto wrap
+
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("\x1b[?7l");
+        vt.feed_str("abcdef");
+        assert_eq!(text(&vt), "abc|f\n\n\n");
+    }
+
+    #[test]
     fn execute_lf() {
         let mut vt = build_vt(8, 2, 3, 0, "abc");
 
