@@ -786,11 +786,16 @@ impl Vt {
     fn execute_dl(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
 
+        if self.cursor_y > 0 {
+            self.buffer[self.cursor_y - 1].wrapped = false;
+        }
+
         if self.cursor_y <= self.bottom_margin {
             let end_index = self.bottom_margin + 1;
             n = n.min(end_index - self.cursor_y);
             self.buffer[self.cursor_y..end_index].rotate_left(n);
             self.clear_lines((end_index - n)..end_index);
+            self.buffer[self.bottom_margin - 1].wrapped = false;
             self.dirty_lines.extend(self.cursor_y..end_index);
         } else {
             n = n.min(self.rows - self.cursor_y);
@@ -2190,14 +2195,44 @@ mod tests {
 
     #[test]
     fn execute_dl() {
-        let mut vt = build_vt(8, 3, 3, 1, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("abcdefghijklmn");
 
+        vt.feed_str("\x1b[2A");
         vt.feed_str("\x1b[M");
-        assert_eq!(text(&vt), "abcdefgh\nqrs|tuwxy\n");
+        assert_eq!(text(&vt), "abcd\nij|kl\nmn\n");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
 
-        vt.cursor_y = 0;
-        vt.feed_str("\x1b[5M");
-        assert_eq!(text(&vt), "   |\n\n");
+        // cursor above bottom margin
+
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("abcdefghijklmn");
+
+        vt.feed_str("\x1b[1;3r");
+        vt.feed_str("\x1b[2;1H");
+        vt.feed_str("\x1b[M");
+        assert_eq!(text(&vt), "abcd\n|ijkl\n\nmn");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
+
+        // cursor below bottom margin
+
+        let mut vt = Vt::new(4, 4);
+        vt.feed_str("abcdefghijklmn");
+
+        vt.feed_str("\x1b[1;2r");
+        vt.feed_str("\x1b[4;1H");
+        vt.feed_str("\x1b[M");
+        assert_eq!(text(&vt), "abcd\nefgh\nijkl\n|");
+        assert!(vt.buffer[0].wrapped);
+        assert!(vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
     }
 
     #[test]
