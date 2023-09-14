@@ -763,16 +763,22 @@ impl Vt {
     fn execute_il(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
 
+        if self.cursor_y > 0 {
+            self.buffer[self.cursor_y - 1].wrapped = false;
+        }
+
         if self.cursor_y <= self.bottom_margin {
             n = n.min(self.bottom_margin + 1 - self.cursor_y);
             self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
+            self.buffer[self.bottom_margin].wrapped = false;
             self.dirty_lines
                 .extend(self.cursor_y..(self.bottom_margin + 1));
         } else {
             n = n.min(self.rows - self.cursor_y);
             self.buffer[self.cursor_y..].rotate_right(n);
             self.clear_lines(self.cursor_y..(self.cursor_y + n));
+            self.buffer[self.rows - 1].wrapped = false;
             self.dirty_lines.extend(self.cursor_y..self.rows);
         }
     }
@@ -2160,20 +2166,26 @@ mod tests {
 
     #[test]
     fn execute_il() {
-        let mut vt = build_vt(8, 3, 3, 1, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
+        let mut vt = build_vt(4, 4, 2, 1, "abcdefghij");
 
         vt.feed_str("\x1b[L");
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.cursor_y, 1);
-        assert_eq!(text(&vt), "abcdefgh\n   |\nijklmnop");
+        assert_eq!(text(&vt), "abcd\n  |\nefgh\nij");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
 
-        vt.cursor_y = 0;
-        vt.feed_str("\x1b[2L");
-        assert_eq!(text(&vt), "   |\n\nabcdefgh");
+        vt.feed_str("\x1b[A");
+        vt.feed_str("\x1b[L");
+        assert_eq!(text(&vt), "  |\nabcd\n\nefgh");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+        assert!(!vt.buffer[3].wrapped);
 
-        vt.cursor_y = 1;
+        vt.feed_str("\x1b[3B");
         vt.feed_str("\x1b[100L");
-        assert_eq!(text(&vt), "\n   |\n");
+        assert_eq!(text(&vt), "\nabcd\n\n  |");
     }
 
     #[test]
