@@ -837,7 +837,13 @@ impl Vt {
     fn execute_ech(&mut self) {
         let mut n = self.get_param(0, 1) as usize;
         n = n.min(self.cols - self.cursor_x);
-        self.clear_line(self.cursor_x..(self.cursor_x + n));
+        let end = self.cursor_x + n;
+        self.clear_line(self.cursor_x..end);
+
+        if end == self.cols {
+            self.buffer[self.cursor_y].wrapped = false;
+        }
+
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -2372,21 +2378,26 @@ mod tests {
 
     #[test]
     fn execute_ech() {
-        let mut vt = build_vt(8, 1, 3, 0, "abcdefgh");
+        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijkl");
 
         vt.feed_str("\x1b[X");
 
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(text(&vt), "abc| efgh");
+        assert_eq!(text(&vt), "abc| efgh\nijkl");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
 
         vt.feed_str("\x1b[2X");
-        assert_eq!(text(&vt), "abc|  fgh");
+        assert_eq!(text(&vt), "abc|  fgh\nijkl");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
 
         vt.feed_str("\x1b[10X");
-        assert_eq!(text(&vt), "abc|");
+        assert_eq!(text(&vt), "abc|\nijkl");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
 
         vt.feed_str("\x1b[3C\x1b[X");
-        assert_eq!(text(&vt), "abc   |");
+        assert_eq!(text(&vt), "abc   |\nijkl");
     }
 
     #[test]
