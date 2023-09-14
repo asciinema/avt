@@ -713,6 +713,7 @@ impl Vt {
                 // clear to the end of the screen
                 self.buffer[self.cursor_y].clear(self.cursor_x..self.cols, &self.pen);
                 self.clear_lines((self.cursor_y + 1)..self.rows);
+                self.buffer[self.cursor_y].wrapped = false;
                 self.dirty_lines.extend(self.cursor_y..self.rows);
             }
 
@@ -2248,6 +2249,8 @@ mod tests {
 
     #[test]
     fn execute_ed() {
+        // short lines
+
         // a) clear to the end of the screen
 
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
@@ -2269,6 +2272,35 @@ mod tests {
         let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
         vt.feed_str("\x1b[2J");
         assert_eq!(text(&vt), "\n |\n");
+
+        // wrapped lines
+
+        // a) clear to the end of the screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abcdefghij");
+        vt.feed_str("\x1b[0J");
+        assert_eq!(text(&vt), "abcd\ne|\n");
+        assert!(vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+
+        // b) clear to the beginning of the screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abcdefghij");
+        vt.feed_str("\x1b[1J");
+        assert_eq!(text(&vt), "\n | gh\nij");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
+
+        // c) clear the whole screen
+
+        let mut vt = build_vt(4, 3, 1, 1, "abcdefghij");
+        vt.feed_str("\x1b[2J");
+        assert_eq!(text(&vt), "\n |\n");
+        assert!(!vt.buffer[0].wrapped);
+        assert!(!vt.buffer[1].wrapped);
+        assert!(!vt.buffer[2].wrapped);
     }
 
     #[test]
