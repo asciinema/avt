@@ -1,4 +1,4 @@
-use std::ops::{Index, Range};
+use std::ops::{Index, Range, RangeFull};
 
 use crate::cell::Cell;
 use crate::dump::Dump;
@@ -38,9 +38,43 @@ impl Line {
         self.cells[start..].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn expand(&mut self, increment: usize, pen: &Pen) {
+    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> Option<Line> {
+        let needed = len - self.len();
+
+        if needed == 0 {
+            return Some(other);
+        }
+
+        if !self.wrapped {
+            self.expand(len, &Pen::default());
+
+            return Some(other);
+        }
+
+        if !other.wrapped {
+            other.trim();
+        }
+
+        if needed < other.len() {
+            self.cells.extend(&other[0..needed]);
+            let mut cells = other.cells;
+            cells.rotate_left(needed);
+            cells.truncate(cells.len() - needed);
+
+            Some(Line {
+                cells,
+                wrapped: other.wrapped,
+            })
+        } else {
+            self.cells.extend(&other[..]);
+
+            None
+        }
+    }
+
+    pub(crate) fn expand(&mut self, len: usize, pen: &Pen) {
         let tpl = Cell::blank(*pen);
-        let filler = std::iter::repeat(tpl).take(increment);
+        let filler = std::iter::repeat(tpl).take(len - self.len());
         self.cells.extend(filler);
     }
 
@@ -73,6 +107,19 @@ impl Line {
 
     pub fn text(&self) -> String {
         self.chars().collect()
+    }
+
+    fn trim(&mut self) {
+        let trailing = self
+            .cells
+            .iter()
+            .rev()
+            .take_while(|cell| cell.is_default())
+            .count();
+
+        if trailing > 0 {
+            self.cells.truncate(self.len() - trailing);
+        }
     }
 }
 
@@ -113,6 +160,22 @@ impl Index<usize> for Line {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.cells[index]
+    }
+}
+
+impl Index<Range<usize>> for Line {
+    type Output = [Cell];
+
+    fn index(&self, range: Range<usize>) -> &Self::Output {
+        &self.cells[range]
+    }
+}
+
+impl Index<RangeFull> for Line {
+    type Output = [Cell];
+
+    fn index(&self, range: RangeFull) -> &Self::Output {
+        &self.cells[range]
     }
 }
 

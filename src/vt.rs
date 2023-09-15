@@ -1421,10 +1421,20 @@ impl Vt {
             std::cmp::Ordering::Equal => (),
 
             std::cmp::Ordering::Greater => {
-                for line in &mut self.buffer {
-                    line.expand(self.cols - cols, &Pen::default());
+                let mut new_buffer = Vec::new();
+                let mut current_line = self.buffer[0].clone();
+
+                for next_line in self.buffer.drain(1..) {
+                    if let Some(rest) = current_line.extend(next_line, self.cols) {
+                        new_buffer.push(current_line);
+                        current_line = rest;
+                    }
                 }
 
+                current_line.wrapped = false;
+                current_line.expand(self.cols, &Pen::default());
+                new_buffer.push(current_line);
+                self.buffer = new_buffer;
                 self.dirty_lines.extend(0..self.rows);
             }
         }
@@ -2545,6 +2555,33 @@ mod tests {
     }
 
     #[test]
+    fn execute_xtwinops_wider() {
+        let mut vt = Vt::new(6, 6);
+        vt.resizable = true;
+        assert_eq!(text(&vt), "|\n\n\n\n\n");
+
+        vt.feed_str("\x1b[8;4;4t");
+        assert_eq!(text(&vt), "|\n\n\n");
+        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+
+        vt.feed_str("\x1b[8;6;6t");
+        assert_eq!(text(&vt), "|\n\n\n\n\n");
+        assert_eq!(wrapped(&vt), vec![false, false, false, false, false, false]);
+
+        vt.feed_str("000000111111222222333333444444555");
+        assert_eq!(text(&vt), "000000\n111111\n222222\n333333\n444444\n555|");
+        assert_eq!(wrapped(&vt), vec![true, true, true, true, true, false]);
+
+        vt.feed_str("\x1b[8;6;7t");
+        assert_eq!(text(&vt), "0000001\n1111122\n2222333\n3334444\n44555\n   |");
+        assert_eq!(wrapped(&vt), vec![true, true, true, true, false, false]);
+
+        vt.feed_str("\x1b[8;6;15t");
+        assert_eq!(text(&vt), "000000111111222\n222333333444444\n555\n\n\n   |");
+        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
+    }
+
+    #[test]
     fn execute_xtwinops() {
         let mut vt = build_vt(8, 4, 0, 3, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
         vt.resizable = true;
@@ -3065,5 +3102,9 @@ mod tests {
             .map(|line| line.trim_end().to_owned())
             .collect::<Vec<_>>()
             .join("\n")
+    }
+
+    fn wrapped(vt: &Vt) -> Vec<bool> {
+        vt.buffer.iter().map(|l| l.wrapped).collect()
     }
 }
