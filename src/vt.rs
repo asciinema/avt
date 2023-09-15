@@ -2552,9 +2552,6 @@ mod tests {
         let (_, resized) = vt.feed_str("AAA");
         assert!(!resized);
 
-        let (_, resized) = vt.feed_str("\x1b[8;;;t");
-        assert!(!resized);
-
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
         assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
@@ -2615,6 +2612,13 @@ mod tests {
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
         assert_eq!(vt.cursor_x, 5);
         assert_eq!(vt.next_print_wraps, true);
+    }
+
+    #[test]
+    fn execute_xtwinops_noop() {
+        let mut vt = Vt::new(8, 4);
+        let (_, resized) = vt.feed_str("\x1b[8;;;t");
+        assert!(!resized);
     }
 
     #[test]
