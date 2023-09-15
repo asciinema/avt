@@ -1080,12 +1080,12 @@ impl Vt {
 
                 47 => {
                     self.switch_to_alternate_buffer();
-                    self.adjust_to_new_size();
+                    self.reflow();
                 }
 
                 1047 => {
                     self.switch_to_alternate_buffer();
-                    self.adjust_to_new_size();
+                    self.reflow();
                 }
 
                 1048 => self.save_cursor(),
@@ -1093,7 +1093,7 @@ impl Vt {
                 1049 => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
-                    self.adjust_to_new_size();
+                    self.reflow();
                 }
                 _ => (),
             }
@@ -1113,12 +1113,12 @@ impl Vt {
 
                 47 => {
                     self.switch_to_primary_buffer();
-                    self.adjust_to_new_size();
+                    self.reflow();
                 }
 
                 1047 => {
                     self.switch_to_primary_buffer();
-                    self.adjust_to_new_size();
+                    self.reflow();
                 }
 
                 1048 => self.restore_cursor(),
@@ -1126,7 +1126,7 @@ impl Vt {
                 1049 => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
-                    self.adjust_to_new_size();
+                    self.reflow();
                 }
 
                 _ => (),
@@ -1187,7 +1187,7 @@ impl Vt {
 
             self.cols = cols;
             self.rows = rows;
-            self.adjust_to_new_size();
+            self.reflow();
         }
     }
 
@@ -1398,7 +1398,7 @@ impl Vt {
         }
     }
 
-    fn adjust_to_new_size(&mut self) {
+    fn reflow(&mut self) {
         let cols = self.buffer[0].len();
 
         match self.cols.cmp(&cols) {
