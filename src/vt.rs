@@ -2659,7 +2659,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_xtwinops_when_extending() {
+    fn execute_xtwinops_taller() {
         let mut vt = Vt::new(6, 4);
         vt.resizable = true;
 
@@ -2676,7 +2676,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_xtwinops_when_retracting() {
+    fn execute_xtwinops_shorter() {
         let mut vt = Vt::new(6, 6);
         vt.resizable = true;
 
@@ -2707,7 +2707,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_xtwinops_tabs_when_resizing() {
+    fn execute_xtwinops_vs_tabs() {
         let mut vt = Vt::new(6, 2);
         vt.resizable = true;
         assert_eq!(vt.tabs, vec![]);
@@ -2723,7 +2723,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_xtwinops_saved_ctx_when_contracting() {
+    fn execute_xtwinops_vs_saved_ctx() {
         let mut vt = Vt::new(20, 5);
         vt.resizable = true;
 
