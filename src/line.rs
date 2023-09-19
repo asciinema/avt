@@ -38,17 +38,17 @@ impl Line {
         self.cells[start..].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> Option<Line> {
+    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> (bool, Option<Line>) {
         let needed = len - self.len();
 
         if needed == 0 {
-            return Some(other);
+            return (true, Some(other));
         }
 
         if !self.wrapped {
             self.expand(len, &Pen::default());
 
-            return Some(other);
+            return (true, Some(other));
         }
 
         if !other.wrapped {
@@ -61,14 +61,23 @@ impl Line {
             cells.rotate_left(needed);
             cells.truncate(cells.len() - needed);
 
-            Some(Line {
-                cells,
-                wrapped: other.wrapped,
-            })
-        } else {
-            self.cells.extend(&other[..]);
+            return (
+                true,
+                Some(Line {
+                    cells,
+                    wrapped: other.wrapped,
+                }),
+            );
+        }
 
-            None
+        self.cells.extend(&other[..]);
+
+        if !other.wrapped {
+            self.wrapped = false;
+
+            (true, None)
+        } else {
+            (false, None)
         }
     }
 
@@ -78,8 +87,20 @@ impl Line {
         self.cells.extend(filler);
     }
 
-    pub(crate) fn contract(&mut self, len: usize) {
-        self.cells.truncate(len);
+    pub(crate) fn contract(&mut self, len: usize) -> Option<Line> {
+        if !self.wrapped {
+            let trimmed_len = self.len() - self.trailers();
+            self.cells.truncate(len.max(trimmed_len));
+        }
+
+        if self.len() > len {
+            Some(Line {
+                cells: self.cells.split_off(len),
+                wrapped: self.wrapped,
+            })
+        } else {
+            None
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -110,16 +131,19 @@ impl Line {
     }
 
     fn trim(&mut self) {
-        let trailing = self
-            .cells
+        let trailers = self.trailers();
+
+        if trailers > 0 {
+            self.cells.truncate(self.len() - trailers);
+        }
+    }
+
+    fn trailers(&self) -> usize {
+        self.cells
             .iter()
             .rev()
             .take_while(|cell| cell.is_default())
-            .count();
-
-        if trailing > 0 {
-            self.cells.truncate(self.len() - trailing);
-        }
+            .count()
     }
 }
 
@@ -182,5 +206,65 @@ impl Index<RangeFull> for Line {
 impl Dump for Line {
     fn dump(&self) -> String {
         self.segments().map(|s| s.dump()).collect()
+    }
+}
+
+pub struct Reflow<I>
+where
+    I: Iterator<Item = Line>,
+{
+    pub iter: I,
+    pub cols: usize,
+    pub rest: Option<Line>,
+}
+
+impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
+    type Item = Line;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::cmp::Ordering::*;
+
+        while let Some(mut line) = self.rest.take().or_else(|| self.iter.next()) {
+            match self.cols.cmp(&line.len()) {
+                Less => {
+                    self.rest = line.contract(self.cols);
+                    return Some(line);
+                }
+
+                Equal => {
+                    return Some(line);
+                }
+
+                Greater => match self.iter.next() {
+                    Some(next_line) => match line.extend(next_line, self.cols) {
+                        (true, Some(rest)) => {
+                            self.rest = Some(rest);
+                            return Some(line);
+                        }
+
+                        (true, None) => {
+                            return Some(line);
+                        }
+
+                        (false, _) => {
+                            self.rest = Some(line);
+                        }
+                    },
+
+                    None => {
+                        line.expand(self.cols, &Pen::default());
+                        line.wrapped = false;
+                        return Some(line);
+                    }
+                },
+            }
+        }
+
+        self.rest.take().map(|mut line| {
+            line.expand(self.cols, &Pen::default());
+            line.wrapped = false;
+
+            line
+        })
     }
 }

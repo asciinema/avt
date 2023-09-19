@@ -1403,8 +1403,18 @@ impl Vt {
 
         match self.cols.cmp(&cols) {
             std::cmp::Ordering::Less => {
-                for line in &mut self.buffer {
-                    line.contract(self.cols);
+                self.buffer = crate::line::Reflow {
+                    iter: self.buffer.drain(..),
+                    cols: self.cols,
+                    rest: None,
+                }
+                .collect();
+
+                let rows = self.buffer.len();
+
+                if rows > self.rows {
+                    self.buffer.rotate_left(rows - self.rows);
+                    self.buffer.truncate(self.rows);
                 }
 
                 if self.cursor_x >= self.cols {
@@ -1421,20 +1431,21 @@ impl Vt {
             std::cmp::Ordering::Equal => (),
 
             std::cmp::Ordering::Greater => {
-                let mut new_buffer = Vec::new();
-                let mut current_line = self.buffer[0].clone();
+                self.buffer = crate::line::Reflow {
+                    iter: self.buffer.drain(..),
+                    cols: self.cols,
+                    rest: None,
+                }
+                .collect();
 
-                for next_line in self.buffer.drain(1..) {
-                    if let Some(rest) = current_line.extend(next_line, self.cols) {
-                        new_buffer.push(current_line);
-                        current_line = rest;
-                    }
+                let rows = self.buffer.len();
+
+                if rows < self.rows {
+                    let line = Line::blank(self.cols, Pen::default());
+                    let filler = std::iter::repeat(line).take(self.rows - rows);
+                    self.buffer.extend(filler);
                 }
 
-                current_line.wrapped = false;
-                current_line.expand(self.cols, &Pen::default());
-                new_buffer.push(current_line);
-                self.buffer = new_buffer;
                 self.dirty_lines.extend(0..self.rows);
             }
         }
@@ -2558,15 +2569,17 @@ mod tests {
     fn execute_xtwinops_wider() {
         let mut vt = Vt::new(6, 6);
         vt.resizable = true;
-        assert_eq!(text(&vt), "|\n\n\n\n\n");
 
-        vt.feed_str("\x1b[8;4;4t");
-        assert_eq!(text(&vt), "|\n\n\n");
+        vt.feed_str("\x1b[8;6;7t");
+        assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.buffer.iter().any(|l| l.wrapped));
 
-        vt.feed_str("\x1b[8;6;6t");
+        vt.feed_str("\x1b[8;6;15t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert_eq!(wrapped(&vt), vec![false, false, false, false, false, false]);
+        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+
+        let mut vt = Vt::new(6, 6);
+        vt.resizable = true;
 
         vt.feed_str("000000111111222222333333444444555");
         assert_eq!(text(&vt), "000000\n111111\n222222\n333333\n444444\n555|");
@@ -2578,6 +2591,46 @@ mod tests {
 
         vt.feed_str("\x1b[8;6;15t");
         assert_eq!(text(&vt), "000000111111222\n222333333444444\n555\n\n\n   |");
+        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
+
+        let mut vt = Vt::new(4, 3);
+        vt.resizable = true;
+
+        vt.feed_str("000011\r\n22");
+        assert_eq!(text(&vt), "0000\n11\n22|");
+        assert_eq!(wrapped(&vt), vec![true, false, false]);
+
+        vt.feed_str("\x1b[8;3;8t");
+        assert_eq!(text(&vt), "000011\n22\n  |");
+        assert_eq!(wrapped(&vt), vec![false, false, false]);
+    }
+
+    #[test]
+    fn execute_xtwinops_narrower() {
+        let mut vt = Vt::new(15, 6);
+        vt.resizable = true;
+
+        vt.feed_str("\x1b[8;6;7t");
+        assert_eq!(text(&vt), "|\n\n\n\n\n");
+        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+
+        vt.feed_str("\x1b[8;6;6t");
+        assert_eq!(text(&vt), "|\n\n\n\n\n");
+        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+
+        let mut vt = Vt::new(15, 6);
+        vt.resizable = true;
+
+        vt.feed_str("000000111111222222333333444444555");
+        assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
+        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
+
+        vt.feed_str("\x1b[8;6;7t");
+        assert_eq!(text(&vt), "2222333\n3334444\n445|55\n\n\n");
+        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
+
+        vt.feed_str("\x1b[8;6;6t");
+        assert_eq!(text(&vt), "333344\n444455\n5  |\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
     }
 
@@ -2592,11 +2645,7 @@ mod tests {
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
         assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "abcdefgh\nijklmnop\nqrstuwxy\nAAA     \n        \n"
-        );
-        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuwxy\nAAA|\n");
 
         vt.feed_str("BBBBB");
         assert_eq!(vt.cursor_x, 8);
@@ -2606,12 +2655,8 @@ mod tests {
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "abcd\nijkl\nqrst\nAAAB\n    \n"
-        );
+        assert_eq!(text(&vt), "qrst\nuwxy\nAAAB\nBBBB|\n");
         // expect same behaviour as xterm: keep cursor at the edge
-        assert_eq!(vt.cursor_x, 4);
         assert_eq!(vt.next_print_wraps, true);
 
         vt.feed_str("\rCCC");
@@ -2621,20 +2666,15 @@ mod tests {
         let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3;t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
-        assert_eq!(buffer_as_string(&vt.buffer), "abc\nijk\nqrs\nCCC\n   \n");
+        assert_eq!(text(&vt), "AAA\nB\nCCC\nB |\n");
         // expect same behaviour as xterm: keep cursor left to the edge
-        assert_eq!(vt.cursor_x, 2);
         assert_eq!(vt.next_print_wraps, false);
 
         let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5;t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "abc  \nijk  \nqrs  \nCCC  \n     \n"
-        );
+        assert_eq!(text(&vt), "AAA\nB\nCCC\nB |\n");
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
-        assert_eq!(vt.cursor_x, 2);
         assert_eq!(vt.next_print_wraps, false);
 
         vt.feed_str("DDD");
@@ -2642,12 +2682,8 @@ mod tests {
         assert_eq!(vt.next_print_wraps, true);
 
         vt.feed_str("\x1b[8;;6;t");
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "abc   \nijk   \nqrs   \nCCDDD \n      \n"
-        );
+        assert_eq!(text(&vt), "AAA\nB\nCCC\nB DDD|\n");
         // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
-        assert_eq!(vt.cursor_x, 5);
         assert_eq!(vt.next_print_wraps, true);
     }
 
@@ -2759,10 +2795,7 @@ mod tests {
         // resize to 4x5
         vt.feed_str("\x1b[8;5;4;t");
         assert_eq!(vt.cursor_y, 3);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "aaa \nbbb \nc   \nddd \n    \n"
-        );
+        assert_eq!(text(&vt), "aaa\nbbb\nc\nddd|\n");
 
         // switch to alternate buffer
         let (mut dirty_lines, _) = vt.feed_str("\x1b[?1049h");
@@ -2790,7 +2823,7 @@ mod tests {
         assert_eq!(dirty_lines, vec![0, 1, 2]);
         assert_eq!(vt.cursor_x, 2);
         assert_eq!(vt.cursor_y, 2);
-        assert_eq!(buffer_as_string(&vt.buffer), "bbb\nc  \nddd\n");
+        assert_eq!(text(&vt), "c\nddd\n  |");
     }
 
     #[test]
