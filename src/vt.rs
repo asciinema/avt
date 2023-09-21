@@ -1861,8 +1861,24 @@ impl Vt {
             &self.alternate_buffer
         }
     }
+
     fn dump_buffer(&self, buffer: &[Line]) -> String {
-        buffer.iter().map(Dump::dump).collect()
+        let last = buffer.len() - 1;
+
+        buffer
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let mut dump = line.dump();
+
+                if i < last && !line.wrapped {
+                    dump.push('\r');
+                    dump.push('\n');
+                }
+
+                dump
+            })
+            .collect()
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
@@ -3129,6 +3145,7 @@ mod tests {
         assert_eq!(vt1.saved_ctx, vt2.saved_ctx);
         assert_eq!(vt1.alternate_saved_ctx, vt2.alternate_saved_ctx);
         assert_eq!(primary_buffer_text(vt1), primary_buffer_text(vt2));
+        assert_eq!(wrapped(vt1), wrapped(vt2));
 
         if vt1.active_buffer_type == BufferType::Alternate {
             assert_eq!(alternate_buffer_text(vt1), alternate_buffer_text(vt2));
