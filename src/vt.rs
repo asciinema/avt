@@ -1415,6 +1415,7 @@ impl Vt {
                     self.saved_ctx.cursor_x = self.cols - 1;
                 }
 
+                self.next_print_wraps = false;
                 self.dirty_lines.extend(0..self.rows);
             }
 
@@ -1432,6 +1433,7 @@ impl Vt {
                     self.buffer.extend(filler);
                 }
 
+                self.next_print_wraps = false;
                 self.dirty_lines.extend(0..self.rows);
             }
         }
@@ -2705,6 +2707,15 @@ mod tests {
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.buffer.iter().any(|l| l.wrapped));
 
+        let mut vt = Vt::new(8, 2);
+        vt.resizable = true;
+
+        vt.feed_str("\nabcdef");
+        assert_eq!(wrapped(&vt), vec![false, false]);
+        vt.feed_str("\x1b[8;;4t");
+        assert_eq!(text(&vt), "abcd\nef|");
+        assert_eq!(wrapped(&vt), vec![true, false]);
+
         let mut vt = Vt::new(15, 6);
         vt.resizable = true;
 
@@ -2723,61 +2734,53 @@ mod tests {
 
     #[test]
     fn execute_xtwinops() {
-        let mut vt = build_vt(8, 4, 0, 3, "abcdefgh\r\nijklmnop\r\nqrstuwxy");
+        let mut vt = build_vt(8, 4, 0, 3, "abcdefgh\r\nijklmnop\r\nqrstuw");
         vt.resizable = true;
 
         let (_, resized) = vt.feed_str("AAA");
         assert!(!resized);
 
-        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
+        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;t");
         assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
-        assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuwxy\nAAA|\n");
+        assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuw\nAAA|\n");
 
         vt.feed_str("BBBBB");
         assert_eq!(vt.cursor_x, 8);
         assert_eq!(vt.next_print_wraps, true);
 
-        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;;4;t");
+        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;;4t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
         assert!(resized);
-        assert_eq!(text(&vt), "qrst\nuwxy\nAAAB\nBBB|B\n");
-        // expect same behaviour as xterm: keep cursor at the edge
-        assert_eq!(vt.next_print_wraps, true);
+        assert_eq!(text(&vt), "qrst\nuw\nAAAB\nBBB|B\n");
+        assert_eq!(vt.next_print_wraps, false);
 
         vt.feed_str("\rCCC");
-        assert_eq!(vt.cursor_x, 3);
-        assert_eq!(vt.next_print_wraps, false);
+        assert_eq!(text(&vt), "qrst\nuw\nAAAB\nCCC|B\n");
+        assert_eq!(wrapped(&vt), vec![true, false, true, false, false]);
 
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3;t");
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
-        assert_eq!(text(&vt), "AAA\nB\nCCC\nB |\n");
-        // expect same behaviour as xterm: keep cursor left to the edge
-        assert_eq!(vt.next_print_wraps, false);
+        assert_eq!(text(&vt), "tuw\nAAA\nBCC\nC|B\n");
 
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5;t");
+        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
-        assert_eq!(text(&vt), "AAA\nB\nCCC\nB |\n");
-        // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
-        assert_eq!(vt.next_print_wraps, false);
+        assert_eq!(text(&vt), "tuw\nAAABC\nCC|B\n\n");
 
         vt.feed_str("DDD");
-        assert_eq!(vt.cursor_x, 5);
         assert_eq!(vt.next_print_wraps, true);
 
-        vt.feed_str("\x1b[8;;6;t");
-        assert_eq!(text(&vt), "AAA\nB\nCCC\nB DDD|\n");
-        // expect same behaviour as xterm: keep cursor at the same column, preserve print wrapping
-        assert_eq!(vt.next_print_wraps, true);
+        vt.feed_str("\x1b[8;;6t");
+        assert_eq!(text(&vt), "tuw\nAAABCC\nCDDD|\n\n");
     }
 
     #[test]
     fn execute_xtwinops_noop() {
         let mut vt = Vt::new(8, 4);
-        let (_, resized) = vt.feed_str("\x1b[8;;;t");
+        let (_, resized) = vt.feed_str("\x1b[8;;t");
         assert!(!resized);
     }
 

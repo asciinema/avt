@@ -75,6 +75,10 @@ impl Line {
         if !other.wrapped {
             self.wrapped = false;
 
+            if self.len() < len {
+                self.expand(len, &Pen::default());
+            }
+
             (true, None)
         } else {
             (false, None)
@@ -94,10 +98,22 @@ impl Line {
         }
 
         if self.len() > len {
-            Some(Line {
+            let mut rest = Line {
                 cells: self.cells.split_off(len),
                 wrapped: self.wrapped,
-            })
+            };
+
+            if !self.wrapped {
+                rest.trim();
+            }
+
+            if rest.is_empty() {
+                None
+            } else {
+                self.wrapped = true;
+
+                Some(rest)
+            }
         } else {
             None
         }
@@ -219,12 +235,16 @@ where
 }
 
 pub(crate) fn reflow<I: Iterator<Item = Line>>(iter: I, cols: usize) -> Vec<Line> {
-    Reflow {
+    let lines: Vec<Line> = Reflow {
         iter,
         cols,
         rest: None,
     }
-    .collect()
+    .collect();
+
+    assert!(lines.iter().all(|l| l.len() == cols));
+
+    lines
 }
 
 impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
