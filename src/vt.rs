@@ -455,25 +455,23 @@ impl Vt {
     }
 
     fn print(&mut self, mut input: char) {
+        input = self.charsets[self.active_charset].translate(input);
+        let cell = Cell(input, self.pen);
+
         if self.auto_wrap_mode && self.next_print_wraps {
             self.buffer[self.cursor_y].wrapped = true;
             self.do_move_cursor_to_col(0);
 
-            let next_row = self.cursor_y + 1;
-
-            if next_row == self.rows {
+            if self.cursor_y == self.bottom_margin {
                 self.scroll_up(1);
-            } else {
-                self.do_move_cursor_to_row(next_row);
+            } else if self.cursor_y < self.rows - 1 {
+                self.do_move_cursor_to_row(self.cursor_y + 1);
             }
         }
 
-        input = self.charsets[self.active_charset].translate(input);
+        let next_col = self.cursor_x + 1;
 
-        let cell = Cell(input, self.pen);
-        let next_column = self.cursor_x + 1;
-
-        if next_column >= self.cols {
+        if next_col >= self.cols {
             self.buffer[self.cursor_y].print(self.cols - 1, cell);
 
             if self.auto_wrap_mode {
@@ -487,7 +485,7 @@ impl Vt {
                 self.buffer[self.cursor_y].print(self.cursor_x, cell);
             }
 
-            self.do_move_cursor_to_col(next_column);
+            self.do_move_cursor_to_col(next_col);
         }
 
         self.dirty_lines.insert(self.cursor_y);
@@ -1945,6 +1943,38 @@ mod tests {
         vt.feed_str("\x1b[?7l");
         vt.feed_str("abcdef");
         assert_eq!(text(&vt), "abc|f\n\n\n");
+    }
+
+    #[test]
+    fn print_at_the_end_of_the_screen() {
+        // default margins, print at the bottom
+
+        let mut vt = Vt::new(4, 6);
+
+        let input = "xxxxxxxxxx\x1b[50;1Hyyy\x1b[50Czzz";
+        vt.feed_str(input);
+
+        assert_eq!(text(&vt), "xxxx\nxx\n\n\nyyyz\nzz|");
+
+        // custom top margin, print above it
+
+        let mut vt = Vt::new(4, 6);
+
+        let input = "\nxxxxxxxxxx\x1b[2;4r\x1b[1;1Hyyy\x1b[50Czzz";
+
+        vt.feed_str(input);
+
+        assert_eq!(text(&vt), "yyyz\nzz|xx\nxxxx\nxx\n\n");
+
+        // custom bottom margin, print below it
+
+        let mut vt = Vt::new(4, 6);
+
+        let input = "\x1b[;3rxxxxxxxxxx\x1b[50;1Hyyy\x1b[50Czzz";
+
+        vt.feed_str(input);
+
+        assert_eq!(text(&vt), "xxxx\nxxxx\nxx\n\n\nzz|yz");
     }
 
     #[test]
