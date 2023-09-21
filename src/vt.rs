@@ -3092,7 +3092,7 @@ mod tests {
                 vt.feed(c);
             }
 
-            assert!(vt.cursor_x < 10 || vt.next_print_wraps && vt.cursor_x == 10);
+            assert!(!vt.next_print_wraps && vt.cursor_x < 10 || vt.next_print_wraps && vt.cursor_x == 10);
             assert!(vt.cursor_y < 5);
         }
 
