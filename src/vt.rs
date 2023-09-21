@@ -69,7 +69,7 @@ pub struct Vt {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     dirty_lines: HashSet<usize>,
-    resizable: bool,
+    pub resizable: bool,
     resized: bool,
 }
 
