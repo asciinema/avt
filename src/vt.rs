@@ -1370,9 +1370,7 @@ impl Vt {
             self.buffer[self.top_margin - 1].wrapped = false;
         }
 
-        if self.bottom_margin < self.rows - 1 {
-            self.buffer[self.bottom_margin].wrapped = false;
-        }
+        self.buffer[self.bottom_margin].wrapped = false;
     }
 
     // buffer switching
@@ -3113,6 +3111,15 @@ mod tests {
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
             assert_eq!(vt.abs_cursor(vt.rel_cursor((vcol, vrow))), (vcol, vrow));
+        }
+
+        #[test]
+        fn prop_no_wrap_on_last_line(input in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+
+            vt.feed_str(&(input.into_iter().collect::<String>()));
+
+            assert!(!vt.buffer.last().unwrap().wrapped);
         }
     }
 
