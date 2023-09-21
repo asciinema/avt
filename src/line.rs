@@ -209,13 +209,22 @@ impl Dump for Line {
     }
 }
 
-pub struct Reflow<I>
+struct Reflow<I>
 where
     I: Iterator<Item = Line>,
 {
     pub iter: I,
     pub cols: usize,
     pub rest: Option<Line>,
+}
+
+pub(crate) fn reflow<I: Iterator<Item = Line>>(iter: I, cols: usize) -> Vec<Line> {
+    Reflow {
+        iter,
+        cols,
+        rest: None,
+    }
+    .collect()
 }
 
 impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {

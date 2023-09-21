@@ -5,7 +5,7 @@ use crate::cell::Cell;
 use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
-use crate::line::Line;
+use crate::line::{self, Line};
 use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
 use crate::tabs::Tabs;
@@ -1403,22 +1403,15 @@ impl Vt {
 
         match self.cols.cmp(&cols) {
             std::cmp::Ordering::Less => {
-                self.buffer = crate::line::Reflow {
-                    iter: self.buffer.drain(..),
-                    cols: self.cols,
-                    rest: None,
-                }
-                .collect();
-
+                let rel_cursor = self.rel_cursor((self.cursor_x, self.cursor_y));
+                self.buffer = line::reflow(self.buffer.drain(..), self.cols);
+                (self.cursor_x, self.cursor_y) = self.abs_cursor(rel_cursor);
                 let rows = self.buffer.len();
 
                 if rows > self.rows {
-                    self.buffer.rotate_left(rows - self.rows);
+                    let added = rows - self.rows;
+                    self.buffer.rotate_left(added);
                     self.buffer.truncate(self.rows);
-                }
-
-                if self.cursor_x >= self.cols {
-                    self.cursor_x -= cols - self.cols;
                 }
 
                 if self.saved_ctx.cursor_x >= self.cols {
@@ -1431,13 +1424,9 @@ impl Vt {
             std::cmp::Ordering::Equal => (),
 
             std::cmp::Ordering::Greater => {
-                self.buffer = crate::line::Reflow {
-                    iter: self.buffer.drain(..),
-                    cols: self.cols,
-                    rest: None,
-                }
-                .collect();
-
+                let rel_cursor = self.rel_cursor((self.cursor_x, self.cursor_y));
+                self.buffer = line::reflow(self.buffer.drain(..), self.cols);
+                (self.cursor_x, self.cursor_y) = self.abs_cursor(rel_cursor);
                 let rows = self.buffer.len();
 
                 if rows < self.rows {
@@ -1463,6 +1452,7 @@ impl Vt {
                 }
 
                 self.buffer.truncate(self.rows);
+                self.cursor_y = self.cursor_y.min(self.rows - 1);
 
                 if self.saved_ctx.cursor_y >= self.rows {
                     self.saved_ctx.cursor_y = self.rows - 1;
@@ -1481,8 +1471,60 @@ impl Vt {
                 self.dirty_lines.extend(rows..self.rows);
             }
         }
+    }
 
-        self.cursor_y = self.cursor_y.min(self.rows - 1);
+    fn rel_cursor(&self, (abs_col, abs_row): (usize, usize)) -> (usize, usize) {
+        let cols = self.buffer[0].len();
+        let mut rel_col = abs_col;
+        let mut rel_row = 0;
+        let mut r = self.buffer.len() - 1;
+
+        while r > abs_row {
+            if !self.buffer[r - 1].wrapped {
+                rel_row += 1;
+            }
+
+            r -= 1;
+        }
+
+        while r > 0 && self.buffer[r - 1].wrapped {
+            rel_col += cols;
+            r -= 1;
+        }
+
+        (rel_col, rel_row)
+    }
+
+    fn abs_cursor(&self, (rel_col, rel_row): (usize, usize)) -> (usize, usize) {
+        let cols = self.buffer[0].len();
+        let mut abs_col = rel_col;
+        let mut abs_row = self.buffer.len() - 1;
+        let mut r = 0;
+
+        while r < rel_row && abs_row > 0 {
+            if !self.buffer[abs_row - 1].wrapped {
+                r += 1;
+            }
+
+            abs_row -= 1;
+        }
+
+        while abs_row > 0 && self.buffer[abs_row - 1].wrapped {
+            abs_row -= 1;
+        }
+
+        while abs_col >= cols && self.buffer[abs_row].wrapped {
+            abs_col -= cols;
+            abs_row += 1;
+        }
+
+        abs_col = abs_col.min(cols - 1);
+
+        if self.buffer.len() > self.rows {
+            abs_row = self.rows - (self.buffer.len() - abs_row);
+        }
+
+        (abs_col, abs_row)
     }
 
     // resetting
@@ -2586,11 +2628,11 @@ mod tests {
         assert_eq!(wrapped(&vt), vec![true, true, true, true, true, false]);
 
         vt.feed_str("\x1b[8;6;7t");
-        assert_eq!(text(&vt), "0000001\n1111122\n2222333\n3334444\n44555\n   |");
+        assert_eq!(text(&vt), "0000001\n1111122\n2222333\n3334444\n44555|\n");
         assert_eq!(wrapped(&vt), vec![true, true, true, true, false, false]);
 
         vt.feed_str("\x1b[8;6;15t");
-        assert_eq!(text(&vt), "000000111111222\n222333333444444\n555\n\n\n   |");
+        assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
         let mut vt = Vt::new(4, 3);
@@ -2601,7 +2643,7 @@ mod tests {
         assert_eq!(wrapped(&vt), vec![true, false, false]);
 
         vt.feed_str("\x1b[8;3;8t");
-        assert_eq!(text(&vt), "000011\n22\n  |");
+        assert_eq!(text(&vt), "000011\n22|\n");
         assert_eq!(wrapped(&vt), vec![false, false, false]);
     }
 
@@ -2626,11 +2668,11 @@ mod tests {
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
         vt.feed_str("\x1b[8;6;7t");
-        assert_eq!(text(&vt), "2222333\n3334444\n445|55\n\n\n");
+        assert_eq!(text(&vt), "2222333\n3334444\n44555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
         vt.feed_str("\x1b[8;6;6t");
-        assert_eq!(text(&vt), "333344\n444455\n5  |\n\n\n");
+        assert_eq!(text(&vt), "333344\n444455\n5|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
     }
 
@@ -2655,7 +2697,7 @@ mod tests {
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
         assert!(resized);
-        assert_eq!(text(&vt), "qrst\nuwxy\nAAAB\nBBBB|\n");
+        assert_eq!(text(&vt), "qrst\nuwxy\nAAAB\nBBB|B\n");
         // expect same behaviour as xterm: keep cursor at the edge
         assert_eq!(vt.next_print_wraps, true);
 
@@ -2821,9 +2863,7 @@ mod tests {
         let (mut dirty_lines, _) = vt.feed_str("\x1b[?1049l");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2]);
-        assert_eq!(vt.cursor_x, 2);
-        assert_eq!(vt.cursor_y, 2);
-        assert_eq!(text(&vt), "c\nddd\n  |");
+        assert_eq!(text(&vt), "c\ndd|d\n");
     }
 
     #[test]
@@ -3007,7 +3047,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn prop_cursor_position(input in gen_input(25)) {
+        fn prop_cursor_within_bounds(input in gen_input(25)) {
             let mut vt = Vt::new(10, 5);
 
             for c in input {
@@ -3028,6 +3068,15 @@ mod tests {
 
             assert_eq!(vt.buffer.len(), 5);
             assert!(vt.buffer.iter().all(|line| line.len() == 10));
+        }
+
+        #[test]
+        fn prop_cursor_translation(input in gen_input(25), vcol in 0..10usize, vrow in 0..5usize) {
+            let mut vt = Vt::new(10, 5);
+
+            vt.feed_str(&(input.into_iter().collect::<String>()));
+
+            assert_eq!(vt.abs_cursor(vt.rel_cursor((vcol, vrow))), (vcol, vrow));
         }
     }
 
