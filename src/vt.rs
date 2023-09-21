@@ -3122,6 +3122,17 @@ mod tests {
 
             assert!(!vt.buffer.last().unwrap().wrapped);
         }
+
+        #[test]
+        fn prop_dump(input in gen_input(25)) {
+            let mut vt1 = Vt::new(10, 5);
+            let mut vt2 = Vt::new(vt1.cols, vt1.rows);
+
+            vt1.feed_str(&(input.into_iter().collect::<String>()));
+            vt2.feed_str(&vt1.dump());
+
+            assert_vts_eq(&vt1, &vt2);
+        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
