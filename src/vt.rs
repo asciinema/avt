@@ -459,12 +459,13 @@ impl Vt {
         let cell = Cell(input, self.pen);
 
         if self.auto_wrap_mode && self.next_print_wraps {
-            self.buffer[self.cursor_y].wrapped = true;
             self.do_move_cursor_to_col(0);
 
             if self.cursor_y == self.bottom_margin {
+                self.buffer[self.cursor_y].wrapped = true;
                 self.scroll_up(1);
             } else if self.cursor_y < self.rows - 1 {
+                self.buffer[self.cursor_y].wrapped = true;
                 self.do_move_cursor_to_row(self.cursor_y + 1);
             }
         }
