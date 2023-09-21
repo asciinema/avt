@@ -2746,11 +2746,7 @@ mod tests {
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
         assert_eq!(dirty_lines, vec![4]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "AAA   \nBBB   \n      \n      \n      \n"
-        );
-        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(text(&vt), "AAA\nBBB\n|\n\n");
     }
 
     #[test]
@@ -2763,25 +2759,19 @@ mod tests {
         let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
         assert_eq!(dirty_lines, vec![]);
         assert!(resized);
-        assert_eq!(
-            buffer_as_string(&vt.buffer),
-            "AAA   \nBBB   \nCCC   \n      \n      \n"
-        );
-        assert_eq!(vt.cursor_y, 3);
+        assert_eq!(text(&vt), "AAA\nBBB\nCCC\n|\n");
 
         let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;3;;t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1, 2]);
         assert!(resized);
-        assert_eq!(buffer_as_string(&vt.buffer), "BBB   \nCCC   \n      \n");
-        assert_eq!(vt.cursor_y, 2);
+        assert_eq!(text(&vt), "BBB\nCCC\n|");
 
         let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;2;;t");
         dirty_lines.sort();
         assert_eq!(dirty_lines, vec![0, 1]);
         assert!(resized);
-        assert_eq!(buffer_as_string(&vt.buffer), "CCC   \n      \n");
-        assert_eq!(vt.cursor_y, 1);
+        assert_eq!(text(&vt), "CCC\n|");
     }
 
     #[test]
@@ -3138,46 +3128,36 @@ mod tests {
         assert_eq!(vt1.bottom_margin, vt2.bottom_margin);
         assert_eq!(vt1.saved_ctx, vt2.saved_ctx);
         assert_eq!(vt1.alternate_saved_ctx, vt2.alternate_saved_ctx);
+        assert_eq!(primary_buffer_text(vt1), primary_buffer_text(vt2));
 
-        match vt1.active_buffer_type {
-            BufferType::Primary => {
-                assert_eq!(buffer_as_string(&vt1.buffer), buffer_as_string(&vt2.buffer));
-            }
-
-            BufferType::Alternate => {
-                // primary:
-                assert_eq!(
-                    buffer_as_string(&vt1.alternate_buffer),
-                    buffer_as_string(&vt2.alternate_buffer)
-                );
-                // alternate:
-                assert_eq!(buffer_as_string(&vt1.buffer), buffer_as_string(&vt2.buffer));
-            }
+        if vt1.active_buffer_type == BufferType::Alternate {
+            assert_eq!(alternate_buffer_text(vt1), alternate_buffer_text(vt2));
         }
-    }
-
-    fn buffer_as_string(buffer: &Vec<Line>) -> String {
-        let mut s = "".to_owned();
-
-        for line in buffer {
-            s.push_str(&line.text());
-            s.push('\n');
-        }
-
-        s
     }
 
     fn text(vt: &Vt) -> String {
+        buffer_text(&vt.buffer, vt.cursor_x, vt.cursor_y)
+    }
+
+    fn primary_buffer_text(vt: &Vt) -> String {
+        buffer_text(vt.primary_buffer(), vt.cursor_x, vt.cursor_y)
+    }
+
+    fn alternate_buffer_text(vt: &Vt) -> String {
+        buffer_text(vt.alternate_buffer(), vt.cursor_x, vt.cursor_y)
+    }
+
+    fn buffer_text(buffer: &[Line], cursor_x: usize, cursor_y: usize) -> String {
         let mut lines = Vec::new();
-        lines.extend(vt.buffer[0..vt.cursor_y].iter().map(|l| l.text()));
-        let cursor_line = &vt.buffer[vt.cursor_y];
-        let left = cursor_line.chars().take(vt.cursor_x);
-        let right = cursor_line.chars().skip(vt.cursor_x);
+        lines.extend(buffer[0..cursor_y].iter().map(|l| l.text()));
+        let cursor_line = &buffer[cursor_y];
+        let left = cursor_line.chars().take(cursor_x);
+        let right = cursor_line.chars().skip(cursor_x);
         let mut line = String::from_iter(left);
         line.push('|');
         line.extend(right);
         lines.push(line);
-        lines.extend(vt.buffer[vt.cursor_y + 1..].iter().map(|l| l.text()));
+        lines.extend(buffer[cursor_y + 1..].iter().map(|l| l.text()));
 
         lines
             .into_iter()
