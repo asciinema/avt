@@ -1,17 +1,17 @@
 // The parser is based on Paul Williams' parser for ANSI-compatible video
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
+use crate::buffer::{Buffer, EraseMode};
 use crate::cell::Cell;
 use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
-use crate::line::{self, Line};
+use crate::line::Line;
 use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
 use crate::tabs::Tabs;
 use rgb::RGB8;
 use std::collections::HashSet;
-use std::ops::Range;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
 pub enum State {
@@ -49,8 +49,8 @@ pub struct Vt {
     // screen
     pub cols: usize,
     pub rows: usize,
-    buffer: Vec<Line>,
-    alternate_buffer: Vec<Line>,
+    buffer: Buffer,
+    other_buffer: Buffer,
     active_buffer_type: BufferType,
     cursor_x: usize,
     cursor_y: usize,
@@ -78,8 +78,8 @@ impl Vt {
         assert!(cols > 0);
         assert!(rows > 0);
 
-        let buffer = Vt::new_buffer(cols, rows);
-        let alternate_buffer = buffer.clone();
+        let primary_buffer = Buffer::new(cols, rows);
+        let alternate_buffer = Buffer::new(cols, rows);
         let dirty_lines = HashSet::from_iter(0..rows);
 
         Vt {
@@ -88,8 +88,8 @@ impl Vt {
             intermediates: Vec::new(),
             cols,
             rows,
-            buffer,
-            alternate_buffer,
+            buffer: primary_buffer,
+            other_buffer: alternate_buffer,
             active_buffer_type: BufferType::Primary,
             tabs: Tabs::new(cols),
             cursor_x: 0,
@@ -111,10 +111,6 @@ impl Vt {
             resizable: false,
             resized: false,
         }
-    }
-
-    fn new_buffer(cols: usize, rows: usize) -> Vec<Line> {
-        vec![Line::blank(cols, Pen::default()); rows]
     }
 
     pub fn cursor(&self) -> Option<(usize, usize)> {
@@ -462,10 +458,10 @@ impl Vt {
             self.do_move_cursor_to_col(0);
 
             if self.cursor_y == self.bottom_margin {
-                self.buffer[self.cursor_y].wrapped = true;
+                self.buffer.wrap(self.cursor_y);
                 self.scroll_up(1);
             } else if self.cursor_y < self.rows - 1 {
-                self.buffer[self.cursor_y].wrapped = true;
+                self.buffer.wrap(self.cursor_y);
                 self.do_move_cursor_to_row(self.cursor_y + 1);
             }
         }
@@ -473,7 +469,7 @@ impl Vt {
         let next_col = self.cursor_x + 1;
 
         if next_col >= self.cols {
-            self.buffer[self.cursor_y].print(self.cols - 1, cell);
+            self.buffer.print((self.cols - 1, self.cursor_y), cell);
 
             if self.auto_wrap_mode {
                 self.do_move_cursor_to_col(self.cols);
@@ -481,9 +477,9 @@ impl Vt {
             }
         } else {
             if self.insert_mode {
-                self.buffer[self.cursor_y].insert(self.cursor_x, 1, cell);
+                self.buffer.insert((self.cursor_x, self.cursor_y), 1, cell);
             } else {
-                self.buffer[self.cursor_y].print(self.cursor_x, cell);
+                self.buffer.print((self.cursor_x, self.cursor_y), cell);
             }
 
             self.do_move_cursor_to_col(next_col);
@@ -590,7 +586,8 @@ impl Vt {
     fn execute_decaln(&mut self) {
         for row in 0..self.rows {
             for col in 0..self.cols {
-                self.buffer[row].print(col, Cell('\u{45}', Pen::default()));
+                self.buffer
+                    .print((col, row), Cell('\u{45}', Pen::default()));
             }
 
             self.dirty_lines.insert(row);
@@ -655,9 +652,12 @@ impl Vt {
     }
 
     fn execute_ich(&mut self) {
-        let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.cols - self.cursor_x);
-        self.buffer[self.cursor_y].insert(self.cursor_x, n, Cell::blank(self.pen));
+        self.buffer.insert(
+            (self.cursor_x, self.cursor_y),
+            self.get_param(0, 1) as usize,
+            Cell::blank(self.pen),
+        );
+
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -707,25 +707,33 @@ impl Vt {
     }
 
     fn execute_ed(&mut self) {
+        use EraseMode::*;
+
         match self.get_param(0, 0) {
             0 => {
-                // clear to the end of the screen
-                self.buffer[self.cursor_y].clear(self.cursor_x..self.cols, &self.pen);
-                self.clear_lines((self.cursor_y + 1)..self.rows);
-                self.buffer[self.cursor_y].wrapped = false;
+                self.buffer.erase(
+                    (self.cursor_x, self.cursor_y),
+                    FromCursorToEndOfView,
+                    &self.pen,
+                );
+
                 self.dirty_lines.extend(self.cursor_y..self.rows);
             }
 
             1 => {
-                // clear to the beginning of the screen
-                self.clear_line(0..(self.cursor_x + 1).min(self.cols));
-                self.clear_lines(0..self.cursor_y);
-                self.dirty_lines.extend(0..(self.cursor_y + 1));
+                self.buffer.erase(
+                    (self.cursor_x, self.cursor_y),
+                    FromStartOfViewToCursor,
+                    &self.pen,
+                );
+
+                self.dirty_lines.extend(0..self.cursor_y + 1);
             }
 
             2 => {
-                // clear the whole screen
-                self.clear_lines(0..self.rows);
+                self.buffer
+                    .erase((self.cursor_x, self.cursor_y), WholeView, &self.pen);
+
                 self.dirty_lines.extend(0..self.rows);
             }
 
@@ -734,24 +742,33 @@ impl Vt {
     }
 
     fn execute_el(&mut self) {
+        use EraseMode::*;
+
         match self.get_param(0, 0) {
             0 => {
-                // clear to the end of the current line
-                self.clear_line(self.cursor_x..self.cols);
-                self.buffer[self.cursor_y].wrapped = false;
+                self.buffer.erase(
+                    (self.cursor_x, self.cursor_y),
+                    FromCursorToEndOfLine,
+                    &self.pen,
+                );
+
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             1 => {
-                // clear to the begining of the current line
-                self.clear_line(0..(self.cursor_x + 1).min(self.cols));
+                self.buffer.erase(
+                    (self.cursor_x, self.cursor_y),
+                    FromStartOfLineToCursor,
+                    &self.pen,
+                );
+
                 self.dirty_lines.insert(self.cursor_y);
             }
 
             2 => {
-                // clear whole current line
-                self.clear_line(0..self.cols);
-                self.buffer[self.cursor_y].wrapped = false;
+                self.buffer
+                    .erase((self.cursor_x, self.cursor_y), WholeLine, &self.pen);
+
                 self.dirty_lines.insert(self.cursor_y);
             }
 
@@ -760,48 +777,29 @@ impl Vt {
     }
 
     fn execute_il(&mut self) {
-        let mut n = self.get_param(0, 1) as usize;
-
-        if self.cursor_y > 0 {
-            self.buffer[self.cursor_y - 1].wrapped = false;
-        }
-
-        if self.cursor_y <= self.bottom_margin {
-            n = n.min(self.bottom_margin + 1 - self.cursor_y);
-            self.buffer[self.cursor_y..=self.bottom_margin].rotate_right(n);
-            self.clear_lines(self.cursor_y..(self.cursor_y + n));
-            self.buffer[self.bottom_margin].wrapped = false;
-            self.dirty_lines
-                .extend(self.cursor_y..(self.bottom_margin + 1));
+        let range = if self.cursor_y <= self.bottom_margin {
+            self.cursor_y..self.bottom_margin + 1
         } else {
-            n = n.min(self.rows - self.cursor_y);
-            self.buffer[self.cursor_y..].rotate_right(n);
-            self.clear_lines(self.cursor_y..(self.cursor_y + n));
-            self.buffer[self.rows - 1].wrapped = false;
-            self.dirty_lines.extend(self.cursor_y..self.rows);
-        }
+            self.cursor_y..self.rows
+        };
+
+        self.buffer
+            .scroll_down(range.clone(), self.get_param(0, 1) as usize, &self.pen);
+
+        self.dirty_lines.extend(range);
     }
 
     fn execute_dl(&mut self) {
-        let mut n = self.get_param(0, 1) as usize;
-
-        if self.cursor_y > 0 {
-            self.buffer[self.cursor_y - 1].wrapped = false;
-        }
-
-        if self.cursor_y <= self.bottom_margin {
-            let end_index = self.bottom_margin + 1;
-            n = n.min(end_index - self.cursor_y);
-            self.buffer[self.cursor_y..end_index].rotate_left(n);
-            self.clear_lines((end_index - n)..end_index);
-            self.buffer[self.bottom_margin - 1].wrapped = false;
-            self.dirty_lines.extend(self.cursor_y..end_index);
+        let range = if self.cursor_y <= self.bottom_margin {
+            self.cursor_y..self.bottom_margin + 1
         } else {
-            n = n.min(self.rows - self.cursor_y);
-            self.buffer[self.cursor_y..self.rows].rotate_left(n);
-            self.clear_lines((self.rows - n)..self.rows);
-            self.dirty_lines.extend(self.cursor_y..self.rows);
-        }
+            self.cursor_y..self.rows
+        };
+
+        self.buffer
+            .scroll_up(range.clone(), self.get_param(0, 1) as usize, &self.pen);
+
+        self.dirty_lines.extend(range);
     }
 
     fn execute_dch(&mut self) {
@@ -809,10 +807,12 @@ impl Vt {
             self.move_cursor_to_col(self.cols - 1);
         }
 
-        let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.cols - self.cursor_x);
-        self.buffer[self.cursor_y].delete(self.cursor_x, n, &self.pen);
-        self.buffer[self.cursor_y].wrapped = false;
+        self.buffer.delete(
+            (self.cursor_x, self.cursor_y),
+            self.get_param(0, 1) as usize,
+            &self.pen,
+        );
+
         self.dirty_lines.insert(self.cursor_y);
     }
 
@@ -834,14 +834,13 @@ impl Vt {
     }
 
     fn execute_ech(&mut self) {
-        let mut n = self.get_param(0, 1) as usize;
-        n = n.min(self.cols - self.cursor_x);
-        let end = self.cursor_x + n;
-        self.clear_line(self.cursor_x..end);
+        let n = self.get_param(0, 1) as usize;
 
-        if end == self.cols {
-            self.buffer[self.cursor_y].wrapped = false;
-        }
+        self.buffer.erase(
+            (self.cursor_x, self.cursor_y),
+            EraseMode::NextChars(n),
+            &self.pen,
+        );
 
         self.dirty_lines.insert(self.cursor_y);
     }
@@ -849,7 +848,7 @@ impl Vt {
     fn execute_rep(&mut self) {
         if self.cursor_x > 0 {
             let n = self.get_param(0, 1);
-            let char = self.buffer[self.cursor_y][self.cursor_x - 1].0;
+            let char = self.buffer[(self.cursor_x - 1, self.cursor_y)].0;
 
             for _n in 0..n {
                 self.print(char);
@@ -1206,14 +1205,6 @@ impl Vt {
         self.tabs.clear();
     }
 
-    fn clear_line(&mut self, range: Range<usize>) {
-        self.buffer[self.cursor_y].clear(range, &self.pen);
-    }
-
-    fn clear_lines(&mut self, range: Range<usize>) {
-        self.buffer[range].fill(Line::blank(self.cols, self.pen));
-    }
-
     fn get_param(&self, n: usize, default: u16) -> u16 {
         let param = *self.params.get(n).unwrap_or(&0);
 
@@ -1344,34 +1335,18 @@ impl Vt {
 
     // scrolling
 
-    fn scroll_up(&mut self, mut n: usize) {
-        if self.top_margin > 0 {
-            self.buffer[self.top_margin - 1].wrapped = false;
-        }
-
-        if self.bottom_margin < self.rows - 1 {
-            self.buffer[self.bottom_margin].wrapped = false;
-        }
-
-        let end_index = self.bottom_margin + 1;
-        n = n.min(end_index - self.top_margin);
-        self.buffer[self.top_margin..end_index].rotate_left(n);
-        self.clear_lines((end_index - n)..end_index);
-        self.dirty_lines.extend(self.top_margin..end_index);
+    fn scroll_up(&mut self, n: usize) {
+        let range = self.top_margin..self.bottom_margin + 1;
+        self.buffer.scroll_up(range.clone(), n, &self.pen);
+        self.dirty_lines.extend(range);
     }
 
-    fn scroll_down(&mut self, mut n: usize) {
-        let end_index = self.bottom_margin + 1;
-        n = n.min(end_index - self.top_margin);
-        self.buffer[self.top_margin..end_index].rotate_right(n);
-        self.clear_lines(self.top_margin..self.top_margin + n);
-        self.dirty_lines.extend(self.top_margin..end_index);
+    fn scroll_down(&mut self, n: usize) {
+        let range = self.top_margin..self.bottom_margin + 1;
 
-        if self.top_margin > 0 {
-            self.buffer[self.top_margin - 1].wrapped = false;
-        }
+        self.buffer.scroll_down(range.clone(), n, &self.pen);
 
-        self.buffer[self.bottom_margin].wrapped = false;
+        self.dirty_lines.extend(range);
     }
 
     // buffer switching
@@ -1380,8 +1355,14 @@ impl Vt {
         if let BufferType::Primary = self.active_buffer_type {
             self.active_buffer_type = BufferType::Alternate;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
-            std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
-            self.clear_lines(0..self.buffer.len());
+            std::mem::swap(&mut self.buffer, &mut self.other_buffer);
+
+            self.buffer.erase(
+                (self.cursor_x, self.cursor_y),
+                EraseMode::WholeView,
+                &self.pen,
+            );
+
             self.dirty_lines.extend(0..self.rows);
         }
     }
@@ -1390,140 +1371,32 @@ impl Vt {
         if let BufferType::Alternate = self.active_buffer_type {
             self.active_buffer_type = BufferType::Primary;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
-            std::mem::swap(&mut self.buffer, &mut self.alternate_buffer);
+            std::mem::swap(&mut self.buffer, &mut self.other_buffer);
             self.dirty_lines.extend(0..self.rows);
         }
     }
 
     fn reflow(&mut self) {
-        let cols = self.buffer[0].len();
-
-        match self.cols.cmp(&cols) {
-            std::cmp::Ordering::Less => {
-                let rel_cursor = self.rel_cursor((self.cursor_x, self.cursor_y));
-                self.buffer = line::reflow(self.buffer.drain(..), self.cols);
-                (self.cursor_x, self.cursor_y) = self.abs_cursor(rel_cursor);
-                let rows = self.buffer.len();
-
-                if rows > self.rows {
-                    let added = rows - self.rows;
-                    self.buffer.rotate_left(added);
-                    self.buffer.truncate(self.rows);
-                }
-
-                if self.saved_ctx.cursor_x >= self.cols {
-                    self.saved_ctx.cursor_x = self.cols - 1;
-                }
-
-                self.next_print_wraps = false;
-                self.dirty_lines.extend(0..self.rows);
-            }
-
-            std::cmp::Ordering::Equal => (),
-
-            std::cmp::Ordering::Greater => {
-                let rel_cursor = self.rel_cursor((self.cursor_x, self.cursor_y));
-                self.buffer = line::reflow(self.buffer.drain(..), self.cols);
-                (self.cursor_x, self.cursor_y) = self.abs_cursor(rel_cursor);
-                let rows = self.buffer.len();
-
-                if rows < self.rows {
-                    let line = Line::blank(self.cols, Pen::default());
-                    let filler = std::iter::repeat(line).take(self.rows - rows);
-                    self.buffer.extend(filler);
-                }
-
-                self.next_print_wraps = false;
-                self.dirty_lines.extend(0..self.rows);
-            }
+        if self.cols != self.buffer.cols {
+            self.next_print_wraps = false;
         }
 
-        let rows = self.buffer.len();
+        let (new_cursor, dirty_lines) =
+            self.buffer
+                .resize(self.cols, self.rows, (self.cursor_x, self.cursor_y));
 
-        match self.rows.cmp(&rows) {
-            std::cmp::Ordering::Less => {
-                let decrement = rows - self.rows;
-                let rot = decrement - decrement.min(rows - self.cursor_y - 1);
+        (self.cursor_x, self.cursor_y) = new_cursor;
+        self.cursor_y = self.cursor_y.min(self.rows - 1);
+        self.dirty_lines.extend(dirty_lines);
+        self.dirty_lines.retain(|r| r < &self.rows);
 
-                if rot > 0 {
-                    self.buffer.rotate_left(rot);
-                    self.dirty_lines.extend(0..self.rows);
-                }
-
-                self.buffer.truncate(self.rows);
-                self.cursor_y = self.cursor_y.min(self.rows - 1);
-
-                if self.saved_ctx.cursor_y >= self.rows {
-                    self.saved_ctx.cursor_y = self.rows - 1;
-                }
-
-                self.dirty_lines.retain(|r| r < &self.rows);
-            }
-
-            std::cmp::Ordering::Equal => (),
-
-            std::cmp::Ordering::Greater => {
-                let increment = self.rows - rows;
-                let line = Line::blank(self.cols, Pen::default());
-                let filler = std::iter::repeat(line).take(increment);
-                self.buffer.extend(filler);
-                self.dirty_lines.extend(rows..self.rows);
-            }
-        }
-    }
-
-    fn rel_cursor(&self, (abs_col, abs_row): (usize, usize)) -> (usize, usize) {
-        let cols = self.buffer[0].len();
-        let mut rel_col = abs_col;
-        let mut rel_row = 0;
-        let mut r = self.buffer.len() - 1;
-
-        while r > abs_row {
-            if !self.buffer[r - 1].wrapped {
-                rel_row += 1;
-            }
-
-            r -= 1;
+        if self.saved_ctx.cursor_x >= self.cols {
+            self.saved_ctx.cursor_x = self.cols - 1;
         }
 
-        while r > 0 && self.buffer[r - 1].wrapped {
-            rel_col += cols;
-            r -= 1;
+        if self.saved_ctx.cursor_y >= self.rows {
+            self.saved_ctx.cursor_y = self.rows - 1;
         }
-
-        (rel_col, rel_row)
-    }
-
-    fn abs_cursor(&self, (rel_col, rel_row): (usize, usize)) -> (usize, usize) {
-        let cols = self.buffer[0].len();
-        let mut abs_col = rel_col;
-        let mut abs_row = self.buffer.len() - 1;
-        let mut r = 0;
-
-        while r < rel_row && abs_row > 0 {
-            if !self.buffer[abs_row - 1].wrapped {
-                r += 1;
-            }
-
-            abs_row -= 1;
-        }
-
-        while abs_row > 0 && self.buffer[abs_row - 1].wrapped {
-            abs_row -= 1;
-        }
-
-        while abs_col >= cols && self.buffer[abs_row].wrapped {
-            abs_col -= cols;
-            abs_row += 1;
-        }
-
-        abs_col = abs_col.min(cols - 1);
-
-        if self.buffer.len() > self.rows {
-            abs_row = self.rows - (self.buffer.len() - abs_row);
-        }
-
-        (abs_col, abs_row)
     }
 
     // resetting
@@ -1541,15 +1414,15 @@ impl Vt {
     }
 
     fn hard_reset(&mut self) {
-        let buffer = Vt::new_buffer(self.cols, self.rows);
-        let alternate_buffer = buffer.clone();
+        let primary_buffer = Buffer::new(self.cols, self.rows);
+        let alternate_buffer = Buffer::new(self.cols, self.rows);
 
         self.state = State::Ground;
         self.params = Vec::new();
         self.params.push(0);
         self.intermediates = Vec::new();
-        self.buffer = buffer;
-        self.alternate_buffer = alternate_buffer;
+        self.buffer = primary_buffer;
+        self.other_buffer = alternate_buffer;
         self.active_buffer_type = BufferType::Primary;
         self.tabs = Tabs::new(self.cols);
         self.cursor_x = 0;
@@ -1582,7 +1455,7 @@ impl Vt {
         // 1. dump primary screen buffer
 
         // TODO don't include trailing empty lines
-        let mut seq: String = self.dump_buffer(self.primary_buffer());
+        let mut seq: String = self.primary_buffer().dump();
 
         // 2. setup tab stops
 
@@ -1639,7 +1512,7 @@ impl Vt {
             seq.push_str("\u{9b}1;1H");
 
             // dump alternate buffer
-            seq.push_str(&self.dump_buffer(self.alternate_buffer()));
+            seq.push_str(&self.alternate_buffer().dump());
         }
 
         // 5. configure saved context for alternate screen
@@ -1717,7 +1590,7 @@ impl Vt {
         if self.cursor_x >= self.cols {
             // move cursor past right border by re-printing the character in
             // the last column
-            let cell = self.buffer[self.cursor_y][self.cols - 1];
+            let cell = self.buffer[(self.cols - 1, self.cursor_y)];
             seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
         }
 
@@ -1845,43 +1718,24 @@ impl Vt {
         seq
     }
 
-    fn primary_buffer(&self) -> &Vec<Line> {
+    fn primary_buffer(&self) -> &Buffer {
         if self.active_buffer_type == BufferType::Primary {
             &self.buffer
         } else {
-            &self.alternate_buffer
+            &self.other_buffer
         }
     }
 
-    fn alternate_buffer(&self) -> &Vec<Line> {
+    fn alternate_buffer(&self) -> &Buffer {
         if self.active_buffer_type == BufferType::Alternate {
             &self.buffer
         } else {
-            &self.alternate_buffer
+            &self.other_buffer
         }
     }
 
-    fn dump_buffer(&self, buffer: &[Line]) -> String {
-        let last = buffer.len() - 1;
-
-        buffer
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                let mut dump = line.dump();
-
-                if i < last && !line.wrapped {
-                    dump.push('\r');
-                    dump.push('\n');
-                }
-
-                dump
-            })
-            .collect()
-    }
-
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.buffer.iter()
+        self.buffer.lines()
     }
 
     pub fn line(&self, n: usize) -> &Line {
@@ -1891,10 +1745,10 @@ impl Vt {
 
 #[cfg(test)]
 mod tests {
+    use super::Buffer;
     use super::BufferType;
     use super::Color;
     use super::Intensity;
-    use super::Line;
     use super::State;
     use super::Vt;
     use pretty_assertions::assert_eq;
@@ -2661,11 +2515,11 @@ mod tests {
 
         vt.feed_str("\x1b[8;6;7t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+        assert!(!vt.lines().any(|l| l.wrapped));
 
         vt.feed_str("\x1b[8;6;15t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+        assert!(!vt.lines().any(|l| l.wrapped));
 
         let mut vt = Vt::new(6, 6);
         vt.resizable = true;
@@ -2701,11 +2555,11 @@ mod tests {
 
         vt.feed_str("\x1b[8;6;7t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+        assert!(!vt.lines().any(|l| l.wrapped));
 
         vt.feed_str("\x1b[8;6;6t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.buffer.iter().any(|l| l.wrapped));
+        assert!(!vt.lines().any(|l| l.wrapped));
 
         let mut vt = Vt::new(8, 2);
         vt.resizable = true;
@@ -3105,7 +2959,7 @@ mod tests {
             }
 
             assert_eq!(vt.buffer.len(), 5);
-            assert!(vt.buffer.iter().all(|line| line.len() == 10));
+            assert!(vt.lines().all(|line| line.len() == 10));
         }
 
         #[test]
@@ -3114,7 +2968,7 @@ mod tests {
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
-            assert_eq!(vt.abs_cursor(vt.rel_cursor((vcol, vrow))), (vcol, vrow));
+            assert_eq!(vt.buffer.abs_cursor(vt.buffer.rel_cursor((vcol, vrow), 10), 10), (vcol, vrow));
         }
 
         #[test]
@@ -3123,7 +2977,7 @@ mod tests {
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
-            assert!(!vt.buffer.last().unwrap().wrapped);
+            assert!(!vt.lines().last().unwrap().wrapped);
         }
 
         #[test]
@@ -3216,7 +3070,8 @@ mod tests {
         buffer_text(vt.alternate_buffer(), vt.cursor_x, vt.cursor_y)
     }
 
-    fn buffer_text(buffer: &[Line], cursor_x: usize, cursor_y: usize) -> String {
+    fn buffer_text(buffer: &Buffer, cursor_x: usize, cursor_y: usize) -> String {
+        let buffer = buffer.lines().collect::<Vec<_>>();
         let mut lines = Vec::new();
         lines.extend(buffer[0..cursor_y].iter().map(|l| l.text()));
         let cursor_line = &buffer[cursor_y];
@@ -3236,6 +3091,6 @@ mod tests {
     }
 
     fn wrapped(vt: &Vt) -> Vec<bool> {
-        vt.buffer.iter().map(|l| l.wrapped).collect()
+        vt.lines().map(|l| l.wrapped).collect()
     }
 }

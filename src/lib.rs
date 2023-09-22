@@ -1,3 +1,4 @@
+mod buffer;
 mod cell;
 mod charset;
 mod color;
