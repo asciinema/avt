@@ -1343,9 +1343,7 @@ impl Vt {
 
     fn scroll_down_in_region(&mut self, n: usize) {
         let range = self.top_margin..self.bottom_margin + 1;
-
         self.buffer.scroll_down(range.clone(), n, &self.pen);
-
         self.dirty_lines.extend(range);
     }
 
