@@ -459,7 +459,7 @@ impl Vt {
 
             if self.cursor_y == self.bottom_margin {
                 self.buffer.wrap(self.cursor_y);
-                self.scroll_up(1);
+                self.scroll_up_in_region(1);
             } else if self.cursor_y < self.rows - 1 {
                 self.buffer.wrap(self.cursor_y);
                 self.do_move_cursor_to_row(self.cursor_y + 1);
@@ -645,7 +645,7 @@ impl Vt {
 
     fn execute_ri(&mut self) {
         if self.cursor_y == self.top_margin {
-            self.scroll_down(1);
+            self.scroll_down_in_region(1);
         } else if self.cursor_y > 0 {
             self.do_move_cursor_to_row(self.cursor_y - 1);
         }
@@ -817,11 +817,11 @@ impl Vt {
     }
 
     fn execute_su(&mut self) {
-        self.scroll_up(self.get_param(0, 1) as usize);
+        self.scroll_up_in_region(self.get_param(0, 1) as usize);
     }
 
     fn execute_sd(&mut self) {
-        self.scroll_down(self.get_param(0, 1) as usize);
+        self.scroll_down_in_region(self.get_param(0, 1) as usize);
     }
 
     fn execute_ctc(&mut self) {
@@ -1305,7 +1305,7 @@ impl Vt {
 
     fn move_cursor_down_with_scroll(&mut self) {
         if self.cursor_y == self.bottom_margin {
-            self.scroll_up(1);
+            self.scroll_up_in_region(1);
         } else if self.cursor_y < self.rows - 1 {
             self.do_move_cursor_to_row(self.cursor_y + 1);
         }
@@ -1335,13 +1335,13 @@ impl Vt {
 
     // scrolling
 
-    fn scroll_up(&mut self, n: usize) {
+    fn scroll_up_in_region(&mut self, n: usize) {
         let range = self.top_margin..self.bottom_margin + 1;
         self.buffer.scroll_up(range.clone(), n, &self.pen);
         self.dirty_lines.extend(range);
     }
 
-    fn scroll_down(&mut self, n: usize) {
+    fn scroll_down_in_region(&mut self, n: usize) {
         let range = self.top_margin..self.bottom_margin + 1;
 
         self.buffer.scroll_down(range.clone(), n, &self.pen);
