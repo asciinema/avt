@@ -39,6 +39,26 @@ impl Buffer {
         self.lines.len()
     }
 
+    pub fn text(&self) -> Vec<String> {
+        let mut text = Vec::new();
+        let mut current = String::new();
+
+        for line in &self.lines {
+            current.push_str(&line.text());
+
+            if !line.wrapped {
+                text.push(current.trim_end().to_owned());
+                current.clear();
+            }
+        }
+
+        if !current.is_empty() {
+            text.push(current.trim_end().to_owned());
+        }
+
+        text
+    }
+
     pub fn print(&mut self, (col, row): Cursor, cell: Cell) {
         self.lines[row].print(col, cell);
     }
@@ -297,5 +317,35 @@ impl Dump for Buffer {
                 dump
             })
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Buffer;
+    use crate::cell::Cell;
+    use crate::pen::Pen;
+    use pretty_assertions::assert_eq;
+
+    #[test]
+    fn text() {
+        let mut buffer = Buffer::new(10, 5);
+        let cell = Cell('x', Pen::default());
+
+        assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
+
+        buffer.print((0, 0), cell);
+        buffer.print((1, 1), cell);
+        buffer.print((2, 2), cell);
+        buffer.print((3, 3), cell);
+        buffer.print((4, 4), cell);
+        assert_eq!(buffer.text(), vec!["x", " x", "  x", "   x", "    x"]);
+
+        buffer.wrap(0);
+        buffer.wrap(3);
+        assert_eq!(
+            buffer.text(),
+            vec!["x          x", "  x", "   x          x"]
+        );
     }
 }

@@ -1739,6 +1739,10 @@ impl Vt {
     pub fn line(&self, n: usize) -> &Line {
         &self.buffer[n]
     }
+
+    pub fn text(&self) -> Vec<String> {
+        self.primary_buffer().text()
+    }
 }
 
 #[cfg(test)]
