@@ -1732,8 +1732,8 @@ impl Vt {
         }
     }
 
-    pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.buffer.lines()
+    pub fn lines(&self) -> &[Line] {
+        self.buffer.view()
     }
 
     pub fn line(&self, n: usize) -> &Line {
@@ -2517,11 +2517,11 @@ mod tests {
 
         vt.feed_str("\x1b[8;6;7t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.lines().any(|l| l.wrapped));
+        assert!(!vt.lines().iter().any(|l| l.wrapped));
 
         vt.feed_str("\x1b[8;6;15t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.lines().any(|l| l.wrapped));
+        assert!(!vt.lines().iter().any(|l| l.wrapped));
 
         let mut vt = Vt::new(6, 6);
         vt.resizable = true;
@@ -2557,11 +2557,11 @@ mod tests {
 
         vt.feed_str("\x1b[8;6;7t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.lines().any(|l| l.wrapped));
+        assert!(!vt.lines().iter().any(|l| l.wrapped));
 
         vt.feed_str("\x1b[8;6;6t");
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.lines().any(|l| l.wrapped));
+        assert!(!vt.lines().iter().any(|l| l.wrapped));
 
         let mut vt = Vt::new(8, 2);
         vt.resizable = true;
@@ -2960,8 +2960,8 @@ mod tests {
                 vt.feed(c);
             }
 
-            assert_eq!(vt.buffer.len(), 5);
-            assert!(vt.lines().all(|line| line.len() == 10));
+            assert!(vt.buffer.len() >= 5);
+            assert!(vt.lines().iter().all(|line| line.len() == 10));
         }
 
         #[test]
@@ -3073,17 +3073,17 @@ mod tests {
     }
 
     fn buffer_text(buffer: &Buffer, cursor_x: usize, cursor_y: usize) -> String {
-        let buffer = buffer.lines().collect::<Vec<_>>();
+        let view = buffer.view();
         let mut lines = Vec::new();
-        lines.extend(buffer[0..cursor_y].iter().map(|l| l.text()));
-        let cursor_line = &buffer[cursor_y];
+        lines.extend(view[0..cursor_y].iter().map(|l| l.text()));
+        let cursor_line = &view[cursor_y];
         let left = cursor_line.chars().take(cursor_x);
         let right = cursor_line.chars().skip(cursor_x);
         let mut line = String::from_iter(left);
         line.push('|');
         line.extend(right);
         lines.push(line);
-        lines.extend(buffer[cursor_y + 1..].iter().map(|l| l.text()));
+        lines.extend(view[cursor_y + 1..].iter().map(|l| l.text()));
 
         lines
             .into_iter()
@@ -3093,6 +3093,6 @@ mod tests {
     }
 
     fn wrapped(vt: &Vt) -> Vec<bool> {
-        vt.lines().map(|l| l.wrapped).collect()
+        vt.lines().iter().map(|l| l.wrapped).collect()
     }
 }

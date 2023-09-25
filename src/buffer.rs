@@ -3,7 +3,7 @@ use crate::dump::Dump;
 use crate::line::{self, Line};
 use crate::pen::Pen;
 use std::collections::HashSet;
-use std::ops::{Index, Range};
+use std::ops::{Index, IndexMut, Range};
 
 #[derive(Debug)]
 pub(crate) struct Buffer {
@@ -31,10 +31,6 @@ impl Buffer {
         Buffer { lines, cols, rows }
     }
 
-    pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.lines.iter()
-    }
-
     pub fn len(&self) -> usize {
         self.lines.len()
     }
@@ -60,22 +56,23 @@ impl Buffer {
     }
 
     pub fn print(&mut self, (col, row): Cursor, cell: Cell) {
-        self.lines[row].print(col, cell);
+        self[row].print(col, cell);
     }
 
     pub fn wrap(&mut self, row: usize) {
-        self.lines[row].wrapped = true;
+        self[row].wrapped = true;
     }
 
     pub fn insert(&mut self, (col, row): Cursor, mut n: usize, cell: Cell) {
         n = n.min(self.cols - col);
-        self.lines[row].insert(col, n, cell);
+        self[row].insert(col, n, cell);
     }
 
     pub fn delete(&mut self, (col, row): Cursor, mut n: usize, pen: &Pen) {
         n = n.min(self.cols - col);
-        self.lines[row].delete(col, n, pen);
-        self.lines[row].wrapped = false;
+        let line = &mut self[row];
+        line.delete(col, n, pen);
+        line.wrapped = false;
     }
 
     pub fn erase(&mut self, (col, row): Cursor, mode: EraseMode, pen: &Pen) {
@@ -85,40 +82,50 @@ impl Buffer {
             NextChars(mut n) => {
                 n = n.min(self.cols - col);
                 let end = col + n;
-                self.lines[row].clear(col..end, pen);
+                let clear_wrap = end == self.cols;
+                let line = &mut self[row];
+                line.clear(col..end, pen);
 
-                if end == self.cols {
-                    self.lines[row].wrapped = false;
+                if clear_wrap {
+                    line.wrapped = false;
                 }
             }
 
             FromCursorToEndOfView => {
-                self.lines[row].clear(col..self.cols, pen);
-                self.clear_lines((row + 1)..self.rows, pen);
-                self.lines[row].wrapped = false;
+                let range = col..self.cols;
+                let line = &mut self[row];
+                line.wrapped = false;
+                line.clear(range, pen);
+                self.clear((row + 1)..self.rows, pen);
             }
 
             FromStartOfViewToCursor => {
-                self.lines[row].clear(0..(col + 1).min(self.cols), pen);
-                self.clear_lines(0..row, pen);
+                let range = 0..(col + 1).min(self.cols);
+                self[row].clear(range, pen);
+                self.clear(0..row, pen);
             }
 
             WholeView => {
-                self.clear_lines(0..self.rows, pen);
+                self.clear(0..self.rows, pen);
             }
 
             FromCursorToEndOfLine => {
-                self.lines[row].clear(col..self.cols, pen);
-                self.lines[row].wrapped = false;
+                let range = col..self.cols;
+                let line = &mut self[row];
+                line.clear(range, pen);
+                line.wrapped = false;
             }
 
             FromStartOfLineToCursor => {
-                self.lines[row].clear(0..(col + 1).min(self.cols), pen);
+                let range = 0..(col + 1).min(self.cols);
+                self[row].clear(range, pen);
             }
 
             WholeLine => {
-                self.lines[row].clear(0..self.cols, pen);
-                self.lines[row].wrapped = false;
+                let range = 0..self.cols;
+                let line = &mut self[row];
+                line.clear(range, pen);
+                line.wrapped = false;
             }
         }
     }
@@ -127,28 +134,29 @@ impl Buffer {
         n = n.min(range.end - range.start);
 
         if range.start > 0 {
-            self.lines[range.start - 1].wrapped = false;
+            self[range.start - 1].wrapped = false;
         }
 
         if range.end - 1 < self.rows - 1 {
-            self.lines[range.end - 1].wrapped = false;
+            self[range.end - 1].wrapped = false;
         }
 
         let end = range.end;
-        self.lines[range].rotate_left(n);
-        self.clear_lines((end - n)..end, pen);
+        self[range].rotate_left(n);
+        self.clear((end - n)..end, pen);
     }
 
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
-        n = n.min(range.end - range.start);
-        self.lines[range.clone()].rotate_right(n);
-        self.clear_lines(range.start..range.start + n, pen);
+        let (start, end) = (range.start, range.end);
+        n = n.min(end - start);
+        self[range].rotate_right(n);
+        self.clear(start..start + n, pen);
 
-        if range.start > 0 {
-            self.lines[range.start - 1].wrapped = false;
+        if start > 0 {
+            self[start - 1].wrapped = false;
         }
 
-        self.lines[range.end - 1].wrapped = false;
+        self[end - 1].wrapped = false;
     }
 
     pub fn resize(
@@ -278,8 +286,18 @@ impl Buffer {
         (abs_col, abs_row)
     }
 
-    fn clear_lines(&mut self, range: Range<usize>, pen: &Pen) {
-        self.lines[range].fill(Line::blank(self.cols, *pen));
+    pub fn view(&self) -> &[Line] {
+        &self.lines[self.lines.len() - self.rows..]
+    }
+
+    fn view_mut(&mut self) -> &mut [Line] {
+        let len = self.lines.len();
+        &mut self.lines[len - self.rows..]
+    }
+
+    fn clear(&mut self, range: Range<usize>, pen: &Pen) {
+        let line = Line::blank(self.cols, *pen);
+        self.view_mut()[range].fill(line);
     }
 }
 
@@ -287,7 +305,15 @@ impl Index<usize> for Buffer {
     type Output = Line;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.lines[index]
+        &self.view()[index]
+    }
+}
+
+impl Index<Range<usize>> for Buffer {
+    type Output = [Line];
+
+    fn index(&self, range: Range<usize>) -> &Self::Output {
+        &self.view()[range]
     }
 }
 
@@ -295,15 +321,27 @@ impl Index<Cursor> for Buffer {
     type Output = Cell;
 
     fn index(&self, (col, row): Cursor) -> &Self::Output {
-        &self.lines[row][col]
+        &self.view()[row][col]
+    }
+}
+
+impl IndexMut<usize> for Buffer {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.view_mut()[index]
+    }
+}
+
+impl IndexMut<Range<usize>> for Buffer {
+    fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
+        &mut self.view_mut()[range]
     }
 }
 
 impl Dump for Buffer {
     fn dump(&self) -> String {
-        let last = self.lines.len() - 1;
+        let last = self.rows - 1;
 
-        self.lines
+        self.view()
             .iter()
             .enumerate()
             .map(|(i, line)| {
