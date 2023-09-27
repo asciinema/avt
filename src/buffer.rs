@@ -2,7 +2,7 @@ use crate::cell::Cell;
 use crate::dump::Dump;
 use crate::line::{self, Line};
 use crate::pen::Pen;
-use std::collections::HashSet;
+use std::cmp::Ordering;
 use std::ops::{Index, IndexMut, Range};
 
 #[derive(Debug)]
@@ -22,7 +22,9 @@ pub(crate) enum EraseMode {
     WholeLine,
 }
 
-type Cursor = (usize, usize);
+type LogicalPosition = (usize, usize);
+type RelativePosition = (usize, isize);
+type VisualPosition = (usize, usize);
 
 impl Buffer {
     pub fn new(cols: usize, rows: usize) -> Self {
@@ -31,6 +33,7 @@ impl Buffer {
         Buffer { lines, cols, rows }
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.lines.len()
     }
@@ -55,7 +58,7 @@ impl Buffer {
         text
     }
 
-    pub fn print(&mut self, (col, row): Cursor, cell: Cell) {
+    pub fn print(&mut self, (col, row): VisualPosition, cell: Cell) {
         self[row].print(col, cell);
     }
 
@@ -63,19 +66,19 @@ impl Buffer {
         self[row].wrapped = true;
     }
 
-    pub fn insert(&mut self, (col, row): Cursor, mut n: usize, cell: Cell) {
+    pub fn insert(&mut self, (col, row): VisualPosition, mut n: usize, cell: Cell) {
         n = n.min(self.cols - col);
         self[row].insert(col, n, cell);
     }
 
-    pub fn delete(&mut self, (col, row): Cursor, mut n: usize, pen: &Pen) {
+    pub fn delete(&mut self, (col, row): VisualPosition, mut n: usize, pen: &Pen) {
         n = n.min(self.cols - col);
         let line = &mut self[row];
         line.delete(col, n, pen);
         line.wrapped = false;
     }
 
-    pub fn erase(&mut self, (col, row): Cursor, mode: EraseMode, pen: &Pen) {
+    pub fn erase(&mut self, (col, row): VisualPosition, mode: EraseMode, pen: &Pen) {
         use EraseMode::*;
 
         match mode {
@@ -163,127 +166,117 @@ impl Buffer {
         &mut self,
         new_cols: usize,
         new_rows: usize,
-        (mut cursor_col, mut cursor_row): Cursor,
-    ) -> (Cursor, HashSet<usize>) {
-        let mut dirty_lines = HashSet::new();
+        mut cursor: VisualPosition,
+    ) -> VisualPosition {
         let old_cols = self.cols;
+        let mut old_rows = self.rows;
+        let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
+
+        if new_cols != old_cols {
+            self.lines = line::reflow(self.lines.drain(..), new_cols);
+            let line_count = self.lines.len();
+
+            if line_count < old_rows {
+                self.extend(old_rows - line_count, new_cols);
+            }
+
+            let cursor_rel_pos = self.relative_position(cursor_log_pos, new_cols, old_rows);
+            cursor.0 = cursor_rel_pos.0;
+
+            if cursor_rel_pos.1 >= 0 {
+                cursor.1 = cursor_rel_pos.1 as usize;
+            } else {
+                cursor.1 = 0;
+                old_rows += (-cursor_rel_pos.1) as usize;
+            }
+        }
+
+        let line_count = self.lines.len();
+
+        match new_rows.cmp(&old_rows) {
+            Ordering::Less => {
+                let height_delta = old_rows - new_rows;
+                let inverted_cursor_row = old_rows - 1 - cursor.1;
+                let excess = height_delta.min(inverted_cursor_row);
+
+                if excess > 0 {
+                    self.lines.truncate(line_count - excess);
+                }
+
+                cursor.1 -= height_delta - excess;
+            }
+
+            Ordering::Greater => {
+                let mut height_delta = new_rows - old_rows;
+                let scrollback_size = line_count - old_rows.min(line_count);
+                let cursor_row_shift = scrollback_size.min(height_delta);
+                height_delta -= cursor_row_shift;
+                cursor.1 += cursor_row_shift;
+
+                if height_delta > 0 {
+                    self.extend(height_delta, new_cols);
+                }
+            }
+
+            Ordering::Equal => (),
+        }
+
         self.cols = new_cols;
         self.rows = new_rows;
 
-        match self.cols.cmp(&old_cols) {
-            std::cmp::Ordering::Less => {
-                let rel_cursor = self.rel_cursor((cursor_col, cursor_row), old_cols);
-                self.lines = line::reflow(self.lines.drain(..), self.cols);
-                (cursor_col, cursor_row) = self.abs_cursor(rel_cursor, self.cols);
-                let rows = self.lines.len();
-
-                if rows > new_rows {
-                    let added = rows - new_rows;
-                    self.lines.rotate_left(added);
-                    self.lines.truncate(new_rows);
-                }
-
-                dirty_lines.extend(0..new_rows);
-            }
-
-            std::cmp::Ordering::Equal => (),
-
-            std::cmp::Ordering::Greater => {
-                let rel_cursor = self.rel_cursor((cursor_col, cursor_row), old_cols);
-                self.lines = line::reflow(self.lines.drain(..), self.cols);
-                (cursor_col, cursor_row) = self.abs_cursor(rel_cursor, self.cols);
-                let rows = self.lines.len();
-
-                if rows < new_rows {
-                    let line = Line::blank(self.cols, Pen::default());
-                    let filler = std::iter::repeat(line).take(new_rows - rows);
-                    self.lines.extend(filler);
-                }
-
-                dirty_lines.extend(0..new_rows);
-            }
-        }
-
-        let rows = self.lines.len();
-
-        match new_rows.cmp(&rows) {
-            std::cmp::Ordering::Less => {
-                let decrement = rows - new_rows;
-                let rot = decrement - decrement.min(rows - cursor_row - 1);
-
-                if rot > 0 {
-                    self.lines.rotate_left(rot);
-                    dirty_lines.extend(0..new_rows);
-                }
-
-                self.lines.truncate(new_rows);
-            }
-
-            std::cmp::Ordering::Equal => (),
-
-            std::cmp::Ordering::Greater => {
-                let increment = new_rows - rows;
-                let line = Line::blank(self.cols, Pen::default());
-                let filler = std::iter::repeat(line).take(increment);
-                self.lines.extend(filler);
-
-                dirty_lines.extend(rows..new_rows);
-            }
-        }
-
-        ((cursor_col, cursor_row), dirty_lines)
+        cursor
     }
 
-    pub fn rel_cursor(&self, (abs_col, abs_row): Cursor, cols: usize) -> (usize, usize) {
-        let mut rel_col = abs_col;
+    pub fn logical_position(
+        &self,
+        pos: VisualPosition,
+        cols: usize,
+        rows: usize,
+    ) -> LogicalPosition {
+        let vis_row_offset = self.lines.len() - rows;
+        let mut log_row = 0;
+        let mut log_col_offset = 0;
+
+        for r in 0..pos.1 + vis_row_offset {
+            if self.lines[r].wrapped {
+                log_col_offset += cols;
+            } else {
+                log_col_offset = 0;
+                log_row += 1;
+            }
+        }
+
+        (pos.0 + log_col_offset, log_row)
+    }
+
+    pub fn relative_position(
+        &self,
+        pos: LogicalPosition,
+        cols: usize,
+        rows: usize,
+    ) -> RelativePosition {
+        let mut rel_col = pos.0;
         let mut rel_row = 0;
-        let mut r = self.lines.len() - 1;
-
-        while r > abs_row {
-            if !self.lines[r - 1].wrapped {
-                rel_row += 1;
-            }
-
-            r -= 1;
-        }
-
-        while r > 0 && self.lines[r - 1].wrapped {
-            rel_col += cols;
-            r -= 1;
-        }
-
-        (rel_col, rel_row)
-    }
-
-    pub fn abs_cursor(&self, (rel_col, rel_row): (usize, usize), cols: usize) -> Cursor {
-        let mut abs_col = rel_col;
-        let mut abs_row = self.lines.len() - 1;
         let mut r = 0;
+        let last_row = self.lines.len() - 1;
 
-        while r < rel_row && abs_row > 0 {
-            if !self.lines[abs_row - 1].wrapped {
+        while r < pos.1 && rel_row < last_row {
+            if !self.lines[rel_row].wrapped {
                 r += 1;
             }
 
-            abs_row -= 1;
+            rel_row += 1;
         }
 
-        while abs_row > 0 && self.lines[abs_row - 1].wrapped {
-            abs_row -= 1;
+        while rel_col >= cols && self.lines[rel_row].wrapped {
+            rel_col -= cols;
+            rel_row += 1;
         }
 
-        while abs_col >= cols && self.lines[abs_row].wrapped {
-            abs_col -= cols;
-            abs_row += 1;
-        }
+        rel_col = rel_col.min(cols - 1);
+        let rel_row_offset = self.lines.len() - rows;
 
-        abs_col = abs_col.min(cols - 1);
-
-        if self.lines.len() > self.rows {
-            abs_row = self.rows - (self.lines.len() - abs_row);
-        }
-
-        (abs_col, abs_row)
+        (rel_col, (rel_row as isize - rel_row_offset as isize))
     }
 
     pub fn view(&self) -> &[Line] {
@@ -298,6 +291,25 @@ impl Buffer {
     fn clear(&mut self, range: Range<usize>, pen: &Pen) {
         let line = Line::blank(self.cols, *pen);
         self.view_mut()[range].fill(line);
+    }
+
+    fn extend(&mut self, n: usize, cols: usize) {
+        let line = Line::blank(cols, Pen::default());
+        let filler = std::iter::repeat(line).take(n);
+        self.lines.extend(filler);
+    }
+
+    #[cfg(test)]
+    pub fn add_scrollback(&mut self, n: usize) {
+        let mut line = Line::blank(self.cols, Pen::default());
+
+        for col in 0..self.cols {
+            line.print(col, Cell('s', Pen::default()));
+        }
+
+        for _ in 0..n {
+            self.lines.insert(0, line.clone());
+        }
     }
 }
 
@@ -317,10 +329,10 @@ impl Index<Range<usize>> for Buffer {
     }
 }
 
-impl Index<Cursor> for Buffer {
+impl Index<VisualPosition> for Buffer {
     type Output = Cell;
 
-    fn index(&self, (col, row): Cursor) -> &Self::Output {
+    fn index(&self, (col, row): VisualPosition) -> &Self::Output {
         &self.view()[row][col]
     }
 }
@@ -360,10 +372,11 @@ impl Dump for Buffer {
 
 #[cfg(test)]
 mod tests {
-    use super::Buffer;
+    use super::{Buffer, VisualPosition};
     use crate::cell::Cell;
     use crate::pen::Pen;
     use pretty_assertions::assert_eq;
+    use proptest::prelude::*;
 
     #[test]
     fn text() {
@@ -385,5 +398,298 @@ mod tests {
             buffer.text(),
             vec!["x          x", "  x", "   x          x"]
         );
+    }
+
+    #[test]
+    fn resize_shorter() {
+        let content = vec![
+            ("aa  ", false),
+            ("bbbb", true),
+            ("bbbb", true),
+            ("bb", false),
+            ("cc", false),
+        ];
+
+        // cursor at the top
+
+        for scrollback in [0, 20] {
+            let (view, cursor) = resize_buffer(scrollback, content.clone(), 4, 3, (0, 0));
+
+            assert_eq!(cursor, (0, 0));
+            assert_eq!(view, vec!["aa  ", "bbbb", "bbbb"]);
+        }
+
+        // cursor at the bottom
+
+        for scrollback in [0, 20] {
+            let (view, cursor) = resize_buffer(scrollback, content.clone(), 4, 3, (0, 4));
+
+            assert_eq!(cursor, (0, 2));
+            assert_eq!(view, vec!["bbbb", "bb  ", "cc  "]);
+        }
+
+        // cursor in the middle
+
+        for scrollback in [0, 20] {
+            let (view, cursor) = resize_buffer(scrollback, content.clone(), 4, 2, (0, 3));
+
+            assert_eq!(cursor, (0, 1));
+            assert_eq!(view, vec!["bbbb", "bb  "]);
+        }
+    }
+
+    #[test]
+    fn resize_taller() {
+        let content = vec![
+            ("aa  ", false),
+            ("bbbb", true),
+            ("bbbb", true),
+            ("bb", false),
+            ("cc", false),
+        ];
+
+        // cursor at the top, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 4, 7, (0, 0));
+
+        assert_eq!(cursor, (0, 0));
+        assert_eq!(
+            view,
+            vec!["aa  ", "bbbb", "bbbb", "bb  ", "cc  ", "    ", "    "]
+        );
+
+        // cursor at the top, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 4, 7, (0, 0));
+
+        assert_eq!(cursor, (0, 2));
+        assert_eq!(
+            view,
+            vec!["ssss", "ssss", "aa  ", "bbbb", "bbbb", "bb  ", "cc  "]
+        );
+
+        // cursor at the bottom, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 4, 7, (0, 4));
+
+        assert_eq!(cursor, (0, 4));
+        assert_eq!(
+            view,
+            vec!["aa  ", "bbbb", "bbbb", "bb  ", "cc  ", "    ", "    "]
+        );
+
+        // cursor at the bottom, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 4, 7, (0, 4));
+
+        assert_eq!(cursor, (0, 6));
+        assert_eq!(
+            view,
+            vec!["ssss", "ssss", "aa  ", "bbbb", "bbbb", "bb  ", "cc  "]
+        );
+
+        // cursor in the middle, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 4, 7, (0, 3));
+
+        assert_eq!(cursor, (0, 3));
+        assert_eq!(
+            view,
+            vec!["aa  ", "bbbb", "bbbb", "bb  ", "cc  ", "    ", "    "]
+        );
+
+        // cursor in the middle, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 4, 7, (0, 3));
+
+        assert_eq!(cursor, (0, 5));
+        assert_eq!(
+            view,
+            vec!["ssss", "ssss", "aa  ", "bbbb", "bbbb", "bb  ", "cc  "]
+        );
+    }
+
+    #[test]
+    fn resize_wider() {
+        let content = vec![
+            ("aa  ", false),
+            ("bbbb", true),
+            ("bbbb", true),
+            ("bb", false),
+            ("cc", false),
+        ];
+
+        // cursor at the top, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 6, 5, (0, 0));
+
+        assert_eq!(cursor, (0, 0));
+        assert_eq!(view, vec!["aa    ", "bbbbbb", "bbbb  ", "cc    ", "      "]);
+
+        // cursor at the top, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 6, 5, (0, 0));
+
+        assert_eq!(cursor, (0, 1));
+        assert_eq!(view, vec!["ssss  ", "aa    ", "bbbbbb", "bbbb  ", "cc    "]);
+
+        // cursor at the bottom, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 6, 5, (0, 4));
+
+        assert_eq!(cursor, (0, 3));
+        assert_eq!(view, vec!["aa    ", "bbbbbb", "bbbb  ", "cc    ", "      "]);
+
+        // cursor at the bottom, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 6, 5, (0, 4));
+
+        assert_eq!(cursor, (0, 4));
+        assert_eq!(view, vec!["ssss  ", "aa    ", "bbbbbb", "bbbb  ", "cc    "]);
+
+        // cursor in the middle, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 6, 5, (1, 2));
+
+        assert_eq!(cursor, (5, 1));
+        assert_eq!(view, vec!["aa    ", "bbbbbb", "bbbb  ", "cc    ", "      "]);
+
+        // cursor in the middle, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 6, 5, (1, 2));
+
+        assert_eq!(cursor, (5, 2));
+        assert_eq!(view, vec!["ssss  ", "aa    ", "bbbbbb", "bbbb  ", "cc    "]);
+    }
+
+    #[test]
+    fn resize_narrower() {
+        let content = vec![
+            ("aa  ", false),
+            ("bbbb", true),
+            ("bbbb", true),
+            ("bb", false),
+            ("cc", false),
+        ];
+
+        // cursor at the top, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 2, 5, (0, 0));
+
+        assert_eq!(cursor, (0, 0));
+        assert_eq!(view, vec!["aa", "bb", "bb", "bb", "bb"]);
+
+        // cursor at the top, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 2, 5, (0, 0));
+
+        assert_eq!(cursor, (0, 0));
+        assert_eq!(view, vec!["aa", "bb", "bb", "bb", "bb"]);
+
+        // cursor at the bottom, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 2, 5, (0, 4));
+
+        assert_eq!(cursor, (0, 4));
+        assert_eq!(view, vec!["bb", "bb", "bb", "bb", "cc"]);
+
+        // cursor at the bottom, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 2, 5, (0, 4));
+
+        assert_eq!(cursor, (0, 4));
+        assert_eq!(view, vec!["bb", "bb", "bb", "bb", "cc"]);
+
+        // cursor in the middle, no scrollback
+
+        let (view, cursor) = resize_buffer(0, content.clone(), 2, 5, (1, 2));
+
+        assert_eq!(cursor, (1, 1));
+        assert_eq!(view, vec!["bb", "bb", "bb", "bb", "cc"]);
+
+        // cursor in the middle, with scrollback
+
+        let (view, cursor) = resize_buffer(20, content.clone(), 2, 5, (1, 2));
+
+        assert_eq!(cursor, (1, 1));
+        assert_eq!(view, vec!["bb", "bb", "bb", "bb", "cc"]);
+
+        // cursor in the middle, no scrollback, last lines wrapped
+
+        let (view, cursor) = resize_buffer(
+            0,
+            vec![
+                ("aa  ", false),
+                ("bbbb", true),
+                ("bbb ", false),
+                ("cccc", true),
+                ("cc", false),
+            ],
+            2,
+            5,
+            (1, 2),
+        );
+
+        assert_eq!(cursor, (1, 0));
+        assert_eq!(view, vec!["bb", "b ", "cc", "cc", "cc"]);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_cursor_translation(scrollback_size in 0..20usize, wrapped in prop::collection::vec(prop::bool::ANY, 5), col in 0..10usize, row in 0..5usize) {
+            let cols = 10;
+            let rows = 5;
+            let mut buffer = Buffer::new(cols, rows);
+            buffer.add_scrollback(scrollback_size);
+
+            for (i, w) in wrapped.iter().enumerate() {
+                if *w {
+                    buffer.wrap(i);
+                }
+            }
+
+            let rel_cur = buffer.logical_position((col, row), cols, rows);
+
+            assert_eq!(buffer.relative_position(rel_cur, cols, rows), (col, row as isize));
+        }
+    }
+
+    fn resize_buffer(
+        scrollback_size: usize,
+        content: Vec<(&str, bool)>,
+        new_cols: usize,
+        new_rows: usize,
+        mut cursor: VisualPosition,
+    ) -> (Vec<String>, VisualPosition) {
+        let mut buffer = buffer(&content, scrollback_size);
+        cursor = buffer.resize(new_cols, new_rows, cursor);
+
+        let view = buffer
+            .view()
+            .iter()
+            .map(|line| line.text())
+            .collect::<Vec<_>>();
+
+        (view, cursor)
+    }
+
+    fn buffer(content: &Vec<(&str, bool)>, scrollback_size: usize) -> Buffer {
+        let cols = content[0].0.len();
+        let rows = content.len();
+        let mut buffer = Buffer::new(cols, rows);
+        buffer.add_scrollback(scrollback_size);
+
+        for (row, (line, wrapped)) in content.iter().enumerate() {
+            for (col, ch) in line.chars().enumerate() {
+                let cell = Cell(ch, Pen::default());
+                buffer.print((col, row), cell);
+            }
+
+            if *wrapped {
+                buffer.wrap(row);
+            }
+        }
+
+        buffer
     }
 }

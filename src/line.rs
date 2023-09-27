@@ -107,7 +107,7 @@ impl Line {
                 rest.trim();
             }
 
-            if rest.is_empty() {
+            if rest.cells.is_empty() {
                 None
             } else {
                 self.wrapped = true;
@@ -121,10 +121,6 @@ impl Line {
 
     pub fn len(&self) -> usize {
         self.cells.len()
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.cells.is_empty()
     }
 
     pub fn cells(&self) -> impl Iterator<Item = (char, Pen)> + '_ {

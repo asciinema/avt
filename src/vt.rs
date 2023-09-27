@@ -1379,14 +1379,13 @@ impl Vt {
             self.next_print_wraps = false;
         }
 
-        let (new_cursor, dirty_lines) =
+        (self.cursor_x, self.cursor_y) =
             self.buffer
                 .resize(self.cols, self.rows, (self.cursor_x, self.cursor_y));
 
-        (self.cursor_x, self.cursor_y) = new_cursor;
         self.cursor_y = self.cursor_y.min(self.rows - 1);
-        self.dirty_lines.extend(dirty_lines);
         self.dirty_lines.retain(|r| r < &self.rows);
+        self.dirty_lines.extend(0..self.rows);
 
         if self.saved_ctx.cursor_x >= self.cols {
             self.saved_ctx.cursor_x = self.cols - 1;
@@ -2584,7 +2583,7 @@ mod tests {
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
         vt.feed_str("\x1b[8;6;6t");
-        assert_eq!(text(&vt), "333344\n444455\n5|\n\n\n");
+        assert_eq!(text(&vt), "333333\n444444\n555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
     }
 
@@ -2596,8 +2595,7 @@ mod tests {
         let (_, resized) = vt.feed_str("AAA");
         assert!(!resized);
 
-        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;t");
-        assert_eq!(dirty_lines, vec![4]);
+        let (_, resized) = vt.feed_str("\x1b[8;5;t");
         assert!(resized);
         assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuw\nAAA|\n");
 
@@ -2605,9 +2603,7 @@ mod tests {
         assert_eq!(vt.cursor_x, 8);
         assert_eq!(vt.next_print_wraps, true);
 
-        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;;4t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        let (_, resized) = vt.feed_str("\x1b[8;;4t");
         assert!(resized);
         assert_eq!(text(&vt), "qrst\nuw\nAAAB\nBBB|B\n");
         assert_eq!(vt.next_print_wraps, false);
@@ -2616,21 +2612,17 @@ mod tests {
         assert_eq!(text(&vt), "qrst\nuw\nAAAB\nCCC|B\n");
         assert_eq!(wrapped(&vt), vec![true, false, true, false, false]);
 
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;3t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        vt.feed_str("\x1b[8;;3t");
         assert_eq!(text(&vt), "tuw\nAAA\nBCC\nC|B\n");
 
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;;5t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
-        assert_eq!(text(&vt), "tuw\nAAABC\nCC|B\n\n");
+        vt.feed_str("\x1b[8;;5t");
+        assert_eq!(text(&vt), "qrstu\nw\nAAABC\nCC|B\n");
 
         vt.feed_str("DDD");
         assert_eq!(vt.next_print_wraps, true);
 
         vt.feed_str("\x1b[8;;6t");
-        assert_eq!(text(&vt), "tuw\nAAABCC\nCDDD|\n\n");
+        assert_eq!(text(&vt), "op\nqrstuw\nAAABCC\nCDDD|\n");
     }
 
     #[test]
@@ -2647,8 +2639,7 @@ mod tests {
 
         vt.feed_str("AAA\n\rBBB\n\r");
 
-        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
-        assert_eq!(dirty_lines, vec![4]);
+        let (_, resized) = vt.feed_str("\x1b[8;5;;t");
         assert!(resized);
         assert_eq!(text(&vt), "AAA\nBBB\n|\n\n");
     }
@@ -2660,20 +2651,15 @@ mod tests {
 
         vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
 
-        let (dirty_lines, resized) = vt.feed_str("\x1b[8;5;;t");
-        assert_eq!(dirty_lines, vec![]);
+        let (_, resized) = vt.feed_str("\x1b[8;5;;t");
         assert!(resized);
         assert_eq!(text(&vt), "AAA\nBBB\nCCC\n|\n");
 
-        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;3;;t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2]);
+        let (_, resized) = vt.feed_str("\x1b[8;3;;t");
         assert!(resized);
         assert_eq!(text(&vt), "BBB\nCCC\n|");
 
-        let (mut dirty_lines, resized) = vt.feed_str("\x1b[8;2;;t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1]);
+        let (_, resized) = vt.feed_str("\x1b[8;2;;t");
         assert!(resized);
         assert_eq!(text(&vt), "CCC\n|");
     }
@@ -2730,34 +2716,25 @@ mod tests {
 
         // resize to 4x5
         vt.feed_str("\x1b[8;5;4;t");
-        assert_eq!(vt.cursor_y, 3);
         assert_eq!(text(&vt), "aaa\nbbb\nc\nddd|\n");
 
         // switch to alternate buffer
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[?1049h");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2, 3, 4]);
+        vt.feed_str("\x1b[?1049h");
+        assert_eq!((vt.cursor_x, vt.cursor_y), (3, 3));
 
         // resize to 4x2
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;2;4;t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1]);
+        vt.feed_str("\x1b[8;2;4t");
+        assert_eq!((vt.cursor_x, vt.cursor_y), (3, 1));
 
         // resize to 2x3, we'll check later if primary buffer preserved more columns
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;3;2;t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2]);
+        vt.feed_str("\x1b[8;3;2t");
 
         // resize to 3x3
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[8;3;3;t");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2]);
+        vt.feed_str("\x1b[8;3;3t");
 
         // switch back to primary buffer
-        let (mut dirty_lines, _) = vt.feed_str("\x1b[?1049l");
-        dirty_lines.sort();
-        assert_eq!(dirty_lines, vec![0, 1, 2]);
-        assert_eq!(text(&vt), "c\ndd|d\n");
+        vt.feed_str("\x1b[?1049l");
+        assert_eq!(text(&vt), "bbb\nc\ndd|d");
     }
 
     #[test]
@@ -2962,15 +2939,6 @@ mod tests {
 
             assert!(vt.buffer.len() >= 5);
             assert!(vt.lines().iter().all(|line| line.len() == 10));
-        }
-
-        #[test]
-        fn prop_cursor_translation(input in gen_input(25), vcol in 0..10usize, vrow in 0..5usize) {
-            let mut vt = Vt::new(10, 5);
-
-            vt.feed_str(&(input.into_iter().collect::<String>()));
-
-            assert_eq!(vt.buffer.abs_cursor(vt.buffer.rel_cursor((vcol, vrow), 10), 10), (vcol, vrow));
         }
 
         #[test]
