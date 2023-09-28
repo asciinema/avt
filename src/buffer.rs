@@ -136,17 +136,27 @@ impl Buffer {
     pub fn scroll_up(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         n = n.min(range.end - range.start);
 
-        if range.start > 0 {
-            self[range.start - 1].wrapped = false;
-        }
-
         if range.end - 1 < self.rows - 1 {
             self[range.end - 1].wrapped = false;
         }
 
-        let end = range.end;
-        self[range].rotate_left(n);
-        self.clear((end - n)..end, pen);
+        if range.start == 0 {
+            if range.end == self.rows {
+                self.extend(n, self.cols);
+            } else {
+                let line = Line::blank(self.cols, *pen);
+                let index = self.lines.len() - self.rows + range.end;
+
+                for _ in 0..n {
+                    self.lines.insert(index, line.clone());
+                }
+            }
+        } else {
+            self[range.start - 1].wrapped = false;
+            let end = range.end;
+            self[range].rotate_left(n);
+            self.clear((end - n)..end, pen);
+        }
     }
 
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
@@ -374,6 +384,7 @@ impl Dump for Buffer {
 mod tests {
     use super::{Buffer, VisualPosition};
     use crate::cell::Cell;
+    use crate::line::Line;
     use crate::pen::Pen;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
@@ -398,6 +409,81 @@ mod tests {
             buffer.text(),
             vec!["x          x", "  x", "   x          x"]
         );
+    }
+
+    #[test]
+    fn scroll_up() {
+        let content = vec![
+            ("aaaa", true),
+            ("aaaa", true),
+            ("aa  ", false),
+            ("bb", false),
+            ("cccc", true),
+            ("cccc", true),
+            ("cc", false),
+        ];
+
+        let pen = Pen::default();
+
+        // whole view
+
+        let mut buf = buffer(&content, 0);
+
+        buf.scroll_up(0..content.len(), 1, &pen);
+
+        assert_eq!(line(&buf[0]), "aaaa⏎");
+        assert_eq!(line(&buf[1]), "aa  ");
+        assert_eq!(line(&buf[2]), "bb  ");
+        assert_eq!(line(&buf[3]), "cccc⏎");
+        assert_eq!(line(&buf[4]), "cccc⏎");
+        assert_eq!(line(&buf[5]), "cc  ");
+        assert_eq!(line(&buf[6]), "    ");
+        assert_eq!(buf.text().join("\n"), "aaaaaaaaaa\nbb\ncccccccccc\n");
+        assert_eq!(buf.lines.len(), 8);
+        assert!(buf.lines[0].wrapped);
+
+        // top of the view
+
+        let mut buf = buffer(&content, 0);
+
+        buf.scroll_up(0..5, 1, &pen);
+
+        assert_eq!(line(&buf[0]), "aaaa⏎");
+        assert_eq!(line(&buf[1]), "aa  ");
+        assert_eq!(line(&buf[2]), "bb  ");
+        assert_eq!(line(&buf[3]), "cccc");
+        assert_eq!(line(&buf[4]), "    ");
+        assert_eq!(line(&buf[5]), "cccc⏎");
+        assert_eq!(line(&buf[6]), "cc  ");
+        assert_eq!(buf.text().join("\n"), "aaaaaaaaaa\nbb\ncccc\n\ncccccc");
+        assert_eq!(buf.lines.len(), 8);
+        assert!(buf.lines[0].wrapped);
+
+        // bottom of the view
+
+        let mut buf = buffer(&content, 0);
+
+        buf.scroll_up(1..content.len(), 1, &pen);
+
+        assert_eq!(line(&buf[0]), "aaaa");
+        assert_eq!(line(&buf[1]), "aa  ");
+        assert_eq!(line(&buf[2]), "bb  ");
+        assert_eq!(line(&buf[3]), "cccc⏎");
+        assert_eq!(line(&buf[4]), "cccc⏎");
+        assert_eq!(line(&buf[5]), "cc  ");
+        assert_eq!(line(&buf[6]), "    ");
+        assert_eq!(buf.text().join("\n"), "aaaa\naa\nbb\ncccccccccc\n");
+        assert_eq!(buf.lines.len(), 7);
+    }
+
+    fn line(line: &Line) -> String {
+        let mut t = line.text();
+
+        if line.wrapped {
+            t.push('⏎');
+        }
+
+        t
     }
 
     #[test]
