@@ -211,6 +211,7 @@ impl Buffer {
 
                 if excess > 0 {
                     self.lines.truncate(line_count - excess);
+                    self.lines.last_mut().unwrap().wrapped = false;
                 }
 
                 cursor.1 -= height_delta - excess;
