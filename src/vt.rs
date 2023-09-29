@@ -2924,35 +2924,32 @@ mod tests {
 
     proptest! {
         #[test]
-        fn prop_cursor_within_bounds(input in gen_input(25)) {
+        fn prop_sanity_checks(input in gen_input(25)) {
             let mut vt = Vt::new(10, 5);
-
-            for c in input {
-                vt.feed(c);
-            }
-
-            assert!(!vt.next_print_wraps && vt.cursor_x < 10 || vt.next_print_wraps && vt.cursor_x == 10);
-            assert!(vt.cursor_y < 5);
-        }
-
-        #[test]
-        fn prop_buffer_size(input in gen_input(25)) {
-            let mut vt = Vt::new(10, 5);
-
-            for c in input {
-                vt.feed(c);
-            }
-
-            assert!(vt.buffer.len() >= 5);
-            assert!(vt.lines().iter().all(|line| line.len() == 10));
-        }
-
-        #[test]
-        fn prop_no_wrap_on_last_line(input in gen_input(25)) {
-            let mut vt = Vt::new(10, 5);
+            vt.resizable = true;
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
+            assert!(!vt.next_print_wraps && vt.cursor_x < vt.cols || vt.next_print_wraps && vt.cursor_x == vt.cols);
+            assert!(vt.cursor_y < vt.rows);
+            assert!(vt.buffer.len() >= vt.rows);
+            assert!(vt.lines().iter().all(|line| line.len() == vt.cols));
+            assert!(!vt.lines().last().unwrap().wrapped);
+        }
+
+        #[test]
+        fn prop_resizing(new_cols in 2..15usize, new_rows in 2..8usize, input1 in gen_input(25), input2 in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+            vt.resizable = true;
+
+            vt.feed_str(&(input1.into_iter().collect::<String>()));
+            vt.feed_str(&format!("\x1b[8;{};{}t", new_rows, new_cols));
+            vt.feed_str(&(input2.into_iter().collect::<String>()));
+
+            assert!(!vt.next_print_wraps && vt.cursor_x < vt.cols || vt.next_print_wraps && vt.cursor_x == vt.cols);
+            assert!(vt.cursor_y < vt.rows);
+            assert!(vt.buffer.len() >= vt.rows);
+            assert!(vt.lines().iter().all(|line| line.len() == vt.cols));
             assert!(!vt.lines().last().unwrap().wrapped);
         }
 
@@ -2965,15 +2962,6 @@ mod tests {
             vt2.feed_str(&vt1.dump());
 
             assert_vts_eq(&vt1, &vt2);
-        }
-
-        #[test]
-        fn prop_resizable(new_cols in 2..15usize, new_rows in 2..8usize, input1 in gen_input(25), input2 in gen_input(25)) {
-            let mut vt = Vt::new(10, 5);
-            vt.resizable = true;
-            vt.feed_str(&(input1.into_iter().collect::<String>()));
-            vt.feed_str(&format!("\x1b[8;{};{}t", new_rows, new_cols));
-            vt.feed_str(&(input2.into_iter().collect::<String>()));
         }
     }
 
