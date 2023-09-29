@@ -1758,18 +1758,6 @@ mod tests {
     use std::env;
     use std::fs;
 
-    // #[test]
-    // fn failed() {
-    //     let mut vt = Vt::new(2, 2);
-    //     let bytes: Vec<u8> = vec![32, 32, 32, 32, 32, 32, 32, 32, 32, 32, 27, 91, 49, 74];
-    //     let bytes: Vec<u8> = vec![32, 32, 27, 91, 63, 55, 108, 32];
-    //     let bytes: Vec<u8> = fs::read("100303.txt").unwrap();
-
-    //     for b in bytes {
-    //         vt.feed(b as char);
-    //     }
-    // }
-
     #[test]
     fn get_param() {
         let mut vt = Vt::new(1, 1);
