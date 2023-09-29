@@ -123,6 +123,11 @@ impl Line {
         self.cells.len()
     }
 
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     pub fn cells(&self) -> impl Iterator<Item = (char, Pen)> + '_ {
         self.cells.iter().map(|cell| (cell.0, cell.1))
     }
