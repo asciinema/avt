@@ -2810,19 +2810,47 @@ mod tests {
         assert_eq!(text(&vt), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
     }
 
-    fn gen_ctl_seq() -> impl Strategy<Value = Vec<char>> {
-        let opts = vec![0x00..0x18, 0x19..0x1a, 0x1c..0x20];
-        let vals: Vec<_> = opts.into_iter().flatten().collect();
-
-        prop::sample::select(vals).prop_map(|v: u8| vec![v as char])
+    fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(
+            prop_oneof![gen_ctl_seq(), gen_esc_seq(), gen_csi_seq(), gen_text()],
+            1..=max_len,
+        )
+        .prop_map(flatten)
     }
 
-    fn gen_intermediate() -> impl Strategy<Value = char> {
+    fn gen_ctl_seq() -> impl Strategy<Value = Vec<char>> {
+        let ctl_chars = vec![0x00..0x18, 0x19..0x1a, 0x1c..0x20];
+
+        prop::sample::select(flatten(ctl_chars)).prop_map(|v: u8| vec![v as char])
+    }
+
+    fn gen_esc_seq() -> impl Strategy<Value = Vec<char>> {
+        (
+            prop::collection::vec(gen_esc_intermediate(), 0..=2),
+            gen_esc_finalizer(),
+        )
+            .prop_map(|(inters, fin)| flatten(vec![vec!['\x1b'], inters, vec![fin]]))
+    }
+
+    fn gen_csi_seq() -> impl Strategy<Value = Vec<char>> {
+        prop_oneof![
+            gen_csi_sgr_seq(),
+            gen_csi_sm_seq(),
+            gen_csi_rm_seq(),
+            gen_csi_any_seq(),
+        ]
+    }
+
+    fn gen_text() -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(gen_char(), 1..10)
+    }
+
+    fn gen_esc_intermediate() -> impl Strategy<Value = char> {
         (0x20..0x30u8).prop_map(|v| v as char)
     }
 
     fn gen_esc_finalizer() -> impl Strategy<Value = char> {
-        let opts = vec![
+        let finalizers = vec![
             0x30..0x50,
             0x51..0x58,
             0x59..0x5a,
@@ -2831,59 +2859,60 @@ mod tests {
             0x60..0x7f,
         ];
 
-        let vals: Vec<_> = opts.into_iter().flatten().collect();
-
-        prop::sample::select(vals).prop_map(|v: u8| v as char)
+        prop::sample::select(flatten(finalizers)).prop_map(|v: u8| v as char)
     }
 
-    fn gen_esc_seq() -> impl Strategy<Value = Vec<char>> {
-        (
-            prop::collection::vec(gen_intermediate(), 0..=2),
-            gen_esc_finalizer(),
-        )
-            .prop_map(|(inters, fin)| {
-                vec![vec![0x1b as char], inters, vec![fin]]
-                    .into_iter()
-                    .flatten()
-                    .collect()
-            })
+    fn gen_csi_sgr_seq() -> impl Strategy<Value = Vec<char>> {
+        gen_csi_params().prop_map(|params| flatten(vec![vec!['\x1b', '['], params, vec!['m']]))
     }
 
-    fn gen_param() -> impl Strategy<Value = char> {
-        (0x30..0x3au8).prop_map(|v| v as char)
+    fn gen_csi_sm_seq() -> impl Strategy<Value = Vec<char>> {
+        (gen_csi_intermediate(), gen_csi_sm_rm_param()).prop_map(|(inters, params)| {
+            flatten(vec![vec!['\x1b', '['], inters, params, vec!['h']])
+        })
     }
 
-    fn gen_params() -> impl Strategy<Value = Vec<char>> {
+    fn gen_csi_rm_seq() -> impl Strategy<Value = Vec<char>> {
+        (gen_csi_intermediate(), gen_csi_sm_rm_param()).prop_map(|(inters, params)| {
+            flatten(vec![vec!['\x1b', '['], inters, params, vec!['l']])
+        })
+    }
+
+    fn gen_csi_any_seq() -> impl Strategy<Value = Vec<char>> {
+        (gen_csi_params(), gen_csi_finalizer())
+            .prop_map(|(params, fin)| flatten(vec![vec!['\x1b', '['], params, vec![fin]]))
+    }
+
+    fn gen_csi_intermediate() -> impl Strategy<Value = Vec<char>> {
+        prop::collection::vec(prop::sample::select(vec!['?', '!']), 0..=1)
+    }
+
+    fn gen_csi_params() -> impl Strategy<Value = Vec<char>> {
         prop::collection::vec(
-            prop_oneof![gen_param(), gen_param(), prop::sample::select(vec![';'])],
+            prop_oneof![
+                gen_csi_param(),
+                gen_csi_param(),
+                prop::sample::select(vec![';'])
+            ],
             0..=5,
         )
     }
 
+    fn gen_csi_param() -> impl Strategy<Value = char> {
+        (0x30..0x3au8).prop_map(|v| v as char)
+    }
+
+    fn gen_csi_sm_rm_param() -> impl Strategy<Value = Vec<char>> {
+        let modes = vec![4, 6, 7, 20, 25, 47, 1047, 1048, 1049];
+
+        prop_oneof![
+            prop::sample::select(modes).prop_map(|n| n.to_string().chars().collect()),
+            prop::collection::vec(gen_csi_param(), 1..=4)
+        ]
+    }
+
     fn gen_csi_finalizer() -> impl Strategy<Value = char> {
         (0x40..0x7fu8).prop_map(|v| v as char)
-    }
-
-    fn gen_csi_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_params(), gen_csi_finalizer()).prop_map(|(params, fin)| {
-            vec![vec![0x1b as char, '['], params, vec![fin]]
-                .into_iter()
-                .flatten()
-                .collect()
-        })
-    }
-
-    fn gen_sgr_seq() -> impl Strategy<Value = Vec<char>> {
-        gen_params().prop_map(|params| {
-            vec![vec![0x1b as char, '['], params, vec!['m']]
-                .into_iter()
-                .flatten()
-                .collect()
-        })
-    }
-
-    fn gen_ascii_char() -> impl Strategy<Value = char> {
-        (0x20..=0x7fu8).prop_map(|v| v as char)
     }
 
     fn gen_char() -> impl Strategy<Value = char> {
@@ -2898,22 +2927,12 @@ mod tests {
         ]
     }
 
-    fn gen_text() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(gen_char(), 1..10)
+    fn gen_ascii_char() -> impl Strategy<Value = char> {
+        (0x20..=0x7fu8).prop_map(|v| v as char)
     }
 
-    fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(
-            prop_oneof![
-                gen_ctl_seq(),
-                gen_esc_seq(),
-                gen_csi_seq(),
-                gen_sgr_seq(),
-                gen_text()
-            ],
-            1..=max_len,
-        )
-        .prop_map(|inputs| inputs.into_iter().flatten().collect())
+    fn flatten<T, I: IntoIterator<Item = T>>(seqs: Vec<I>) -> Vec<T> {
+        seqs.into_iter().flatten().collect()
     }
 
     proptest! {
