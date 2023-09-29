@@ -133,7 +133,7 @@ impl Line {
     }
 
     pub fn segments(&self) -> impl Iterator<Item = Segment> + '_ {
-        Chunk {
+        Segments {
             iter: self.cells.iter(),
             segment: None,
         }
@@ -164,7 +164,7 @@ impl Line {
     }
 }
 
-struct Chunk<'a, I>
+struct Segments<'a, I>
 where
     I: Iterator<Item = &'a Cell>,
 {
@@ -172,7 +172,7 @@ where
     segment: Option<Segment>,
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>> Iterator for Chunk<'a, I> {
+impl<'a, I: Iterator<Item = &'a Cell>> Iterator for Segments<'a, I> {
     type Item = Segment;
 
     fn next(&mut self) -> Option<Self::Item> {
