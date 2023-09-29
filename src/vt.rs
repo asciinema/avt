@@ -2979,6 +2979,15 @@ mod tests {
 
             assert_vts_eq(&vt1, &vt2);
         }
+
+        #[test]
+        fn prop_resizable(new_cols in 2..15usize, new_rows in 2..8usize, input1 in gen_input(25), input2 in gen_input(25)) {
+            let mut vt = Vt::new(10, 5);
+            vt.resizable = true;
+            vt.feed_str(&(input1.into_iter().collect::<String>()));
+            vt.feed_str(&format!("\x1b[8;{};{}t", new_rows, new_cols));
+            vt.feed_str(&(input2.into_iter().collect::<String>()));
+        }
     }
 
     fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
