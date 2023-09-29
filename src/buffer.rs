@@ -27,8 +27,10 @@ type RelativePosition = (usize, isize);
 type VisualPosition = (usize, usize);
 
 impl Buffer {
-    pub fn new(cols: usize, rows: usize) -> Self {
-        let lines = vec![Line::blank(cols, Pen::default()); rows];
+    pub fn new(cols: usize, rows: usize, pen: Option<&Pen>) -> Self {
+        let default_pen = Pen::default();
+        let pen = pen.unwrap_or(&default_pen);
+        let lines = vec![Line::blank(cols, *pen); rows];
 
         Buffer { lines, cols, rows }
     }
@@ -465,7 +467,7 @@ mod tests {
 
     #[test]
     fn text() {
-        let mut buffer = Buffer::new(10, 5);
+        let mut buffer = Buffer::new(10, 5, None);
         let cell = Cell('x', Pen::default());
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
@@ -807,7 +809,7 @@ mod tests {
         fn prop_cursor_translation(scrollback_size in 0..20usize, wrapped in prop::collection::vec(prop::bool::ANY, 5), col in 0..10usize, row in 0..5usize) {
             let cols = 10;
             let rows = 5;
-            let mut buffer = Buffer::new(cols, rows);
+            let mut buffer = Buffer::new(cols, rows, None);
             buffer.add_scrollback(scrollback_size);
 
             for (i, w) in wrapped.iter().enumerate() {
@@ -844,7 +846,7 @@ mod tests {
     fn buffer(content: &Vec<(&str, bool)>, scrollback_size: usize) -> Buffer {
         let cols = content[0].0.len();
         let rows = content.len();
-        let mut buffer = Buffer::new(cols, rows);
+        let mut buffer = Buffer::new(cols, rows, None);
         buffer.add_scrollback(scrollback_size);
 
         for (row, (line, wrapped)) in content.iter().enumerate() {

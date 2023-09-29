@@ -78,8 +78,8 @@ impl Vt {
         assert!(cols > 0);
         assert!(rows > 0);
 
-        let primary_buffer = Buffer::new(cols, rows);
-        let alternate_buffer = Buffer::new(cols, rows);
+        let primary_buffer = Buffer::new(cols, rows, None);
+        let alternate_buffer = Buffer::new(cols, rows, None);
         let dirty_lines = HashSet::from_iter(0..rows);
 
         Vt {
@@ -1354,13 +1354,7 @@ impl Vt {
             self.active_buffer_type = BufferType::Alternate;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.other_buffer);
-
-            self.buffer.erase(
-                (self.cursor_x, self.cursor_y),
-                EraseMode::WholeView,
-                &self.pen,
-            );
-
+            self.buffer = Buffer::new(self.cols, self.rows, Some(&self.pen));
             self.dirty_lines.extend(0..self.rows);
         }
     }
@@ -1410,8 +1404,8 @@ impl Vt {
     }
 
     fn hard_reset(&mut self) {
-        let primary_buffer = Buffer::new(self.cols, self.rows);
-        let alternate_buffer = Buffer::new(self.cols, self.rows);
+        let primary_buffer = Buffer::new(self.cols, self.rows, None);
+        let alternate_buffer = Buffer::new(self.cols, self.rows, None);
 
         self.state = State::Ground;
         self.params = Vec::new();
