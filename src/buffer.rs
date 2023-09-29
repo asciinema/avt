@@ -1,6 +1,6 @@
 use crate::cell::Cell;
 use crate::dump::Dump;
-use crate::line::{self, Line};
+use crate::line::Line;
 use crate::pen::Pen;
 use std::cmp::Ordering;
 use std::ops::{Index, IndexMut, Range};
@@ -183,7 +183,7 @@ impl Buffer {
         let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
 
         if new_cols != old_cols {
-            self.lines = line::reflow(self.lines.drain(..), new_cols);
+            self.lines = reflow(self.lines.drain(..), new_cols);
             let line_count = self.lines.len();
 
             if line_count < old_rows {
@@ -378,6 +378,79 @@ impl Dump for Buffer {
                 dump
             })
             .collect()
+    }
+}
+
+struct Reflow<I>
+where
+    I: Iterator<Item = Line>,
+{
+    pub iter: I,
+    pub cols: usize,
+    pub rest: Option<Line>,
+}
+
+pub(crate) fn reflow<I: Iterator<Item = Line>>(iter: I, cols: usize) -> Vec<Line> {
+    let lines: Vec<Line> = Reflow {
+        iter,
+        cols,
+        rest: None,
+    }
+    .collect();
+
+    assert!(lines.iter().all(|l| l.len() == cols));
+
+    lines
+}
+
+impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
+    type Item = Line;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use std::cmp::Ordering::*;
+
+        while let Some(mut line) = self.rest.take().or_else(|| self.iter.next()) {
+            match self.cols.cmp(&line.len()) {
+                Less => {
+                    self.rest = line.contract(self.cols);
+                    return Some(line);
+                }
+
+                Equal => {
+                    return Some(line);
+                }
+
+                Greater => match self.iter.next() {
+                    Some(next_line) => match line.extend(next_line, self.cols) {
+                        (true, Some(rest)) => {
+                            self.rest = Some(rest);
+                            return Some(line);
+                        }
+
+                        (true, None) => {
+                            return Some(line);
+                        }
+
+                        (false, _) => {
+                            self.rest = Some(line);
+                        }
+                    },
+
+                    None => {
+                        line.expand(self.cols, &Pen::default());
+                        line.wrapped = false;
+                        return Some(line);
+                    }
+                },
+            }
+        }
+
+        self.rest.take().map(|mut line| {
+            line.expand(self.cols, &Pen::default());
+            line.wrapped = false;
+
+            line
+        })
     }
 }
 
