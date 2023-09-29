@@ -1383,7 +1383,6 @@ impl Vt {
             self.buffer
                 .resize(self.cols, self.rows, (self.cursor_x, self.cursor_y));
 
-        self.cursor_y = self.cursor_y.min(self.rows - 1);
         self.dirty_lines.retain(|r| r < &self.rows);
         self.dirty_lines.extend(0..self.rows);
 

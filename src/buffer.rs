@@ -221,7 +221,10 @@ impl Buffer {
                 let scrollback_size = line_count - old_rows.min(line_count);
                 let cursor_row_shift = scrollback_size.min(height_delta);
                 height_delta -= cursor_row_shift;
-                cursor.1 += cursor_row_shift;
+
+                if cursor.1 < old_rows {
+                    cursor.1 += cursor_row_shift;
+                }
 
                 if height_delta > 0 {
                     self.extend(height_delta, new_cols);
@@ -237,18 +240,15 @@ impl Buffer {
         cursor
     }
 
-    pub fn logical_position(
-        &self,
-        pos: VisualPosition,
-        cols: usize,
-        rows: usize,
-    ) -> LogicalPosition {
+    fn logical_position(&self, pos: VisualPosition, cols: usize, rows: usize) -> LogicalPosition {
         let vis_row_offset = self.lines.len() - rows;
-        let mut log_row = 0;
         let mut log_col_offset = 0;
+        let abs_row = pos.1 + vis_row_offset;
+        let last_available_row = abs_row.min(self.lines.len());
+        let mut log_row = abs_row - last_available_row;
 
-        for r in 0..pos.1 + vis_row_offset {
-            if self.lines[r].wrapped {
+        for line in self.lines.iter().take(abs_row) {
+            if line.wrapped {
                 log_col_offset += cols;
             } else {
                 log_col_offset = 0;
@@ -259,7 +259,7 @@ impl Buffer {
         (pos.0 + log_col_offset, log_row)
     }
 
-    pub fn relative_position(
+    fn relative_position(
         &self,
         pos: LogicalPosition,
         cols: usize,
@@ -593,6 +593,14 @@ mod tests {
             view,
             vec!["ssss", "ssss", "aa  ", "bbbb", "bbbb", "bb  ", "cc  "]
         );
+
+        // cursor below last row
+
+        for scrollback in [0, 20] {
+            let (_, cursor) = resize_buffer(scrollback, content.clone(), 4, 8, (2, 6));
+
+            assert_eq!(cursor, (2, 6));
+        }
     }
 
     #[test]
