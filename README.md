@@ -17,7 +17,6 @@ avt consists of:
 Following aspects of terminal emulation are not in scope of this project:
 
 - input handling,
-- scrollback,
 - rendering.
 
 Therefore avt is small and focused but a full-fledged terminal emulator can't be
