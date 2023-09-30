@@ -10,6 +10,7 @@ pub(crate) struct Buffer {
     lines: Vec<Line>,
     pub cols: usize,
     pub rows: usize,
+    scrollback_limit: Option<usize>,
 }
 
 pub(crate) enum EraseMode {
@@ -27,12 +28,22 @@ type RelativePosition = (usize, isize);
 type VisualPosition = (usize, usize);
 
 impl Buffer {
-    pub fn new(cols: usize, rows: usize, pen: Option<&Pen>) -> Self {
+    pub fn new(
+        cols: usize,
+        rows: usize,
+        scrollback_limit: Option<usize>,
+        pen: Option<&Pen>,
+    ) -> Self {
         let default_pen = Pen::default();
         let pen = pen.unwrap_or(&default_pen);
         let lines = vec![Line::blank(cols, *pen); rows];
 
-        Buffer { lines, cols, rows }
+        Buffer {
+            lines,
+            cols,
+            rows,
+            scrollback_limit,
+        }
     }
 
     #[cfg(test)]
@@ -159,6 +170,8 @@ impl Buffer {
             self[range].rotate_left(n);
             self.clear((end - n)..end, pen);
         }
+
+        self.trim_scrollback();
     }
 
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
@@ -239,6 +252,7 @@ impl Buffer {
 
         self.cols = new_cols;
         self.rows = new_rows;
+        self.trim_scrollback();
 
         cursor
     }
@@ -310,6 +324,19 @@ impl Buffer {
         let line = Line::blank(cols, Pen::default());
         let filler = std::iter::repeat(line).take(n);
         self.lines.extend(filler);
+    }
+
+    fn trim_scrollback(&mut self) {
+        if let Some(limit) = self.scrollback_limit {
+            let line_count = self.lines.len();
+            let scrollback_size = line_count - self.rows;
+
+            if scrollback_size > limit {
+                let excess = scrollback_size - limit;
+                self.lines.rotate_left(excess);
+                self.lines.truncate(line_count - excess);
+            }
+        }
     }
 
     #[cfg(test)]
@@ -467,7 +494,7 @@ mod tests {
 
     #[test]
     fn text() {
-        let mut buffer = Buffer::new(10, 5, None);
+        let mut buffer = Buffer::new(10, 5, None, None);
         let cell = Cell('x', Pen::default());
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
@@ -503,7 +530,7 @@ mod tests {
 
         // whole view
 
-        let mut buf = buffer(&content, 0);
+        let mut buf = buffer(&content, None, 0);
 
         buf.scroll_up(0..content.len(), 1, &pen);
 
@@ -520,7 +547,7 @@ mod tests {
 
         // top of the view
 
-        let mut buf = buffer(&content, 0);
+        let mut buf = buffer(&content, None, 0);
 
         buf.scroll_up(0..5, 1, &pen);
 
@@ -537,7 +564,7 @@ mod tests {
 
         // bottom of the view
 
-        let mut buf = buffer(&content, 0);
+        let mut buf = buffer(&content, None, 0);
 
         buf.scroll_up(1..content.len(), 1, &pen);
 
@@ -550,6 +577,30 @@ mod tests {
         assert_eq!(line(&buf[6]), "    ");
         assert_eq!(buf.text().join("\n"), "aaaa\naa\nbb\ncccccccccc\n");
         assert_eq!(buf.lines.len(), 7);
+
+        // no scrollback limit
+
+        let mut buf = buffer(&content, None, 0);
+
+        buf.scroll_up(0..content.len(), 5, &pen);
+
+        assert_eq!(buf.lines.len(), 12);
+
+        // scrollback limit of 0
+
+        let mut buf = buffer(&content, Some(0), 0);
+
+        buf.scroll_up(0..content.len(), 5, &pen);
+
+        assert_eq!(buf.lines.len(), 7);
+
+        // scrollback limit of 3
+
+        let mut buf = buffer(&content, Some(3), 0);
+
+        buf.scroll_up(0..content.len(), 5, &pen);
+
+        assert_eq!(buf.lines.len(), 10);
     }
 
     fn line(line: &Line) -> String {
@@ -809,7 +860,7 @@ mod tests {
         fn prop_cursor_translation(scrollback_size in 0..20usize, wrapped in prop::collection::vec(prop::bool::ANY, 5), col in 0..10usize, row in 0..5usize) {
             let cols = 10;
             let rows = 5;
-            let mut buffer = Buffer::new(cols, rows, None);
+            let mut buffer = Buffer::new(cols, rows, None, None);
             buffer.add_scrollback(scrollback_size);
 
             for (i, w) in wrapped.iter().enumerate() {
@@ -831,7 +882,7 @@ mod tests {
         new_rows: usize,
         mut cursor: VisualPosition,
     ) -> (Vec<String>, VisualPosition) {
-        let mut buffer = buffer(&content, scrollback_size);
+        let mut buffer = buffer(&content, None, scrollback_size);
         cursor = buffer.resize(new_cols, new_rows, cursor);
 
         let view = buffer
@@ -843,11 +894,18 @@ mod tests {
         (view, cursor)
     }
 
-    fn buffer(content: &Vec<(&str, bool)>, scrollback_size: usize) -> Buffer {
+    fn buffer(
+        content: &Vec<(&str, bool)>,
+        scrollback_limit: Option<usize>,
+        scrollback_size: usize,
+    ) -> Buffer {
         let cols = content[0].0.len();
         let rows = content.len();
-        let mut buffer = Buffer::new(cols, rows, None);
-        buffer.add_scrollback(scrollback_size);
+        let mut buffer = Buffer::new(cols, rows, scrollback_limit, None);
+
+        if !matches!(scrollback_limit, Some(0)) {
+            buffer.add_scrollback(scrollback_size);
+        }
 
         for (row, (line, wrapped)) in content.iter().enumerate() {
             for (col, ch) in line.chars().enumerate() {

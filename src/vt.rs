@@ -52,6 +52,7 @@ pub struct Vt {
     buffer: Buffer,
     other_buffer: Buffer,
     active_buffer_type: BufferType,
+    scrollback_limit: Option<usize>,
     cursor_x: usize,
     cursor_y: usize,
     cursor_visible: bool,
@@ -75,11 +76,19 @@ pub struct Vt {
 
 impl Vt {
     pub fn new(cols: usize, rows: usize) -> Self {
+        Vt::with_scrollback_limit(cols, rows, None)
+    }
+
+    pub fn with_scrollback_limit(
+        cols: usize,
+        rows: usize,
+        scrollback_limit: Option<usize>,
+    ) -> Self {
         assert!(cols > 0);
         assert!(rows > 0);
 
-        let primary_buffer = Buffer::new(cols, rows, None);
-        let alternate_buffer = Buffer::new(cols, rows, None);
+        let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
+        let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
         let dirty_lines = HashSet::from_iter(0..rows);
 
         Vt {
@@ -91,6 +100,7 @@ impl Vt {
             buffer: primary_buffer,
             other_buffer: alternate_buffer,
             active_buffer_type: BufferType::Primary,
+            scrollback_limit,
             tabs: Tabs::new(cols),
             cursor_x: 0,
             cursor_y: 0,
@@ -1354,7 +1364,7 @@ impl Vt {
             self.active_buffer_type = BufferType::Alternate;
             std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
             std::mem::swap(&mut self.buffer, &mut self.other_buffer);
-            self.buffer = Buffer::new(self.cols, self.rows, Some(&self.pen));
+            self.buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
             self.dirty_lines.extend(0..self.rows);
         }
     }
@@ -1404,8 +1414,8 @@ impl Vt {
     }
 
     fn hard_reset(&mut self) {
-        let primary_buffer = Buffer::new(self.cols, self.rows, None);
-        let alternate_buffer = Buffer::new(self.cols, self.rows, None);
+        let primary_buffer = Buffer::new(self.cols, self.rows, self.scrollback_limit, None);
+        let alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), None);
 
         self.state = State::Ground;
         self.params = Vec::new();
@@ -2918,7 +2928,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn prop_sanity_checks(input in gen_input(25)) {
+        fn prop_sanity_checks_infinite_scrollback(input in gen_input(25)) {
             let mut vt = Vt::new(10, 5);
             vt.resizable = true;
 
@@ -2927,6 +2937,35 @@ mod tests {
             assert!(!vt.next_print_wraps && vt.cursor_x < vt.cols || vt.next_print_wraps && vt.cursor_x == vt.cols);
             assert!(vt.cursor_y < vt.rows);
             assert!(vt.buffer.len() >= vt.rows);
+            assert!(vt.lines().iter().all(|line| line.len() == vt.cols));
+            assert!(!vt.lines().last().unwrap().wrapped);
+        }
+
+        #[test]
+        fn prop_sanity_checks_no_scrollback(input in gen_input(25)) {
+            let mut vt = Vt::with_scrollback_limit(10, 5, Some(0));
+            vt.resizable = true;
+
+            vt.feed_str(&(input.into_iter().collect::<String>()));
+
+            assert!(!vt.next_print_wraps && vt.cursor_x < vt.cols || vt.next_print_wraps && vt.cursor_x == vt.cols);
+            assert!(vt.cursor_y < vt.rows);
+            assert!(vt.buffer.len() == vt.rows);
+            assert!(vt.lines().iter().all(|line| line.len() == vt.cols));
+            assert!(!vt.lines().last().unwrap().wrapped);
+        }
+
+        #[test]
+        fn prop_sanity_checks_fixed_scrollback(input in gen_input(25)) {
+            let scrollback_limit = 3;
+            let mut vt = Vt::with_scrollback_limit(10, 5, Some(scrollback_limit));
+            vt.resizable = true;
+
+            vt.feed_str(&(input.into_iter().collect::<String>()));
+
+            assert!(!vt.next_print_wraps && vt.cursor_x < vt.cols || vt.next_print_wraps && vt.cursor_x == vt.cols);
+            assert!(vt.cursor_y < vt.rows);
+            assert!(vt.buffer.len() >= vt.rows && vt.buffer.len() <= vt.rows + scrollback_limit);
             assert!(vt.lines().iter().all(|line| line.len() == vt.cols));
             assert!(!vt.lines().last().unwrap().wrapped);
         }
