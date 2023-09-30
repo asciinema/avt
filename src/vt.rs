@@ -657,7 +657,7 @@ impl Vt {
         if self.cursor_y == self.top_margin {
             self.scroll_down_in_region(1);
         } else if self.cursor_y > 0 {
-            self.do_move_cursor_to_row(self.cursor_y - 1);
+            self.move_cursor_to_row(self.cursor_y - 1);
         }
     }
 
