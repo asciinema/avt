@@ -1576,7 +1576,7 @@ impl Vt {
 
         // 9. setup cursor
 
-        let row = if self.origin_mode {
+        let row = if self.origin_mode && self.cursor_y >= self.top_margin {
             self.cursor_y - self.top_margin + 1
         } else {
             self.cursor_y + 1
