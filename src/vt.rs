@@ -11,6 +11,7 @@ use crate::pen::{Intensity, Pen};
 use crate::saved_ctx::SavedCtx;
 use crate::tabs::Tabs;
 use rgb::RGB8;
+use std::cmp::Ordering;
 use std::collections::HashSet;
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -1576,16 +1577,50 @@ impl Vt {
 
         // 9. setup cursor
 
-        let row = if self.origin_mode && self.cursor_y >= self.top_margin {
-            self.cursor_y - self.top_margin + 1
+        let col = self.cursor_x;
+        let mut row = self.cursor_y;
+
+        if self.origin_mode {
+            if row < self.top_margin || row > self.bottom_margin {
+                // bring cursor outside scroll region by restoring saved cursor
+                // and moving it to desired position via CSI A/B/C/D
+
+                seq.push_str("\u{9b}u");
+
+                match col.cmp(&self.saved_ctx.cursor_x) {
+                    Ordering::Less => {
+                        let n = self.saved_ctx.cursor_x - col;
+                        seq.push_str(&format!("\u{9b}{n}D"));
+                    }
+
+                    Ordering::Greater => {
+                        let n = col - self.saved_ctx.cursor_x;
+                        seq.push_str(&format!("\u{9b}{n}C"));
+                    }
+
+                    Ordering::Equal => (),
+                }
+
+                match row.cmp(&self.saved_ctx.cursor_y) {
+                    Ordering::Less => {
+                        let n = self.saved_ctx.cursor_y - row;
+                        seq.push_str(&format!("\u{9b}{n}A"));
+                    }
+
+                    Ordering::Greater => {
+                        let n = row - self.saved_ctx.cursor_y;
+                        seq.push_str(&format!("\u{9b}{n}B"));
+                    }
+
+                    Ordering::Equal => (),
+                }
+            } else {
+                row -= self.top_margin;
+                seq.push_str(&format!("\u{9b}{};{}H", row + 1, col + 1));
+            }
         } else {
-            self.cursor_y + 1
-        };
-
-        let column = self.cursor_x + 1;
-
-        // fix cursor in target position
-        seq.push_str(&format!("\u{9b}{row};{column}H"));
+            seq.push_str(&format!("\u{9b}{};{}H", row + 1, col + 1));
+        }
 
         if self.cursor_x >= self.cols {
             // move cursor past right border by re-printing the character in
