@@ -1,6 +1,6 @@
 use crate::pen::Pen;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Cell(pub char, pub Pen);
 
 impl Cell {

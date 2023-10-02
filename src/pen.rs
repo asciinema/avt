@@ -2,7 +2,7 @@ use crate::color::Color;
 use crate::dump::Dump;
 use serde::ser::{Serialize, SerializeMap, Serializer};
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Pen {
     pub(crate) foreground: Option<Color>,
     pub(crate) background: Option<Color>,
@@ -14,7 +14,7 @@ pub struct Pen {
     pub(crate) inverse: bool,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Intensity {
     Normal,
     Bold,

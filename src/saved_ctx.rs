@@ -1,6 +1,6 @@
 use crate::pen::Pen;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct SavedCtx {
     pub cursor_x: usize,
     pub cursor_y: usize,

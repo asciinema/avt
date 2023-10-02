@@ -1,7 +1,7 @@
 use rgb::RGB8;
 use serde::ser::{Serialize, Serializer};
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Color {
     Indexed(u8),
     RGB(RGB8),

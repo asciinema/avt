@@ -14,7 +14,7 @@ use rgb::RGB8;
 use std::cmp::Ordering;
 use std::collections::HashSet;
 
-#[derive(Debug, Copy, Clone, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum State {
     Ground,
     Escape,
