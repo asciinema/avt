@@ -1,6 +1,6 @@
 [package]
 name = "avt"
-version = "0.7.4"
+version = "0.8.0"
 authors = ["Marcin Kulik <m@ku1ik.com>"]
 edition = "2021"
 
