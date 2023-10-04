@@ -1,6 +1,8 @@
 // The parser is based on Paul Williams' parser for ANSI-compatible video
 // terminals: https://www.vt100.net/emu/dec_ansi_parser
 
+mod dirty_lines;
+use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::Cell;
 use crate::charset::Charset;
@@ -12,7 +14,6 @@ use crate::saved_ctx::SavedCtx;
 use crate::tabs::Tabs;
 use rgb::RGB8;
 use std::cmp::Ordering;
-use std::collections::HashSet;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum State {
@@ -70,7 +71,7 @@ pub struct Vt {
     bottom_margin: usize,
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
-    dirty_lines: HashSet<usize>,
+    dirty_lines: DirtyLines,
     pub resizable: bool,
     resized: bool,
 }
@@ -90,7 +91,7 @@ impl Vt {
 
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
         let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
-        let dirty_lines = HashSet::from_iter(0..rows);
+        let dirty_lines = DirtyLines::new(rows);
 
         Vt {
             state: State::Ground,
@@ -144,9 +145,7 @@ impl Vt {
             self.feed(c);
         }
 
-        let dirty_lines = self.dirty_lines.iter().cloned().collect();
-
-        (dirty_lines, self.resized)
+        (self.dirty_lines.to_vec(), self.resized)
     }
 
     pub fn feed(&mut self, input: char) {
@@ -496,7 +495,7 @@ impl Vt {
             self.do_move_cursor_to_col(next_col);
         }
 
-        self.dirty_lines.insert(self.cursor_y);
+        self.dirty_lines.add(self.cursor_y);
     }
 
     fn collect(&mut self, input: char) {
@@ -601,7 +600,7 @@ impl Vt {
                     .print((col, row), Cell('\u{45}', Pen::default()));
             }
 
-            self.dirty_lines.insert(row);
+            self.dirty_lines.add(row);
         }
     }
 
@@ -669,7 +668,7 @@ impl Vt {
             Cell::blank(self.pen),
         );
 
-        self.dirty_lines.insert(self.cursor_y);
+        self.dirty_lines.add(self.cursor_y);
     }
 
     fn execute_cuu(&mut self) {
@@ -763,7 +762,7 @@ impl Vt {
                     &self.pen,
                 );
 
-                self.dirty_lines.insert(self.cursor_y);
+                self.dirty_lines.add(self.cursor_y);
             }
 
             1 => {
@@ -773,14 +772,14 @@ impl Vt {
                     &self.pen,
                 );
 
-                self.dirty_lines.insert(self.cursor_y);
+                self.dirty_lines.add(self.cursor_y);
             }
 
             2 => {
                 self.buffer
                     .erase((self.cursor_x, self.cursor_y), WholeLine, &self.pen);
 
-                self.dirty_lines.insert(self.cursor_y);
+                self.dirty_lines.add(self.cursor_y);
             }
 
             _ => (),
@@ -824,7 +823,7 @@ impl Vt {
             &self.pen,
         );
 
-        self.dirty_lines.insert(self.cursor_y);
+        self.dirty_lines.add(self.cursor_y);
     }
 
     fn execute_su(&mut self) {
@@ -853,7 +852,7 @@ impl Vt {
             &self.pen,
         );
 
-        self.dirty_lines.insert(self.cursor_y);
+        self.dirty_lines.add(self.cursor_y);
     }
 
     fn execute_rep(&mut self) {
@@ -1388,7 +1387,7 @@ impl Vt {
             self.buffer
                 .resize(self.cols, self.rows, (self.cursor_x, self.cursor_y));
 
-        self.dirty_lines.retain(|r| r < &self.rows);
+        self.dirty_lines.resize(self.rows);
         self.dirty_lines.extend(0..self.rows);
 
         if self.saved_ctx.cursor_x >= self.cols {
@@ -1441,7 +1440,7 @@ impl Vt {
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
         self.alternate_saved_ctx = SavedCtx::default();
-        self.dirty_lines = HashSet::from_iter(0..self.rows);
+        self.dirty_lines = DirtyLines::new(self.rows);
         self.resized = false;
     }
 
