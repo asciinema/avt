@@ -1,13 +1,7 @@
 use avt::Vt;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 
-fn go(vt: &Vt) {
-    for _n in 0..10 {
-        vt.dump();
-    }
-}
-
-pub fn criterion_benchmark(c: &mut Criterion) {
+fn setup() -> Vt {
     let mut vt = Vt::new(100, 24);
 
     for fg in 1..8 {
@@ -18,13 +12,20 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         }
     }
 
-    c.bench_function("dump", |b| b.iter(|| go(&vt)));
+    vt
 }
 
-criterion_group!(
-    name = benches;
-    config = Criterion::default().measurement_time(std::time::Duration::from_secs(30));
-    targets = criterion_benchmark
-);
+fn run(vt: Vt) -> Vt {
+    vt.dump();
 
+    vt
+}
+
+pub fn criterion_benchmark(c: &mut Criterion) {
+    c.bench_function("dump", |b| {
+        b.iter_batched(setup, run, BatchSize::SmallInput)
+    });
+}
+
+criterion_group!(benches, criterion_benchmark);
 criterion_main!(benches);
