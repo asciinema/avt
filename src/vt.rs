@@ -154,6 +154,10 @@ impl Vt {
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
+            (State::Ground, '\u{20}'..='\u{7f}') => {
+                self.print(input);
+            }
+
             // Anywhere
             (_, '\u{18}')
             | (_, '\u{1a}')
@@ -199,10 +203,6 @@ impl Vt {
             | (State::Ground, '\u{19}')
             | (State::Ground, '\u{1c}'..='\u{1f}') => {
                 self.execute(input);
-            }
-
-            (State::Ground, '\u{20}'..='\u{7f}') => {
-                self.print(input);
             }
 
             // Escape
