@@ -11,6 +11,7 @@ pub(crate) struct Buffer {
     pub cols: usize,
     pub rows: usize,
     scrollback_limit: Option<usize>,
+    trim_needed: bool,
 }
 
 pub(crate) enum EraseMode {
@@ -36,13 +37,22 @@ impl Buffer {
     ) -> Self {
         let default_pen = Pen::default();
         let pen = pen.unwrap_or(&default_pen);
-        let lines = vec![Line::blank(cols, *pen); rows];
+        let mut lines = vec![Line::blank(cols, *pen); rows];
+
+        if let Some(limit) = scrollback_limit {
+            if limit > 0 {
+                lines.reserve(limit);
+            }
+        } else {
+            lines.reserve(1000);
+        }
 
         Buffer {
             lines,
             cols,
             rows,
             scrollback_limit,
+            trim_needed: false,
         }
     }
 
@@ -171,7 +181,7 @@ impl Buffer {
             self.clear((end - n)..end, pen);
         }
 
-        self.trim_scrollback();
+        self.trim_needed = true;
     }
 
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
@@ -252,7 +262,7 @@ impl Buffer {
 
         self.cols = new_cols;
         self.rows = new_rows;
-        self.trim_scrollback();
+        self.trim_needed = true;
 
         cursor
     }
@@ -308,6 +318,13 @@ impl Buffer {
 
     pub fn view(&self) -> &[Line] {
         &self.lines[self.lines.len() - self.rows..]
+    }
+
+    pub fn gc(&mut self) {
+        if self.trim_needed {
+            self.trim_scrollback();
+            self.trim_needed = false;
+        }
     }
 
     fn view_mut(&mut self) -> &mut [Line] {
@@ -592,6 +609,10 @@ mod tests {
 
         buf.scroll_up(0..content.len(), 5, &pen);
 
+        assert_eq!(buf.lines.len(), 12);
+
+        buf.gc();
+
         assert_eq!(buf.lines.len(), 7);
 
         // scrollback limit of 3
@@ -599,6 +620,10 @@ mod tests {
         let mut buf = buffer(&content, Some(3), 0);
 
         buf.scroll_up(0..content.len(), 5, &pen);
+
+        assert_eq!(buf.lines.len(), 12);
+
+        buf.gc();
 
         assert_eq!(buf.lines.len(), 10);
     }

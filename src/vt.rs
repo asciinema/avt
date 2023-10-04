@@ -145,6 +145,8 @@ impl Vt {
             self.feed(c);
         }
 
+        self.buffer.gc();
+
         (self.dirty_lines.to_vec(), self.resized)
     }
 

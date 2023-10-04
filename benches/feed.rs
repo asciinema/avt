@@ -1,19 +1,23 @@
 use avt::Vt;
-use criterion::{criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use std::fs;
 
-fn go(t: &str) {
-    let mut vt = Vt::new(100, 24);
-
+fn go(mut vt: Vt, t: &str) {
     for _n in 0..10 {
         vt.feed_str(t);
     }
 }
 
+fn setup() -> Vt {
+    Vt::with_scrollback_limit(100, 24, Some(1000))
+}
+
 pub fn criterion_benchmark(c: &mut Criterion) {
     let t = fs::read_to_string("benches/sample.txt").unwrap();
 
-    c.bench_function("feed", |b| b.iter(|| go(&t)));
+    c.bench_function("feed", |b| {
+        b.iter_batched(setup, |vt| go(vt, &t), BatchSize::SmallInput)
+    });
 }
 
 criterion_group!(
