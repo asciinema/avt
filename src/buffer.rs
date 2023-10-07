@@ -56,11 +56,6 @@ impl Buffer {
         }
     }
 
-    #[cfg(test)]
-    pub fn len(&self) -> usize {
-        self.lines.len()
-    }
-
     pub fn text(&self) -> Vec<String> {
         let mut text = Vec::new();
         let mut current = String::new();
@@ -318,6 +313,10 @@ impl Buffer {
 
     pub fn view(&self) -> &[Line] {
         &self.lines[self.lines.len() - self.rows..]
+    }
+
+    pub fn lines(&self) -> &[Line] {
+        &self.lines[..]
     }
 
     pub fn gc(&mut self) {

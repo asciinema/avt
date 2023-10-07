@@ -5,7 +5,7 @@ use crate::dump::Dump;
 use crate::pen::Pen;
 use crate::segment::Segment;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Line {
     pub(crate) cells: Vec<Cell>,
     pub(crate) wrapped: bool,
