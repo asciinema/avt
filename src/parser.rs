@@ -538,7 +538,10 @@ impl Params {
 
 impl Default for Params {
     fn default() -> Self {
-        Self(vec![0])
+        let mut params = Vec::with_capacity(8);
+        params.push(0);
+
+        Self(params)
     }
 }
 
