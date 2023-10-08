@@ -4,7 +4,7 @@ mod charset;
 mod color;
 mod dump;
 mod line;
-mod parser;
+pub mod parser;
 mod pen;
 mod saved_ctx;
 mod segment;
