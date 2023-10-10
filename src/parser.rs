@@ -106,15 +106,8 @@ impl Parser {
                 executor.print(input);
             }
 
-            // Anywhere
-            (_, '\u{18}')
-            | (_, '\u{1a}')
-            | (_, '\u{80}'..='\u{8f}')
-            | (_, '\u{91}'..='\u{97}')
-            | (_, '\u{99}')
-            | (_, '\u{9a}') => {
-                self.state = State::Ground;
-                self.execute(executor, input);
+            (State::CsiParam, '\u{30}'..='\u{39}') | (State::CsiParam, '\u{3b}') => {
+                self.param(input);
             }
 
             (_, '\u{1b}') => {
@@ -122,49 +115,61 @@ impl Parser {
                 self.clear();
             }
 
-            (_, '\u{90}') => {
-                self.state = State::DcsEntry;
-                self.clear();
-            }
-
-            (_, '\u{9b}') => {
+            (State::Escape, '\u{5b}') => {
                 self.state = State::CsiEntry;
                 self.clear();
             }
 
-            (_, '\u{9c}') => {
+            (State::CsiParam, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
+                self.csi_dispatch(executor, input);
             }
 
-            (_, '\u{9d}') => {
-                self.state = State::OscString;
+            (State::CsiEntry, '\u{30}'..='\u{39}') | (State::CsiEntry, '\u{3b}') => {
+                self.state = State::CsiParam;
+                self.param(input);
             }
 
-            (_, '\u{98}') | (_, '\u{9e}') | (_, '\u{9f}') => {
-                self.state = State::SosPmApcString;
-            }
-
-            // Ground
-
-            // C0 prime
             (State::Ground, '\u{00}'..='\u{17}')
             | (State::Ground, '\u{19}')
             | (State::Ground, '\u{1c}'..='\u{1f}') => {
                 self.execute(executor, input);
             }
 
-            // Escape
+            (State::CsiEntry, '\u{40}'..='\u{7e}') => {
+                self.state = State::Ground;
+                self.csi_dispatch(executor, input);
+            }
 
-            // C0 prime
-            (State::Escape, '\u{00}'..='\u{17}')
-            | (State::Escape, '\u{19}')
-            | (State::Escape, '\u{1c}'..='\u{1f}') => {
-                self.execute(executor, input);
+            (State::OscString, '\u{20}'..='\u{7f}') => {
+                self.osc_put(input);
             }
 
             (State::Escape, '\u{20}'..='\u{2f}') => {
                 self.state = State::EscapeIntermediate;
                 self.collect(input);
+            }
+
+            (State::EscapeIntermediate, '\u{30}'..='\u{7e}') => {
+                self.state = State::Ground;
+                self.esc_dispatch(executor, input);
+            }
+
+            (State::CsiEntry, '\u{3c}'..='\u{3f}') => {
+                self.state = State::CsiParam;
+                self.collect(input);
+            }
+
+            (State::DcsPassthrough, '\u{20}'..='\u{7e}') => {
+                self.put(input);
+            }
+
+            (State::CsiIgnore, '\u{40}'..='\u{7e}') => {
+                self.state = State::Ground;
+            }
+
+            (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'..='\u{3f}') => {
+                self.state = State::CsiIgnore;
             }
 
             (State::Escape, '\u{30}'..='\u{4f}')
@@ -177,82 +182,28 @@ impl Parser {
                 self.esc_dispatch(executor, input);
             }
 
-            (State::Escape, '\u{50}') => {
-                self.state = State::DcsEntry;
-                self.clear();
-            }
-
-            (State::Escape, '\u{5b}') => {
-                self.state = State::CsiEntry;
-                self.clear();
-            }
-
             (State::Escape, '\u{5d}') => {
                 self.state = State::OscString;
             }
 
-            (State::Escape, '\u{58}') | (State::Escape, '\u{5e}') | (State::Escape, '\u{5f}') => {
-                self.state = State::SosPmApcString;
-            }
-
-            // EscapeIntermediate
-
-            // C0 prime
-            (State::EscapeIntermediate, '\u{00}'..='\u{17}')
-            | (State::EscapeIntermediate, '\u{19}')
-            | (State::EscapeIntermediate, '\u{1c}'..='\u{1f}') => {
-                self.execute(executor, input);
-            }
-
-            (State::EscapeIntermediate, '\u{20}'..='\u{2f}') => {
-                self.collect(input);
-            }
-
-            (State::EscapeIntermediate, '\u{30}'..='\u{7e}') => {
+            (State::OscString, '\u{07}') => {
+                // 0x07 is xterm non-ANSI variant of transition to ground
                 self.state = State::Ground;
-                self.esc_dispatch(executor, input);
             }
 
-            // CsiEntry
-
-            // C0 prime
-            (State::CsiEntry, '\u{00}'..='\u{17}')
-            | (State::CsiEntry, '\u{19}')
-            | (State::CsiEntry, '\u{1c}'..='\u{1f}') => {
-                self.execute(executor, input);
-            }
-
-            (State::CsiEntry, '\u{20}'..='\u{2f}') => {
-                self.state = State::CsiIntermediate;
-                self.collect(input);
-            }
-
-            (State::CsiEntry, '\u{30}'..='\u{39}') | (State::CsiEntry, '\u{3b}') => {
-                self.state = State::CsiParam;
-                self.param(input);
-            }
-
-            (State::CsiEntry, '\u{3a}') => {
-                self.state = State::CsiIgnore;
-            }
-
-            (State::CsiEntry, '\u{3c}'..='\u{3f}') => {
-                self.state = State::CsiParam;
-                self.collect(input);
-            }
-
-            (State::CsiEntry, '\u{40}'..='\u{7e}') => {
+            (_, '\u{18}')
+            | (_, '\u{1a}')
+            | (_, '\u{80}'..='\u{8f}')
+            | (_, '\u{91}'..='\u{97}')
+            | (_, '\u{99}')
+            | (_, '\u{9a}') => {
                 self.state = State::Ground;
-                self.csi_dispatch(executor, input);
+                self.execute(executor, input);
             }
 
-            // CsiParam
-
-            // C0 prime
-            (State::CsiParam, '\u{00}'..='\u{17}')
-            | (State::CsiParam, '\u{19}')
-            | (State::CsiParam, '\u{1c}'..='\u{1f}') => {
-                self.execute(executor, input);
+            (State::Escape, '\u{50}') => {
+                self.state = State::DcsEntry;
+                self.clear();
             }
 
             (State::CsiParam, '\u{20}'..='\u{2f}') => {
@@ -260,63 +211,17 @@ impl Parser {
                 self.collect(input);
             }
 
-            (State::CsiParam, '\u{30}'..='\u{39}') | (State::CsiParam, '\u{3b}') => {
-                self.param(input);
-            }
-
-            (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'..='\u{3f}') => {
-                self.state = State::CsiIgnore;
-            }
-
-            (State::CsiParam, '\u{40}'..='\u{7e}') => {
-                self.state = State::Ground;
-                self.csi_dispatch(executor, input);
-            }
-
-            // CsiIntermediate
-
-            // C0 prime
-            (State::CsiIntermediate, '\u{00}'..='\u{17}')
-            | (State::CsiIntermediate, '\u{19}')
-            | (State::CsiIntermediate, '\u{1c}'..='\u{1f}') => {
-                self.execute(executor, input);
-            }
-
-            (State::CsiIntermediate, '\u{20}'..='\u{2f}') => {
-                self.collect(input);
-            }
-
-            (State::CsiIntermediate, '\u{30}'..='\u{3f}') => {
-                self.state = State::CsiIgnore;
-            }
-
             (State::CsiIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
                 self.csi_dispatch(executor, input);
             }
 
-            // CsiIgnore
-
-            // C0 prime
-            (State::CsiIgnore, '\u{00}'..='\u{17}')
-            | (State::CsiIgnore, '\u{19}')
-            | (State::CsiIgnore, '\u{1c}'..='\u{1f}') => {
-                self.execute(executor, input);
-            }
-
-            (State::CsiIgnore, '\u{40}'..='\u{7e}') => {
-                self.state = State::Ground;
-            }
-
-            // DcsEntry
-            (State::DcsEntry, '\u{20}'..='\u{2f}') => {
-                self.state = State::DcsIntermediate;
-                self.collect(input);
-            }
-
-            (State::DcsEntry, '\u{30}'..='\u{39}') | (State::DcsEntry, '\u{3b}') => {
-                self.state = State::DcsParam;
+            (State::DcsParam, '\u{30}'..='\u{39}') | (State::DcsParam, '\u{3b}') => {
                 self.param(input);
+            }
+
+            (State::DcsParam, '\u{40}'..='\u{7e}') => {
+                self.state = State::DcsPassthrough;
             }
 
             (State::DcsEntry, '\u{3c}'..='\u{3f}') => {
@@ -324,66 +229,132 @@ impl Parser {
                 self.collect(input);
             }
 
-            (State::DcsEntry, '\u{3a}') => {
-                self.state = State::DcsIgnore;
+            (State::CsiParam, '\u{00}'..='\u{17}')
+            | (State::CsiParam, '\u{19}')
+            | (State::CsiParam, '\u{1c}'..='\u{1f}') => {
+                self.execute(executor, input);
             }
 
-            (State::DcsEntry, '\u{40}'..='\u{7e}') => {
-                self.state = State::DcsPassthrough;
+            (State::Escape, '\u{00}'..='\u{17}')
+            | (State::Escape, '\u{19}')
+            | (State::Escape, '\u{1c}'..='\u{1f}') => {
+                self.execute(executor, input);
             }
 
-            // DcsParam
-            (State::DcsParam, '\u{20}'..='\u{2f}') => {
+            (State::DcsEntry, '\u{20}'..='\u{2f}') => {
                 self.state = State::DcsIntermediate;
                 self.collect(input);
-            }
-
-            (State::DcsParam, '\u{30}'..='\u{39}') | (State::DcsParam, '\u{3b}') => {
-                self.param(input);
-            }
-
-            (State::DcsParam, '\u{3a}') | (State::DcsParam, '\u{3c}'..='\u{3f}') => {
-                self.state = State::DcsIgnore;
-            }
-
-            (State::DcsParam, '\u{40}'..='\u{7e}') => {
-                self.state = State::DcsPassthrough;
-            }
-
-            // DcsIntermediate
-            (State::DcsIntermediate, '\u{20}'..='\u{2f}') => {
-                self.collect(input);
-            }
-
-            (State::DcsIntermediate, '\u{30}'..='\u{3f}') => {
-                self.state = State::DcsIgnore;
             }
 
             (State::DcsIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = State::DcsPassthrough;
             }
 
-            // DcsPassthrough
-
-            // C0 prime
             (State::DcsPassthrough, '\u{00}'..='\u{17}')
             | (State::DcsPassthrough, '\u{19}')
             | (State::DcsPassthrough, '\u{1c}'..='\u{1f}') => {
                 self.put(input);
             }
 
-            (State::DcsPassthrough, '\u{20}'..='\u{7e}') => {
-                self.put(input);
+            (State::CsiEntry, '\u{00}'..='\u{17}')
+            | (State::CsiEntry, '\u{19}')
+            | (State::CsiEntry, '\u{1c}'..='\u{1f}') => {
+                self.execute(executor, input);
             }
 
-            // OscString
-            (State::OscString, '\u{07}') => {
-                // 0x07 is xterm non-ANSI variant of transition to ground
+            (State::DcsEntry, '\u{40}'..='\u{7e}') => {
+                self.state = State::DcsPassthrough;
+            }
+
+            (State::CsiIntermediate, '\u{20}'..='\u{2f}') => {
+                self.collect(input);
+            }
+
+            (State::EscapeIntermediate, '\u{20}'..='\u{2f}') => {
+                self.collect(input);
+            }
+
+            (State::CsiIntermediate, '\u{30}'..='\u{3f}') => {
+                self.state = State::CsiIgnore;
+            }
+
+            (State::CsiEntry, '\u{20}'..='\u{2f}') => {
+                self.state = State::CsiIntermediate;
+                self.collect(input);
+            }
+
+            (State::EscapeIntermediate, '\u{00}'..='\u{17}')
+            | (State::EscapeIntermediate, '\u{19}')
+            | (State::EscapeIntermediate, '\u{1c}'..='\u{1f}') => {
+                self.execute(executor, input);
+            }
+
+            (State::Escape, '\u{58}') | (State::Escape, '\u{5e}') | (State::Escape, '\u{5f}') => {
+                self.state = State::SosPmApcString;
+            }
+
+            (_, '\u{98}') | (_, '\u{9e}') | (_, '\u{9f}') => {
+                self.state = State::SosPmApcString;
+            }
+
+            (_, '\u{9c}') => {
                 self.state = State::Ground;
             }
 
-            (State::OscString, '\u{20}'..='\u{7f}') => {
-                self.osc_put(input);
+            (_, '\u{9d}') => {
+                self.state = State::OscString;
+            }
+
+            (_, '\u{90}') => {
+                self.state = State::DcsEntry;
+                self.clear();
+            }
+
+            (_, '\u{9b}') => {
+                self.state = State::CsiEntry;
+                self.clear();
+            }
+
+            (State::DcsEntry, '\u{30}'..='\u{39}') | (State::DcsEntry, '\u{3b}') => {
+                self.state = State::DcsParam;
+                self.param(input);
+            }
+
+            (State::DcsIntermediate, '\u{20}'..='\u{2f}') => {
+                self.collect(input);
+            }
+
+            (State::CsiIntermediate, '\u{00}'..='\u{17}')
+            | (State::CsiIntermediate, '\u{19}')
+            | (State::CsiIntermediate, '\u{1c}'..='\u{1f}') => {
+                self.execute(executor, input);
+            }
+
+            (State::DcsEntry, '\u{3a}') => {
+                self.state = State::DcsIgnore;
+            }
+
+            (State::DcsIntermediate, '\u{30}'..='\u{3f}') => {
+                self.state = State::DcsIgnore;
+            }
+
+            (State::CsiIgnore, '\u{00}'..='\u{17}')
+            | (State::CsiIgnore, '\u{19}')
+            | (State::CsiIgnore, '\u{1c}'..='\u{1f}') => {
+                self.execute(executor, input);
+            }
+
+            (State::DcsParam, '\u{20}'..='\u{2f}') => {
+                self.state = State::DcsIntermediate;
+                self.collect(input);
+            }
+
+            (State::CsiEntry, '\u{3a}') => {
+                self.state = State::CsiIgnore;
+            }
+
+            (State::DcsParam, '\u{3a}') | (State::DcsParam, '\u{3c}'..='\u{3f}') => {
+                self.state = State::DcsIgnore;
             }
 
             _ => (),
