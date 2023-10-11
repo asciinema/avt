@@ -7,11 +7,7 @@ pub struct Pen {
     pub(crate) foreground: Option<Color>,
     pub(crate) background: Option<Color>,
     pub(crate) intensity: Intensity,
-    pub(crate) italic: bool,
-    pub(crate) underline: bool,
-    pub(crate) strikethrough: bool,
-    pub(crate) blink: bool,
-    pub(crate) inverse: bool,
+    pub(crate) attrs: u8,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -20,6 +16,12 @@ pub enum Intensity {
     Bold,
     Faint,
 }
+
+const ITALIC_MASK: u8 = 1;
+const UNDERLINE_MASK: u8 = 1 << 1;
+const STRIKETHROUGH_MASK: u8 = 1 << 2;
+const BLINK_MASK: u8 = 1 << 3;
+const INVERSE_MASK: u8 = 1 << 4;
 
 impl Pen {
     pub fn foreground(&self) -> Option<Color> {
@@ -39,34 +41,74 @@ impl Pen {
     }
 
     pub fn is_italic(&self) -> bool {
-        self.italic
+        (self.attrs & ITALIC_MASK) != 0
     }
 
     pub fn is_underline(&self) -> bool {
-        self.underline
+        (self.attrs & UNDERLINE_MASK) != 0
     }
 
     pub fn is_strikethrough(&self) -> bool {
-        self.strikethrough
+        (self.attrs & STRIKETHROUGH_MASK) != 0
     }
 
     pub fn is_blink(&self) -> bool {
-        self.blink
+        (self.attrs & BLINK_MASK) != 0
     }
 
     pub fn is_inverse(&self) -> bool {
-        self.inverse
+        (self.attrs & INVERSE_MASK) != 0
+    }
+
+    pub fn set_italic(&mut self) {
+        self.attrs |= ITALIC_MASK;
+    }
+
+    pub fn set_underline(&mut self) {
+        self.attrs |= UNDERLINE_MASK;
+    }
+
+    pub fn set_blink(&mut self) {
+        self.attrs |= BLINK_MASK;
+    }
+
+    pub fn set_strikethrough(&mut self) {
+        self.attrs |= STRIKETHROUGH_MASK;
+    }
+
+    pub fn set_inverse(&mut self) {
+        self.attrs |= INVERSE_MASK;
+    }
+
+    pub fn unset_italic(&mut self) {
+        self.attrs &= !ITALIC_MASK;
+    }
+
+    pub fn unset_underline(&mut self) {
+        self.attrs &= !UNDERLINE_MASK;
+    }
+
+    pub fn unset_blink(&mut self) {
+        self.attrs &= !BLINK_MASK;
+    }
+
+    pub fn unset_strikethrough(&mut self) {
+        self.attrs &= !STRIKETHROUGH_MASK;
+    }
+
+    pub fn unset_inverse(&mut self) {
+        self.attrs &= !INVERSE_MASK;
     }
 
     pub fn is_default(&self) -> bool {
         self.foreground.is_none()
             && self.background.is_none()
             && self.intensity == Intensity::Normal
-            && !self.italic
-            && !self.underline
-            && !self.strikethrough
-            && !self.blink
-            && !self.inverse
+            && !self.is_italic()
+            && !self.is_underline()
+            && !self.is_strikethrough()
+            && !self.is_blink()
+            && !self.is_inverse()
     }
 }
 
@@ -76,11 +118,7 @@ impl Default for Pen {
             foreground: None,
             background: None,
             intensity: Intensity::Normal,
-            italic: false,
-            underline: false,
-            strikethrough: false,
-            blink: false,
-            inverse: false,
+            attrs: 0,
         }
     }
 }
@@ -109,23 +147,23 @@ impl Dump for Pen {
             }
         }
 
-        if self.italic {
+        if self.is_italic() {
             s.push_str(";3");
         }
 
-        if self.underline {
+        if self.is_underline() {
             s.push_str(";4");
         }
 
-        if self.blink {
+        if self.is_blink() {
             s.push_str(";5");
         }
 
-        if self.inverse {
+        if self.is_inverse() {
             s.push_str(";7");
         }
 
-        if self.strikethrough {
+        if self.is_strikethrough() {
             s.push_str(";9");
         }
 
@@ -154,23 +192,23 @@ impl Serialize for Pen {
             len += 1;
         }
 
-        if self.italic {
+        if self.is_italic() {
             len += 1;
         }
 
-        if self.underline {
+        if self.is_underline() {
             len += 1;
         }
 
-        if self.strikethrough {
+        if self.is_strikethrough() {
             len += 1;
         }
 
-        if self.blink {
+        if self.is_blink() {
             len += 1;
         }
 
-        if self.inverse {
+        if self.is_inverse() {
             len += 1;
         }
 
@@ -190,23 +228,23 @@ impl Serialize for Pen {
             Intensity::Faint => map.serialize_entry("faint", &true)?,
         }
 
-        if self.italic {
+        if self.is_italic() {
             map.serialize_entry("italic", &true)?;
         }
 
-        if self.underline {
+        if self.is_underline() {
             map.serialize_entry("underline", &true)?;
         }
 
-        if self.strikethrough {
+        if self.is_strikethrough() {
             map.serialize_entry("strikethrough", &true)?;
         }
 
-        if self.blink {
+        if self.is_blink() {
             map.serialize_entry("blink", &true)?;
         }
 
-        if self.inverse {
+        if self.is_inverse() {
             map.serialize_entry("inverse", &true)?;
         }
 

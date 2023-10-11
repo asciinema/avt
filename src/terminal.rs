@@ -794,28 +794,28 @@ impl Executor for Terminal {
                 }
 
                 3 => {
-                    self.pen.italic = true;
+                    self.pen.set_italic();
                     ps = &ps[1..];
                 }
 
                 4 => {
-                    self.pen.underline = true;
+                    self.pen.set_underline();
                     ps = &ps[1..];
                 }
 
                 5 => {
-                    self.pen.blink = true;
+                    self.pen.set_blink();
                     ps = &ps[1..];
                 }
 
                 7 => {
-                    self.pen.inverse = true;
+                    self.pen.set_inverse();
                     ps = &ps[1..];
                 }
 
                 9 => {
+                    self.pen.set_strikethrough();
                     ps = &ps[1..];
-                    self.pen.strikethrough = true;
                 }
 
                 21 | 22 => {
@@ -824,22 +824,22 @@ impl Executor for Terminal {
                 }
 
                 23 => {
-                    self.pen.italic = false;
+                    self.pen.unset_italic();
                     ps = &ps[1..];
                 }
 
                 24 => {
-                    self.pen.underline = false;
+                    self.pen.unset_underline();
                     ps = &ps[1..];
                 }
 
                 25 => {
-                    self.pen.blink = false;
+                    self.pen.unset_blink();
                     ps = &ps[1..];
                 }
 
                 27 => {
-                    self.pen.inverse = false;
+                    self.pen.unset_inverse();
                     ps = &ps[1..];
                 }
 
@@ -1328,23 +1328,23 @@ mod tests {
 
         term.sgr(&params([3]));
 
-        assert!(term.pen.italic);
+        assert!(term.pen.is_italic());
 
         term.sgr(&params([4]));
 
-        assert!(term.pen.underline);
+        assert!(term.pen.is_underline());
 
         term.sgr(&params([5]));
 
-        assert!(term.pen.blink);
+        assert!(term.pen.is_blink());
 
         term.sgr(&params([7]));
 
-        assert!(term.pen.inverse);
+        assert!(term.pen.is_inverse());
 
         term.sgr(&params([9]));
 
-        assert!(term.pen.strikethrough);
+        assert!(term.pen.is_strikethrough());
 
         term.sgr(&params([32]));
 
@@ -1373,18 +1373,27 @@ mod tests {
         term.sgr(&params([1, 38, 5, 88, 48, 5, 99, 5]));
 
         assert_eq!(term.pen.intensity, Intensity::Bold);
-        assert!(term.pen.blink);
+        assert!(term.pen.is_blink());
         assert_eq!(term.pen.foreground, Some(Color::Indexed(88)));
         assert_eq!(term.pen.background, Some(Color::Indexed(99)));
 
         term.sgr(&params([1, 38, 2, 1, 101, 201, 48, 2, 2, 102, 202, 5]));
 
         assert_eq!(term.pen.intensity, Intensity::Bold);
-        assert!(term.pen.blink);
+        assert!(term.pen.is_blink());
+
+        term.sgr(&params([23, 24, 25, 27]));
+
+        assert!(!term.pen.is_italic());
+        assert!(!term.pen.is_underline());
+        assert!(!term.pen.is_blink());
+        assert!(!term.pen.is_inverse());
+
         assert_eq!(
             term.pen.foreground,
             Some(Color::RGB(RGB8::new(1, 101, 201)))
         );
+
         assert_eq!(
             term.pen.background,
             Some(Color::RGB(RGB8::new(2, 102, 202)))
