@@ -19,9 +19,5 @@ name = "parser"
 harness = false
 
 [[bench]]
-name = "feed"
-harness = false
-
-[[bench]]
-name = "dump"
+name = "vt"
 harness = false
