@@ -63,10 +63,8 @@ impl Vt {
         self.terminal.text()
     }
 
-    pub fn cursor(&self) -> (usize, usize) {
-        let (col, row, _) = self.terminal.cursor();
-
-        (col, row)
+    pub fn cursor(&self) -> (usize, usize, bool) {
+        self.terminal.cursor()
     }
 
     pub fn dump(&self) -> String {
@@ -145,12 +143,12 @@ mod tests {
 
         vt.feed_str("\n");
 
-        assert_eq!(vt.cursor(), (3, 1));
+        assert_eq!(vt.cursor(), (3, 1, true));
         assert_eq!(text(&vt), "abc\n   |");
 
         vt.feed_str("d\n");
 
-        assert_eq!(vt.cursor(), (4, 1));
+        assert_eq!(vt.cursor(), (4, 1, true));
         assert_eq!(text(&vt), "   d\n    |");
     }
 
@@ -296,11 +294,11 @@ mod tests {
         vt.feed_str("abc\r\ndef");
         vt.feed_str("\x1b[1;1;H");
 
-        assert_eq!(vt.cursor(), (0, 0));
+        assert_eq!(vt.cursor(), (0, 0, true));
 
         vt.feed_str("\x1b[10;10;H");
 
-        assert_eq!(vt.cursor(), (3, 1));
+        assert_eq!(vt.cursor(), (3, 1, true));
     }
 
     #[test]
@@ -310,11 +308,11 @@ mod tests {
         vt.feed_str("abcd\n\n\n");
         vt.feed_str("\x1b[A");
 
-        assert_eq!(vt.cursor(), (4, 2));
+        assert_eq!(vt.cursor(), (4, 2, true));
 
         vt.feed_str("\x1b[2A");
 
-        assert_eq!(vt.cursor(), (4, 0));
+        assert_eq!(vt.cursor(), (4, 0, true));
     }
 
     #[test]
@@ -323,15 +321,15 @@ mod tests {
 
         vt.feed_str("abcd\r\n\r\n\r\nef");
 
-        assert_eq!(vt.cursor(), (2, 3));
+        assert_eq!(vt.cursor(), (2, 3, true));
 
         vt.feed_str("\x1b[F");
 
-        assert_eq!(vt.cursor(), (0, 2));
+        assert_eq!(vt.cursor(), (0, 2, true));
 
         vt.feed_str("\x1b[2F");
 
-        assert_eq!(vt.cursor(), (0, 0));
+        assert_eq!(vt.cursor(), (0, 0, true));
     }
 
     #[test]
@@ -341,11 +339,11 @@ mod tests {
         vt.feed_str("ab");
         vt.feed_str("\x1b[E");
 
-        assert_eq!(vt.cursor(), (0, 1));
+        assert_eq!(vt.cursor(), (0, 1, true));
 
         vt.feed_str("\x1b[3E");
 
-        assert_eq!(vt.cursor(), (0, 3));
+        assert_eq!(vt.cursor(), (0, 3, true));
     }
 
     #[test]
@@ -355,11 +353,11 @@ mod tests {
         vt.feed_str("\r\n\r\naaa\r\nbbb");
         vt.feed_str("\x1b[d");
 
-        assert_eq!(vt.cursor(), (3, 0));
+        assert_eq!(vt.cursor(), (3, 0, true));
 
         vt.feed_str("\x1b[10d");
 
-        assert_eq!(vt.cursor(), (3, 3));
+        assert_eq!(vt.cursor(), (3, 3, true));
     }
 
     #[test]
@@ -692,15 +690,15 @@ mod tests {
 
         vt.feed_str("\x1b[I");
 
-        assert_eq!(vt.cursor(), (8, 0));
+        assert_eq!(vt.cursor(), (8, 0, true));
 
         vt.feed_str("\x1b[2I");
 
-        assert_eq!(vt.cursor(), (24, 0));
+        assert_eq!(vt.cursor(), (24, 0, true));
 
         vt.feed_str("\x1b[I");
 
-        assert_eq!(vt.cursor(), (27, 0));
+        assert_eq!(vt.cursor(), (27, 0, true));
     }
 
     #[test]
@@ -709,15 +707,15 @@ mod tests {
 
         vt.feed_str("\x1b[Z");
 
-        assert_eq!(vt.cursor(), (24, 0));
+        assert_eq!(vt.cursor(), (24, 0, true));
 
         vt.feed_str("\x1b[2Z");
 
-        assert_eq!(vt.cursor(), (8, 0));
+        assert_eq!(vt.cursor(), (8, 0, true));
 
         vt.feed_str("\x1b[Z");
 
-        assert_eq!(vt.cursor(), (0, 0));
+        assert_eq!(vt.cursor(), (0, 0, true));
     }
 
     #[test]
@@ -738,7 +736,7 @@ mod tests {
         // restore cursor
         vt.feed_str("\x1b8");
 
-        assert_eq!(vt.cursor(), (2, 1));
+        assert_eq!(vt.cursor(), (2, 1, true));
 
         // ansi.sys variant
 
@@ -756,7 +754,7 @@ mod tests {
         // restore cursor
         vt.feed_str("\x1b[u");
 
-        assert_eq!(vt.cursor(), (2, 1));
+        assert_eq!(vt.cursor(), (2, 1, true));
     }
 
     #[test]
@@ -891,7 +889,7 @@ mod tests {
 
         vt.feed_str("BBBBB");
 
-        assert_eq!(vt.cursor(), (8, 3));
+        assert_eq!(vt.cursor(), (8, 3, true));
 
         let (_, resized) = vt.feed_str("\x1b[8;;4t");
 
@@ -969,7 +967,7 @@ mod tests {
         // fill primary buffer
         vt.feed_str("aaa\n\rbbb\n\rc\n\rddd");
 
-        assert_eq!(vt.cursor(), (3, 3));
+        assert_eq!(vt.cursor(), (3, 3, true));
 
         // resize to 4x5
         vt.feed_str("\x1b[8;5;4;t");
@@ -979,12 +977,12 @@ mod tests {
         // switch to alternate buffer
         vt.feed_str("\x1b[?1049h");
 
-        assert_eq!(vt.cursor(), (3, 3));
+        assert_eq!(vt.cursor(), (3, 3, true));
 
         // resize to 4x2
         vt.feed_str("\x1b[8;2;4t");
 
-        assert_eq!(vt.cursor(), (3, 1));
+        assert_eq!(vt.cursor(), (3, 1, true));
 
         // resize to 2x3, we'll check later if primary buffer preserved more columns
         vt.feed_str("\x1b[8;3;2t");
@@ -1284,7 +1282,7 @@ mod tests {
     }
 
     fn text(vt: &Vt) -> String {
-        let (cursor_x, cursor_y) = vt.cursor();
+        let (cursor_x, cursor_y, _) = vt.cursor();
 
         buffer_text(vt.terminal.view(), cursor_x, cursor_y)
     }
