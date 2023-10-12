@@ -1,4 +1,6 @@
+mod cursor;
 mod dirty_lines;
+pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::Cell;
@@ -21,9 +23,7 @@ pub(crate) struct Terminal {
     other_buffer: Buffer,
     active_buffer_type: BufferType,
     scrollback_limit: Option<usize>,
-    cursor_x: usize,
-    cursor_y: usize,
-    cursor_visible: bool,
+    cursor: Cursor,
     pen: Pen,
     charsets: [Charset; 2],
     active_charset: usize,
@@ -62,9 +62,7 @@ impl Terminal {
             active_buffer_type: BufferType::Primary,
             scrollback_limit,
             tabs: Tabs::new(cols),
-            cursor_x: 0,
-            cursor_y: 0,
-            cursor_visible: true,
+            cursor: Cursor::default(),
             pen: Pen::default(),
             charsets: [Charset::Ascii, Charset::Ascii],
             active_charset: 0,
@@ -83,8 +81,8 @@ impl Terminal {
         }
     }
 
-    pub fn cursor(&self) -> (usize, usize, bool) {
-        (self.cursor_x, self.cursor_y, self.cursor_visible)
+    pub fn cursor(&self) -> Cursor {
+        self.cursor
     }
 
     pub fn gc(&mut self) {
@@ -102,16 +100,16 @@ impl Terminal {
     // cursor
 
     fn save_cursor(&mut self) {
-        self.saved_ctx.cursor_x = self.cursor_x.min(self.cols - 1);
-        self.saved_ctx.cursor_y = self.cursor_y;
+        self.saved_ctx.cursor_col = self.cursor.col.min(self.cols - 1);
+        self.saved_ctx.cursor_row = self.cursor.row;
         self.saved_ctx.pen = self.pen;
         self.saved_ctx.origin_mode = self.origin_mode;
         self.saved_ctx.auto_wrap_mode = self.auto_wrap_mode;
     }
 
     fn restore_cursor(&mut self) {
-        self.cursor_x = self.saved_ctx.cursor_x;
-        self.cursor_y = self.saved_ctx.cursor_y;
+        self.cursor.col = self.saved_ctx.cursor_col;
+        self.cursor.row = self.saved_ctx.cursor_row;
         self.pen = self.saved_ctx.pen;
         self.origin_mode = self.saved_ctx.origin_mode;
         self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
@@ -127,7 +125,7 @@ impl Terminal {
     }
 
     fn do_move_cursor_to_col(&mut self, col: usize) {
-        self.cursor_x = col;
+        self.cursor.col = col;
         self.next_print_wraps = false;
     }
 
@@ -139,13 +137,13 @@ impl Terminal {
     }
 
     fn do_move_cursor_to_row(&mut self, row: usize) {
-        self.cursor_x = self.cursor_x.min(self.cols - 1);
-        self.cursor_y = row;
+        self.cursor.col = self.cursor.col.min(self.cols - 1);
+        self.cursor.row = row;
         self.next_print_wraps = false;
     }
 
     fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
-        let new_col = self.cursor_x as isize + rel_col;
+        let new_col = self.cursor.col as isize + rel_col;
 
         if new_col < 0 {
             self.do_move_cursor_to_col(0);
@@ -162,37 +160,37 @@ impl Terminal {
     }
 
     fn move_cursor_to_next_tab(&mut self, n: usize) {
-        let next_tab = self.tabs.after(self.cursor_x, n).unwrap_or(self.cols - 1);
+        let next_tab = self.tabs.after(self.cursor.col, n).unwrap_or(self.cols - 1);
         self.move_cursor_to_col(next_tab);
     }
 
     fn move_cursor_to_prev_tab(&mut self, n: usize) {
-        let prev_tab = self.tabs.before(self.cursor_x, n).unwrap_or(0);
+        let prev_tab = self.tabs.before(self.cursor.col, n).unwrap_or(0);
         self.move_cursor_to_col(prev_tab);
     }
 
     fn move_cursor_down_with_scroll(&mut self) {
-        if self.cursor_y == self.bottom_margin {
+        if self.cursor.row == self.bottom_margin {
             self.scroll_up_in_region(1);
-        } else if self.cursor_y < self.rows - 1 {
-            self.do_move_cursor_to_row(self.cursor_y + 1);
+        } else if self.cursor.row < self.rows - 1 {
+            self.do_move_cursor_to_row(self.cursor.row + 1);
         }
     }
 
     fn cursor_down(&mut self, n: usize) {
-        let new_y = if self.cursor_y > self.bottom_margin {
-            (self.rows - 1).min(self.cursor_y + n)
+        let new_y = if self.cursor.row > self.bottom_margin {
+            (self.rows - 1).min(self.cursor.row + n)
         } else {
-            self.bottom_margin.min(self.cursor_y + n)
+            self.bottom_margin.min(self.cursor.row + n)
         };
 
         self.do_move_cursor_to_row(new_y);
     }
 
     fn cursor_up(&mut self, n: usize) {
-        let mut new_y = (self.cursor_y as isize) - (n as isize);
+        let mut new_y = (self.cursor.row as isize) - (n as isize);
 
-        new_y = if self.cursor_y < self.top_margin {
+        new_y = if self.cursor.row < self.top_margin {
             new_y.max(0)
         } else {
             new_y.max(self.top_margin as isize)
@@ -234,13 +232,13 @@ impl Terminal {
     // tabs
 
     fn set_tab(&mut self) {
-        if 0 < self.cursor_x && self.cursor_x < self.cols {
-            self.tabs.set(self.cursor_x);
+        if 0 < self.cursor.col && self.cursor.col < self.cols {
+            self.tabs.set(self.cursor.col);
         }
     }
 
     fn clear_tab(&mut self) {
-        self.tabs.unset(self.cursor_x);
+        self.tabs.unset(self.cursor.col);
     }
 
     fn clear_all_tabs(&mut self) {
@@ -275,26 +273,26 @@ impl Terminal {
             self.next_print_wraps = false;
         }
 
-        (self.cursor_x, self.cursor_y) =
+        (self.cursor.col, self.cursor.row) =
             self.buffer
-                .resize(self.cols, self.rows, (self.cursor_x, self.cursor_y));
+                .resize(self.cols, self.rows, (self.cursor.col, self.cursor.row));
 
         self.dirty_lines.resize(self.rows);
         self.dirty_lines.extend(0..self.rows);
 
-        if self.saved_ctx.cursor_x >= self.cols {
-            self.saved_ctx.cursor_x = self.cols - 1;
+        if self.saved_ctx.cursor_col >= self.cols {
+            self.saved_ctx.cursor_col = self.cols - 1;
         }
 
-        if self.saved_ctx.cursor_y >= self.rows {
-            self.saved_ctx.cursor_y = self.rows - 1;
+        if self.saved_ctx.cursor_row >= self.rows {
+            self.saved_ctx.cursor_row = self.rows - 1;
         }
     }
 
     // resetting
 
     fn soft_reset(&mut self) {
-        self.cursor_visible = true;
+        self.cursor.visible = true;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.insert_mode = false;
@@ -313,9 +311,7 @@ impl Terminal {
         self.other_buffer = alternate_buffer;
         self.active_buffer_type = BufferType::Primary;
         self.tabs = Tabs::new(self.cols);
-        self.cursor_x = 0;
-        self.cursor_y = 0;
-        self.cursor_visible = true;
+        self.cursor = Cursor::default();
         self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
@@ -366,22 +362,20 @@ impl Terminal {
 
     #[cfg(test)]
     pub fn verify(&self) {
-        assert!(self.cursor_y < self.rows);
+        assert!(self.cursor.row < self.rows);
         assert!(self.lines().iter().all(|line| line.len() == self.cols));
         assert!(!self.lines().last().unwrap().wrapped);
 
         assert!(
-            !self.next_print_wraps && self.cursor_x < self.cols
-                || self.next_print_wraps && self.cursor_x == self.cols
+            !self.next_print_wraps && self.cursor.col < self.cols
+                || self.next_print_wraps && self.cursor.col == self.cols
         );
     }
 
     #[cfg(test)]
     pub fn assert_eq(&self, other: &Terminal) {
         assert_eq!(self.active_buffer_type, other.active_buffer_type);
-        assert_eq!(self.cursor_x, other.cursor_x);
-        assert_eq!(self.cursor_y, other.cursor_y);
-        assert_eq!(self.cursor_visible, other.cursor_visible);
+        assert_eq!(self.cursor, other.cursor);
         assert_eq!(self.pen, other.pen);
         assert_eq!(self.charsets, other.charsets);
         assert_eq!(self.active_charset, other.active_charset);
@@ -420,19 +414,19 @@ impl Executor for Terminal {
         if self.auto_wrap_mode && self.next_print_wraps {
             self.do_move_cursor_to_col(0);
 
-            if self.cursor_y == self.bottom_margin {
-                self.buffer.wrap(self.cursor_y);
+            if self.cursor.row == self.bottom_margin {
+                self.buffer.wrap(self.cursor.row);
                 self.scroll_up_in_region(1);
-            } else if self.cursor_y < self.rows - 1 {
-                self.buffer.wrap(self.cursor_y);
-                self.do_move_cursor_to_row(self.cursor_y + 1);
+            } else if self.cursor.row < self.rows - 1 {
+                self.buffer.wrap(self.cursor.row);
+                self.do_move_cursor_to_row(self.cursor.row + 1);
             }
         }
 
-        let next_col = self.cursor_x + 1;
+        let next_col = self.cursor.col + 1;
 
         if next_col >= self.cols {
-            self.buffer.print((self.cols - 1, self.cursor_y), cell);
+            self.buffer.print((self.cols - 1, self.cursor.row), cell);
 
             if self.auto_wrap_mode {
                 self.do_move_cursor_to_col(self.cols);
@@ -440,15 +434,16 @@ impl Executor for Terminal {
             }
         } else {
             if self.insert_mode {
-                self.buffer.insert((self.cursor_x, self.cursor_y), 1, cell);
+                self.buffer
+                    .insert((self.cursor.col, self.cursor.row), 1, cell);
             } else {
-                self.buffer.print((self.cursor_x, self.cursor_y), cell);
+                self.buffer.print((self.cursor.col, self.cursor.row), cell);
             }
 
             self.do_move_cursor_to_col(next_col);
         }
 
-        self.dirty_lines.add(self.cursor_y);
+        self.dirty_lines.add(self.cursor.row);
     }
 
     fn bs(&mut self) {
@@ -493,10 +488,10 @@ impl Executor for Terminal {
     }
 
     fn ri(&mut self) {
-        if self.cursor_y == self.top_margin {
+        if self.cursor.row == self.top_margin {
             self.scroll_down_in_region(1);
-        } else if self.cursor_y > 0 {
-            self.move_cursor_to_row(self.cursor_y - 1);
+        } else if self.cursor.row > 0 {
+            self.move_cursor_to_row(self.cursor.row - 1);
         }
     }
 
@@ -533,12 +528,12 @@ impl Executor for Terminal {
 
     fn ich(&mut self, params: &Params) {
         self.buffer.insert(
-            (self.cursor_x, self.cursor_y),
+            (self.cursor.col, self.cursor.row),
             params.get(0, 1),
             Cell::blank(self.pen),
         );
 
-        self.dirty_lines.add(self.cursor_y);
+        self.dirty_lines.add(self.cursor.row);
     }
 
     fn cuu(&mut self, params: &Params) {
@@ -592,27 +587,27 @@ impl Executor for Terminal {
         match params.get(0, 0) {
             0 => {
                 self.buffer.erase(
-                    (self.cursor_x, self.cursor_y),
+                    (self.cursor.col, self.cursor.row),
                     FromCursorToEndOfView,
                     &self.pen,
                 );
 
-                self.dirty_lines.extend(self.cursor_y..self.rows);
+                self.dirty_lines.extend(self.cursor.row..self.rows);
             }
 
             1 => {
                 self.buffer.erase(
-                    (self.cursor_x, self.cursor_y),
+                    (self.cursor.col, self.cursor.row),
                     FromStartOfViewToCursor,
                     &self.pen,
                 );
 
-                self.dirty_lines.extend(0..self.cursor_y + 1);
+                self.dirty_lines.extend(0..self.cursor.row + 1);
             }
 
             2 => {
                 self.buffer
-                    .erase((self.cursor_x, self.cursor_y), WholeView, &self.pen);
+                    .erase((self.cursor.col, self.cursor.row), WholeView, &self.pen);
 
                 self.dirty_lines.extend(0..self.rows);
             }
@@ -627,29 +622,29 @@ impl Executor for Terminal {
         match params.get(0, 0) {
             0 => {
                 self.buffer.erase(
-                    (self.cursor_x, self.cursor_y),
+                    (self.cursor.col, self.cursor.row),
                     FromCursorToEndOfLine,
                     &self.pen,
                 );
 
-                self.dirty_lines.add(self.cursor_y);
+                self.dirty_lines.add(self.cursor.row);
             }
 
             1 => {
                 self.buffer.erase(
-                    (self.cursor_x, self.cursor_y),
+                    (self.cursor.col, self.cursor.row),
                     FromStartOfLineToCursor,
                     &self.pen,
                 );
 
-                self.dirty_lines.add(self.cursor_y);
+                self.dirty_lines.add(self.cursor.row);
             }
 
             2 => {
                 self.buffer
-                    .erase((self.cursor_x, self.cursor_y), WholeLine, &self.pen);
+                    .erase((self.cursor.col, self.cursor.row), WholeLine, &self.pen);
 
-                self.dirty_lines.add(self.cursor_y);
+                self.dirty_lines.add(self.cursor.row);
             }
 
             _ => (),
@@ -657,10 +652,10 @@ impl Executor for Terminal {
     }
 
     fn il(&mut self, params: &Params) {
-        let range = if self.cursor_y <= self.bottom_margin {
-            self.cursor_y..self.bottom_margin + 1
+        let range = if self.cursor.row <= self.bottom_margin {
+            self.cursor.row..self.bottom_margin + 1
         } else {
-            self.cursor_y..self.rows
+            self.cursor.row..self.rows
         };
 
         self.buffer
@@ -670,10 +665,10 @@ impl Executor for Terminal {
     }
 
     fn dl(&mut self, params: &Params) {
-        let range = if self.cursor_y <= self.bottom_margin {
-            self.cursor_y..self.bottom_margin + 1
+        let range = if self.cursor.row <= self.bottom_margin {
+            self.cursor.row..self.bottom_margin + 1
         } else {
-            self.cursor_y..self.rows
+            self.cursor.row..self.rows
         };
 
         self.buffer
@@ -683,14 +678,17 @@ impl Executor for Terminal {
     }
 
     fn dch(&mut self, params: &Params) {
-        if self.cursor_x >= self.cols {
+        if self.cursor.col >= self.cols {
             self.move_cursor_to_col(self.cols - 1);
         }
 
-        self.buffer
-            .delete((self.cursor_x, self.cursor_y), params.get(0, 1), &self.pen);
+        self.buffer.delete(
+            (self.cursor.col, self.cursor.row),
+            params.get(0, 1),
+            &self.pen,
+        );
 
-        self.dirty_lines.add(self.cursor_y);
+        self.dirty_lines.add(self.cursor.row);
     }
 
     fn su(&mut self, params: &Params) {
@@ -714,12 +712,12 @@ impl Executor for Terminal {
         let n = params.get(0, 1);
 
         self.buffer.erase(
-            (self.cursor_x, self.cursor_y),
+            (self.cursor.col, self.cursor.row),
             EraseMode::NextChars(n),
             &self.pen,
         );
 
-        self.dirty_lines.add(self.cursor_y);
+        self.dirty_lines.add(self.cursor.row);
     }
 
     fn cbt(&mut self, params: &Params) {
@@ -727,9 +725,9 @@ impl Executor for Terminal {
     }
 
     fn rep(&mut self, params: &Params) {
-        if self.cursor_x > 0 {
+        if self.cursor.col > 0 {
             let n = params.get(0, 1);
-            let char = self.buffer[(self.cursor_x - 1, self.cursor_y)].0;
+            let char = self.buffer[(self.cursor.col - 1, self.cursor.row)].0;
 
             for _n in 0..n {
                 self.print(char);
@@ -1008,7 +1006,7 @@ impl Executor for Terminal {
                 }
 
                 7 => self.auto_wrap_mode = true,
-                25 => self.cursor_visible = true,
+                25 => self.cursor.visible = true,
 
                 47 => {
                     self.switch_to_alternate_buffer();
@@ -1041,7 +1039,7 @@ impl Executor for Terminal {
                 }
 
                 7 => self.auto_wrap_mode = false,
-                25 => self.cursor_visible = false,
+                25 => self.cursor.visible = false,
 
                 47 => {
                     self.switch_to_primary_buffer();
@@ -1104,8 +1102,8 @@ impl Dump for Terminal {
         // fix cursor in target position
         seq.push_str(&format!(
             "\u{9b}{};{}H",
-            primary_ctx.cursor_y + 1,
-            primary_ctx.cursor_x + 1
+            primary_ctx.cursor_row + 1,
+            primary_ctx.cursor_col + 1
         ));
 
         // configure pen
@@ -1152,8 +1150,8 @@ impl Dump for Terminal {
         // fix cursor in target position
         seq.push_str(&format!(
             "\u{9b}{};{}H",
-            alternate_ctx.cursor_y + 1,
-            alternate_ctx.cursor_x + 1
+            alternate_ctx.cursor_row + 1,
+            alternate_ctx.cursor_col + 1
         ));
 
         // configure pen
@@ -1198,8 +1196,8 @@ impl Dump for Terminal {
 
         // 9. setup cursor
 
-        let col = self.cursor_x;
-        let mut row = self.cursor_y;
+        let col = self.cursor.col;
+        let mut row = self.cursor.row;
 
         if self.origin_mode {
             if row < self.top_margin || row > self.bottom_margin {
@@ -1208,28 +1206,28 @@ impl Dump for Terminal {
 
                 seq.push_str("\u{9b}u");
 
-                match col.cmp(&self.saved_ctx.cursor_x) {
+                match col.cmp(&self.saved_ctx.cursor_col) {
                     Ordering::Less => {
-                        let n = self.saved_ctx.cursor_x - col;
+                        let n = self.saved_ctx.cursor_col - col;
                         seq.push_str(&format!("\u{9b}{n}D"));
                     }
 
                     Ordering::Greater => {
-                        let n = col - self.saved_ctx.cursor_x;
+                        let n = col - self.saved_ctx.cursor_col;
                         seq.push_str(&format!("\u{9b}{n}C"));
                     }
 
                     Ordering::Equal => (),
                 }
 
-                match row.cmp(&self.saved_ctx.cursor_y) {
+                match row.cmp(&self.saved_ctx.cursor_row) {
                     Ordering::Less => {
-                        let n = self.saved_ctx.cursor_y - row;
+                        let n = self.saved_ctx.cursor_row - row;
                         seq.push_str(&format!("\u{9b}{n}A"));
                     }
 
                     Ordering::Greater => {
-                        let n = row - self.saved_ctx.cursor_y;
+                        let n = row - self.saved_ctx.cursor_row;
                         seq.push_str(&format!("\u{9b}{n}B"));
                     }
 
@@ -1243,17 +1241,17 @@ impl Dump for Terminal {
             seq.push_str(&format!("\u{9b}{};{}H", row + 1, col + 1));
         }
 
-        if self.cursor_x >= self.cols {
+        if self.cursor.col >= self.cols {
             // move cursor past right border by re-printing the character in
             // the last column
-            let cell = self.buffer[(self.cols - 1, self.cursor_y)];
+            let cell = self.buffer[(self.cols - 1, self.cursor.row)];
             seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
         }
 
         // configure pen
         seq.push_str(&self.pen.dump());
 
-        if !self.cursor_visible {
+        if !self.cursor.visible {
             // hide cursor
             seq.push_str("\u{9b}?25l");
         }
@@ -1428,12 +1426,12 @@ mod tests {
         // move cursor to col 15
         term.cuf(&params([15]));
 
-        assert_eq!(term.cursor_x, 15);
+        assert_eq!(term.cursor.col, 15);
 
         // save cursor
         term.sc();
 
-        assert_eq!(term.saved_ctx.cursor_x, 15);
+        assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // switch to alternate buffer
         term.prv_sm(&params([47]));
@@ -1441,11 +1439,11 @@ mod tests {
         // save cursor
         term.sc();
 
-        assert_eq!(term.saved_ctx.cursor_x, 15);
+        assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // resize to 10x5
         term.xtwinops(&params([8, 0, 10]));
 
-        assert_eq!(term.saved_ctx.cursor_x, 9);
+        assert_eq!(term.saved_ctx.cursor_col, 9);
     }
 }
