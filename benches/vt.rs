@@ -64,7 +64,7 @@ fn setup_feed(filename: &str) -> impl Fn() -> (Vt, Vec<String>) {
     let filename = filename.to_owned();
 
     move || {
-        let vt = Vt::with_scrollback_limit(100, 24, Some(1000));
+        let vt = Vt::builder().size(100, 24).scrollback_limit(1000).build();
         let text = sample_text(&filename);
 
         (vt, vec![text])

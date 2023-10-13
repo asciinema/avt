@@ -49,7 +49,11 @@ enum BufferType {
 }
 
 impl Terminal {
-    pub fn new(cols: usize, rows: usize, scrollback_limit: Option<usize>) -> Self {
+    pub fn new(
+        (cols, rows): (usize, usize),
+        scrollback_limit: Option<usize>,
+        resizable: bool,
+    ) -> Self {
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
         let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
         let dirty_lines = DirtyLines::new(rows);
@@ -76,7 +80,7 @@ impl Terminal {
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
-            resizable: false,
+            resizable,
             resized: false,
         }
     }
@@ -402,7 +406,7 @@ impl Terminal {
 
 impl Default for Terminal {
     fn default() -> Self {
-        Self::new(80, 24, None)
+        Self::new((80, 24), None, false)
     }
 }
 
@@ -1400,8 +1404,7 @@ mod tests {
 
     #[test]
     fn xtwinops_vs_tabs() {
-        let mut term = Terminal::new(6, 2, None);
-        term.resizable = true;
+        let mut term = Terminal::new((6, 2), None, true);
 
         assert_eq!(term.tabs, vec![]);
 
@@ -1420,8 +1423,7 @@ mod tests {
 
     #[test]
     fn xtwinops_vs_saved_ctx() {
-        let mut term = Terminal::new(20, 5, None);
-        term.resizable = true;
+        let mut term = Terminal::new((20, 5), None, true);
 
         // move cursor to col 15
         term.cuf(&params([15]));

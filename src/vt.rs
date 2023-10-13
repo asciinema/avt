@@ -10,22 +10,12 @@ pub struct Vt {
 }
 
 impl Vt {
-    pub fn new(cols: usize, rows: usize) -> Self {
-        Vt::with_scrollback_limit(cols, rows, None)
+    pub fn builder() -> Builder {
+        Builder::default()
     }
 
-    pub fn with_scrollback_limit(
-        cols: usize,
-        rows: usize,
-        scrollback_limit: Option<usize>,
-    ) -> Self {
-        assert!(cols > 0);
-        assert!(rows > 0);
-
-        Vt {
-            parser: Parser::new(),
-            terminal: Terminal::new(cols, rows, scrollback_limit),
-        }
+    pub fn new(cols: usize, rows: usize) -> Vt {
+        Self::builder().size(cols, rows).build()
     }
 
     pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
@@ -37,10 +27,6 @@ impl Vt {
 
     pub fn feed(&mut self, input: char) {
         self.parser.feed(input, &mut self.terminal);
-    }
-
-    pub fn resizable(&mut self, resizable: bool) {
-        self.terminal.resizable = resizable;
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -75,6 +61,48 @@ impl Vt {
     }
 }
 
+pub struct Builder {
+    size: (usize, usize),
+    scrollback_limit: Option<usize>,
+    resizable: bool,
+}
+
+impl Builder {
+    pub fn size(&mut self, cols: usize, rows: usize) -> &mut Self {
+        self.size = (cols, rows);
+
+        self
+    }
+
+    pub fn scrollback_limit(&mut self, limit: usize) -> &mut Self {
+        self.scrollback_limit = Some(limit);
+
+        self
+    }
+
+    pub fn resizable(&mut self, resizable: bool) -> &mut Self {
+        self.resizable = resizable;
+
+        self
+    }
+
+    pub fn build(&self) -> Vt {
+        Vt {
+            parser: Parser::new(),
+            terminal: Terminal::new(self.size, self.scrollback_limit, self.resizable),
+        }
+    }
+}
+
+impl Default for Builder {
+    fn default() -> Self {
+        Builder {
+            size: (80, 24),
+            scrollback_limit: None,
+            resizable: false,
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::Vt;
@@ -782,8 +810,10 @@ mod tests {
 
     #[test]
     fn execute_xtwinops_wider() {
-        let mut vt = Vt::new(6, 6);
-        vt.resizable(true);
+        let mut builder = Vt::builder();
+        builder.resizable(true);
+
+        let mut vt = builder.size(6, 6).build();
 
         vt.feed_str("\x1b[8;6;7t");
 
@@ -795,8 +825,7 @@ mod tests {
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.view().iter().any(|l| l.wrapped));
 
-        let mut vt = Vt::new(6, 6);
-        vt.resizable(true);
+        let mut vt = builder.size(6, 6).build();
 
         vt.feed_str("000000111111222222333333444444555");
 
@@ -813,8 +842,7 @@ mod tests {
         assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
-        let mut vt = Vt::new(4, 3);
-        vt.resizable(true);
+        let mut vt = builder.size(4, 3).build();
 
         vt.feed_str("000011\r\n22");
 
@@ -829,8 +857,10 @@ mod tests {
 
     #[test]
     fn execute_xtwinops_narrower() {
-        let mut vt = Vt::new(15, 6);
-        vt.resizable(true);
+        let mut builder = Vt::builder();
+        builder.resizable(true);
+
+        let mut vt = builder.size(15, 6).build();
 
         vt.feed_str("\x1b[8;6;7t");
 
@@ -842,8 +872,7 @@ mod tests {
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.view().iter().any(|l| l.wrapped));
 
-        let mut vt = Vt::new(8, 2);
-        vt.resizable(true);
+        let mut vt = builder.size(8, 2).build();
 
         vt.feed_str("\nabcdef");
 
@@ -854,8 +883,7 @@ mod tests {
         assert_eq!(text(&vt), "abcd\nef|");
         assert_eq!(wrapped(&vt), vec![true, false]);
 
-        let mut vt = Vt::new(15, 6);
-        vt.resizable(true);
+        let mut vt = builder.size(15, 6).build();
 
         vt.feed_str("000000111111222222333333444444555");
 
@@ -875,8 +903,9 @@ mod tests {
 
     #[test]
     fn execute_xtwinops() {
-        let mut vt = build_vt(8, 4, 0, 3, "abcdefgh\r\nijklmnop\r\nqrstuw");
-        vt.resizable(true);
+        let mut vt = Vt::builder().size(8, 4).resizable(true).build();
+        vt.feed_str("abcdefgh\r\nijklmnop\r\nqrstuw");
+        vt.feed_str("\x1b[4;1H");
 
         let (_, resized) = vt.feed_str("AAA");
 
@@ -926,8 +955,7 @@ mod tests {
 
     #[test]
     fn execute_xtwinops_taller() {
-        let mut vt = Vt::new(6, 4);
-        vt.resizable(true);
+        let mut vt = Vt::builder().size(6, 4).resizable(true).build();
 
         vt.feed_str("AAA\n\rBBB\n\r");
         let (_, resized) = vt.feed_str("\x1b[8;5;;t");
@@ -938,8 +966,7 @@ mod tests {
 
     #[test]
     fn execute_xtwinops_shorter() {
-        let mut vt = Vt::new(6, 6);
-        vt.resizable(true);
+        let mut vt = Vt::builder().size(6, 6).resizable(true).build();
 
         vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
 
@@ -961,8 +988,7 @@ mod tests {
 
     #[test]
     fn execute_xtwinops_vs_buffer_switching() {
-        let mut vt = Vt::new(4, 4);
-        vt.resizable(true);
+        let mut vt = Vt::builder().size(4, 4).resizable(true).build();
 
         // fill primary buffer
         vt.feed_str("aaa\n\rbbb\n\rc\n\rddd");
@@ -1197,8 +1223,7 @@ mod tests {
     proptest! {
         #[test]
         fn prop_sanity_checks_infinite_scrollback(input in gen_input(25)) {
-            let mut vt = Vt::new(10, 5);
-            vt.resizable(true);
+            let mut vt = Vt::builder().size(10, 5).resizable(true).build();
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
@@ -1208,8 +1233,7 @@ mod tests {
 
         #[test]
         fn prop_sanity_checks_no_scrollback(input in gen_input(25)) {
-            let mut vt = Vt::with_scrollback_limit(10, 5, Some(0));
-            vt.resizable(true);
+            let mut vt = Vt::builder().size(10, 5).scrollback_limit(0).resizable(true).build();
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
@@ -1220,8 +1244,7 @@ mod tests {
         #[test]
         fn prop_sanity_checks_fixed_scrollback(input in gen_input(25)) {
             let scrollback_limit = 3;
-            let mut vt = Vt::with_scrollback_limit(10, 5, Some(scrollback_limit));
-            vt.resizable(true);
+            let mut vt = Vt::builder().size(10, 5).scrollback_limit(scrollback_limit).resizable(true).build();
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
             let (_, rows) = vt.size();
@@ -1232,8 +1255,7 @@ mod tests {
 
         #[test]
         fn prop_resizing(new_cols in 2..15usize, new_rows in 2..8usize, input1 in gen_input(25), input2 in gen_input(25)) {
-            let mut vt = Vt::new(10, 5);
-            vt.resizable(true);
+            let mut vt = Vt::builder().size(10, 5).resizable(true).build();
 
             vt.feed_str(&(input1.into_iter().collect::<String>()));
             vt.feed_str(&format!("\x1b[8;{};{}t", new_rows, new_cols));
