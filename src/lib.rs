@@ -11,6 +11,7 @@ mod segment;
 mod tabs;
 mod terminal;
 mod vt;
+pub use buffer::ScrolbackCollector;
 pub use color::Color;
 pub use line::Line;
 pub use pen::Pen;

@@ -14,6 +14,16 @@ pub(crate) struct Buffer {
     trim_needed: bool,
 }
 
+pub trait ScrolbackCollector {
+    fn collect(&mut self, lines: impl Iterator<Item = Line>);
+}
+
+pub struct NullScrollbackCollector;
+
+impl ScrolbackCollector for NullScrollbackCollector {
+    fn collect(&mut self, _lines: impl Iterator<Item = Line>) {}
+}
+
 pub(crate) enum EraseMode {
     NextChars(usize),
     FromCursorToEndOfView,
@@ -319,9 +329,9 @@ impl Buffer {
         &self.lines[..]
     }
 
-    pub fn gc(&mut self) {
+    pub fn gc(&mut self, sc: impl ScrolbackCollector) {
         if self.trim_needed {
-            self.trim_scrollback();
+            self.trim_scrollback(sc);
             self.trim_needed = false;
         }
     }
@@ -342,15 +352,14 @@ impl Buffer {
         self.lines.extend(filler);
     }
 
-    fn trim_scrollback(&mut self) {
+    fn trim_scrollback(&mut self, mut sc: impl ScrolbackCollector) {
         if let Some(limit) = self.scrollback_limit {
             let line_count = self.lines.len();
             let scrollback_size = line_count - self.rows;
 
             if scrollback_size > limit {
                 let excess = scrollback_size - limit;
-                self.lines.rotate_left(excess);
-                self.lines.truncate(line_count - excess);
+                sc.collect(self.lines.drain(..excess));
             }
         }
     }
@@ -502,6 +511,7 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
 #[cfg(test)]
 mod tests {
     use super::{Buffer, VisualPosition};
+    use crate::buffer::NullScrollbackCollector;
     use crate::cell::Cell;
     use crate::line::Line;
     use crate::pen::Pen;
@@ -610,7 +620,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc();
+        buf.gc(NullScrollbackCollector);
 
         assert_eq!(buf.lines.len(), 7);
 
@@ -622,7 +632,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc();
+        buf.gc(NullScrollbackCollector);
 
         assert_eq!(buf.lines.len(), 10);
     }

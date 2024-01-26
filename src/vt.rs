@@ -1,3 +1,4 @@
+use crate::buffer::{NullScrollbackCollector, ScrolbackCollector};
 use crate::dump::Dump;
 use crate::line::Line;
 use crate::parser::Parser;
@@ -19,8 +20,13 @@ impl Vt {
     }
 
     pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
+        self.feed_str_sc(s, NullScrollbackCollector)
+    }
+
+    #[inline(always)]
+    pub fn feed_str_sc(&mut self, s: &str, sc: impl ScrolbackCollector) -> (Vec<usize>, bool) {
         self.parser.feed_str(s, &mut self.terminal);
-        self.terminal.gc();
+        self.terminal.gc(sc);
 
         self.terminal.changes()
     }
