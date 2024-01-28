@@ -1,9 +1,11 @@
 # avt - asciinema virtual terminal
 
 avt is asciinema's implementation of virtual terminal emulator written in Rust.
-It's used by [asciinema player](https://github.com/asciinema/asciinema-player),
-[asciinema server](https://github.com/asciinema/asciinema-server) and [asciinema
-gif generator](https://github.com/asciinema/agg).
+
+It is used by [asciinema CLI](https://github.com/asciinema/asciinema),
+[asciinema player](https://github.com/asciinema/asciinema-player), [asciinema
+server](https://github.com/asciinema/asciinema-server) and [asciinema gif
+generator](https://github.com/asciinema/agg).
 
 This implementation covers only parsing and virtual buffer related aspects of a
 terminal emulator as it's all asciinema needs.
