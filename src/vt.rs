@@ -20,15 +20,21 @@ impl Vt {
     }
 
     pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
-        self.feed_str_sc(s, NullScrollbackCollector)
-    }
-
-    #[inline(always)]
-    pub fn feed_str_sc(&mut self, s: &str, sc: impl ScrolbackCollector) -> (Vec<usize>, bool) {
         self.parser.feed_str(s, &mut self.terminal);
-        self.terminal.gc(sc);
+        let _ = self.terminal.gc(NullScrollbackCollector);
 
         self.terminal.changes()
+    }
+
+    pub fn feed_str_sc<C: ScrolbackCollector>(
+        &mut self,
+        s: &str,
+        sc: C,
+    ) -> Result<(Vec<usize>, bool), C::Error> {
+        self.parser.feed_str(s, &mut self.terminal);
+        self.terminal.gc(sc)?;
+
+        Ok(self.terminal.changes())
     }
 
     pub fn feed(&mut self, input: char) {

@@ -89,10 +89,15 @@ impl Terminal {
         self.cursor
     }
 
-    pub fn gc(&mut self, sc: impl ScrolbackCollector) {
+    pub fn gc<C: ScrolbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
         match self.active_buffer_type {
             BufferType::Primary => self.buffer.gc(sc),
-            BufferType::Alternate => self.buffer.gc(NullScrollbackCollector),
+
+            BufferType::Alternate => {
+                let _ = self.buffer.gc(NullScrollbackCollector);
+
+                Ok(())
+            }
         }
     }
 

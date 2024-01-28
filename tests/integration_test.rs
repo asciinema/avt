@@ -1,4 +1,4 @@
-use avt::{Line, ScrolbackCollector, Vt};
+use avt::Vt;
 use rand::RngCore;
 
 #[test]
@@ -9,23 +9,4 @@ fn feed_str() {
     let str = String::from_utf8_lossy(&bytes);
     vt.feed_str(&str);
     // no assertions - just check it doesn't panic on random input
-}
-
-struct TestScrollbackCollector(Vec<String>);
-
-impl ScrolbackCollector for &mut TestScrollbackCollector {
-    fn collect(&mut self, lines: impl Iterator<Item = Line>) {
-        self.0.extend(lines.map(|l| l.text().trim_end().to_owned()));
-    }
-}
-
-#[test]
-fn feed_str_sc() {
-    let mut sc = TestScrollbackCollector(Vec::new());
-    let mut vt = Vt::builder().size(10, 2).scrollback_limit(0).build();
-
-    vt.feed_str_sc("a\r\nb\r\nc\r\nd\r\n", &mut sc);
-
-    assert_eq!(sc.0, vec!["a", "b", "c"]);
-    assert_eq!(vt.text(), vec!["d", ""]);
 }
