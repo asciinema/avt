@@ -4,7 +4,7 @@ use crate::pen::Pen;
 use serde::ser::{Serialize, SerializeTuple, Serializer};
 
 #[derive(Debug)]
-pub struct Segment(pub(crate) Vec<char>, pub(crate) Pen);
+pub struct Segment(pub(crate) Vec<char>, pub(crate) Pen, pub(crate) usize);
 
 impl Segment {
     pub fn text(&self) -> String {
@@ -63,10 +63,11 @@ impl Serialize for Segment {
     where
         S: Serializer,
     {
-        let mut tup = serializer.serialize_tuple(2)?;
+        let mut tup = serializer.serialize_tuple(3)?;
         let text: String = self.0.iter().collect();
         tup.serialize_element(&text)?;
         tup.serialize_element(&self.1)?;
+        tup.serialize_element(&self.2)?;
         tup.end()
     }
 }
