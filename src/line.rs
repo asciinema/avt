@@ -133,7 +133,14 @@ impl Line {
     }
 
     pub fn segments(&self) -> impl Iterator<Item = Segment> + '_ {
-        Segments::new(self.cells.iter())
+        self.group(|_c| false)
+    }
+
+    pub fn group<'a>(
+        &'a self,
+        predicate: impl Fn(&char) -> bool + 'a,
+    ) -> impl Iterator<Item = Segment> + '_ {
+        Segments::new(self.cells.iter(), predicate)
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
@@ -161,52 +168,80 @@ impl Line {
     }
 }
 
-struct Segments<'a, I>
+struct Segments<'a, I, F>
 where
     I: Iterator<Item = &'a Cell>,
+    F: Fn(&char) -> bool,
 {
     iter: I,
-    segment: Option<Segment>,
+    current: Option<Segment>,
+    ready: Option<Segment>,
     offset: usize,
+    predicate: F,
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>> Segments<'a, I> {
-    fn new(iter: I) -> Self {
+impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Segments<'a, I, F> {
+    fn new(iter: I, predicate: F) -> Self {
         Self {
             iter,
-            segment: None,
+            current: None,
+            ready: None,
             offset: 0,
+            predicate,
         }
     }
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>> Iterator for Segments<'a, I> {
+impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Iterator for Segments<'a, I, F> {
     type Item = Segment;
 
     fn next(&mut self) -> Option<Self::Item> {
+        if let Some(segment) = self.ready.take() {
+            return Some(segment);
+        }
+
         for cell in self.iter.by_ref() {
             self.offset += 1;
 
-            match self.segment.as_mut() {
+            if (self.predicate)(&cell.0) {
+                let ready = Some(Segment {
+                    chars: vec![cell.0],
+                    pen: cell.1,
+                    offset: self.offset - 1,
+                });
+
+                if let Some(segment) = self.current.take() {
+                    self.ready = ready;
+                    return Some(segment);
+                }
+
+                return ready;
+            }
+
+            match self.current.as_mut() {
                 Some(segment) => {
-                    if cell.1 == segment.1 {
-                        segment.0.push(cell.0);
-                    } else {
-                        return self.segment.replace(Segment(
-                            vec![cell.0],
-                            cell.1,
-                            self.offset - 1,
-                        ));
+                    if cell.1 != segment.pen {
+                        return self.current.replace(Segment {
+                            chars: vec![cell.0],
+                            pen: cell.1,
+                            offset: self.offset - 1,
+                        });
                     }
+
+                    segment.chars.push(cell.0);
                 }
 
                 None => {
-                    self.segment = Some(Segment(vec![cell.0], cell.1, self.offset - 1));
+                    self.current = Some(Segment {
+                        chars: vec![cell.0],
+                        pen: cell.1,
+                        offset: self.offset - 1,
+                    });
                 }
             }
         }
 
-        self.segment.take()
+        self.current.take()
     }
 }
 
@@ -262,18 +297,54 @@ mod tests {
             Cell('e', pen1),
         ];
 
-        let segments: Vec<Segment> = Segments::new(cells.iter()).collect();
+        let segments: Vec<Segment> = Segments::new(cells.iter(), |_| false).collect();
 
-        assert_eq!(&segments[0].0, &['a', 'b']);
-        assert_eq!(segments[0].1, pen1);
-        assert_eq!(segments[0].2, 0);
+        assert_eq!(&segments[0].chars, &['a', 'b']);
+        assert_eq!(segments[0].pen, pen1);
+        assert_eq!(segments[0].offset, 0);
 
-        assert_eq!(&segments[1].0, &['c']);
-        assert_eq!(segments[1].1, pen2);
-        assert_eq!(segments[1].2, 2);
+        assert_eq!(&segments[1].chars, &['c']);
+        assert_eq!(segments[1].pen, pen2);
+        assert_eq!(segments[1].offset, 2);
 
-        assert_eq!(&segments[2].0, &['d', 'e']);
-        assert_eq!(segments[2].1, pen1);
-        assert_eq!(segments[2].2, 3);
+        assert_eq!(&segments[2].chars, &['d', 'e']);
+        assert_eq!(segments[2].pen, pen1);
+        assert_eq!(segments[2].offset, 3);
+    }
+
+    #[test]
+    fn segments_group() {
+        let pen1 = Pen::default();
+
+        let pen2 = Pen {
+            foreground: Some(Color::Indexed(1)),
+            ..Pen::default()
+        };
+
+        let cells = vec![
+            Cell('a', pen1),
+            Cell('b', pen1),
+            Cell('c', pen1),
+            Cell('d', pen1),
+            Cell('e', pen2),
+        ];
+
+        let segments: Vec<Segment> = Segments::new(cells.iter(), |c| c == &'c').collect();
+
+        assert_eq!(&segments[0].chars, &['a', 'b']);
+        assert_eq!(segments[0].pen, pen1);
+        assert_eq!(segments[0].offset, 0);
+
+        assert_eq!(&segments[1].chars, &['c']);
+        assert_eq!(segments[1].pen, pen1);
+        assert_eq!(segments[1].offset, 2);
+
+        assert_eq!(&segments[2].chars, &['d']);
+        assert_eq!(segments[2].pen, pen1);
+        assert_eq!(segments[2].offset, 3);
+
+        assert_eq!(&segments[3].chars, &['e']);
+        assert_eq!(segments[3].pen, pen2);
+        assert_eq!(segments[3].offset, 4);
     }
 }
