@@ -1,9 +1,8 @@
-use std::ops::{Index, Range, RangeFull};
-
 use crate::cell::Cell;
 use crate::dump::Dump;
 use crate::pen::Pen;
 use crate::segment::Segment;
+use std::ops::{Index, Range, RangeFull};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Line {
@@ -201,13 +200,16 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Iterator for Segmen
         }
 
         for cell in self.iter.by_ref() {
-            self.offset += 1;
+            let char_width = cell.char_width();
+            let offset = self.offset;
+            self.offset += char_width;
 
             if (self.predicate)(&cell.0) {
                 let ready = Some(Segment {
                     chars: vec![cell.0],
                     pen: cell.1,
-                    offset: self.offset - 1,
+                    offset,
+                    char_width,
                 });
 
                 if let Some(segment) = self.current.take() {
@@ -220,12 +222,15 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Iterator for Segmen
 
             match self.current.as_mut() {
                 Some(segment) => {
-                    if cell.1 != segment.pen {
-                        return self.current.replace(Segment {
+                    if cell.1 != segment.pen || char_width != segment.char_width {
+                        let ready = self.current.replace(Segment {
                             chars: vec![cell.0],
                             pen: cell.1,
-                            offset: self.offset - 1,
+                            offset,
+                            char_width,
                         });
+
+                        return ready;
                     }
 
                     segment.chars.push(cell.0);
@@ -235,7 +240,8 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Iterator for Segmen
                     self.current = Some(Segment {
                         chars: vec![cell.0],
                         pen: cell.1,
-                        offset: self.offset - 1,
+                        offset,
+                        char_width,
                     });
                 }
             }
@@ -295,6 +301,8 @@ mod tests {
             Cell('c', pen2),
             Cell('d', pen1),
             Cell('e', pen1),
+            Cell('👩', pen1),
+            Cell('f', pen1),
         ];
 
         let segments: Vec<Segment> = Segments::new(cells.iter(), |_| false).collect();
@@ -310,6 +318,14 @@ mod tests {
         assert_eq!(&segments[2].chars, &['d', 'e']);
         assert_eq!(segments[2].pen, pen1);
         assert_eq!(segments[2].offset, 3);
+
+        assert_eq!(&segments[3].chars, &['👩']);
+        assert_eq!(segments[3].pen, pen1);
+        assert_eq!(segments[3].offset, 5);
+
+        assert_eq!(&segments[4].chars, &['f']);
+        assert_eq!(segments[4].pen, pen1);
+        assert_eq!(segments[4].offset, 7);
     }
 
     #[test]

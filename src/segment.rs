@@ -9,6 +9,8 @@ pub struct Segment {
     pub(crate) chars: Vec<char>,
     pub(crate) pen: Pen,
     pub(crate) offset: usize,
+    #[serde(skip)]
+    pub(crate) char_width: usize,
 }
 
 impl Segment {
