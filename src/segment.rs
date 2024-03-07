@@ -9,7 +9,7 @@ pub struct Segment {
     pub(crate) chars: Vec<char>,
     pub(crate) pen: Pen,
     pub(crate) offset: usize,
-    #[serde(skip)]
+    #[serde(rename = "charWidth")]
     pub(crate) char_width: usize,
 }
 

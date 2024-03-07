@@ -132,12 +132,12 @@ impl Line {
     }
 
     pub fn segments(&self) -> impl Iterator<Item = Segment> + '_ {
-        self.group(|_c| false)
+        self.group(|_c, _w| false)
     }
 
     pub fn group<'a>(
         &'a self,
-        predicate: impl Fn(&char) -> bool + 'a,
+        predicate: impl Fn(&char, usize) -> bool + 'a,
     ) -> impl Iterator<Item = Segment> + '_ {
         Segments::new(self.cells.iter(), predicate)
     }
@@ -170,7 +170,7 @@ impl Line {
 struct Segments<'a, I, F>
 where
     I: Iterator<Item = &'a Cell>,
-    F: Fn(&char) -> bool,
+    F: Fn(&char, usize) -> bool,
 {
     iter: I,
     current: Option<Segment>,
@@ -179,7 +179,7 @@ where
     predicate: F,
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Segments<'a, I, F> {
+impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char, usize) -> bool> Segments<'a, I, F> {
     fn new(iter: I, predicate: F) -> Self {
         Self {
             iter,
@@ -191,7 +191,9 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Segments<'a, I, F> 
     }
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Iterator for Segments<'a, I, F> {
+impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char, usize) -> bool> Iterator
+    for Segments<'a, I, F>
+{
     type Item = Segment;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -204,7 +206,7 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char) -> bool> Iterator for Segmen
             let offset = self.offset;
             self.offset += char_width;
 
-            if (self.predicate)(&cell.0) {
+            if (self.predicate)(&cell.0, char_width) {
                 let ready = Some(Segment {
                     chars: vec![cell.0],
                     pen: cell.1,
@@ -305,7 +307,7 @@ mod tests {
             Cell('f', pen1),
         ];
 
-        let segments: Vec<Segment> = Segments::new(cells.iter(), |_| false).collect();
+        let segments: Vec<Segment> = Segments::new(cells.iter(), |_, _| false).collect();
 
         assert_eq!(&segments[0].chars, &['a', 'b']);
         assert_eq!(segments[0].pen, pen1);
@@ -345,7 +347,7 @@ mod tests {
             Cell('e', pen2),
         ];
 
-        let segments: Vec<Segment> = Segments::new(cells.iter(), |c| c == &'c').collect();
+        let segments: Vec<Segment> = Segments::new(cells.iter(), |c, _w| c == &'c').collect();
 
         assert_eq!(&segments[0].chars, &['a', 'b']);
         assert_eq!(segments[0].pen, pen1);
