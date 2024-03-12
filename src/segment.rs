@@ -53,6 +53,10 @@ impl Segment {
     pub fn is_inverse(&self) -> bool {
         self.pen.is_inverse()
     }
+
+    pub fn char_width(&self) -> usize {
+        self.char_width
+    }
 }
 
 impl Dump for Segment {
