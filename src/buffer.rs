@@ -11,8 +11,14 @@ pub(crate) struct Buffer {
     lines: Vec<Line>,
     pub cols: usize,
     pub rows: usize,
-    scrollback_limit: Option<usize>,
+    scrollback_limit: Option<ScrollbackLimit>,
     trim_needed: bool,
+}
+
+#[derive(Debug)]
+struct ScrollbackLimit {
+    soft: usize,
+    hard: usize,
 }
 
 pub trait ScrolbackCollector {
@@ -63,6 +69,11 @@ impl Buffer {
         } else {
             lines.reserve(1000);
         }
+
+        let scrollback_limit = scrollback_limit.map(|l| ScrollbackLimit {
+            soft: l,
+            hard: l + l / 10, // 10% bigger than soft
+        });
 
         Buffer {
             lines,
@@ -362,12 +373,12 @@ impl Buffer {
     }
 
     fn trim_scrollback<C: ScrolbackCollector>(&mut self, mut sc: C) -> Result<(), C::Error> {
-        if let Some(limit) = self.scrollback_limit {
+        if let Some(limit) = &self.scrollback_limit {
             let line_count = self.lines.len();
             let scrollback_size = line_count - self.rows;
 
-            if scrollback_size > limit {
-                let excess = scrollback_size - limit;
+            if scrollback_size > limit.hard {
+                let excess = scrollback_size - limit.soft;
                 sc.collect(self.lines.drain(..excess))?;
             }
         }
