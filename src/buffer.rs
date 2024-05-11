@@ -21,7 +21,7 @@ struct ScrollbackLimit {
     hard: usize,
 }
 
-pub trait ScrolbackCollector {
+pub trait ScrollbackCollector {
     type Error;
 
     fn collect(&mut self, lines: impl Iterator<Item = Line>) -> Result<(), Self::Error>;
@@ -29,7 +29,7 @@ pub trait ScrolbackCollector {
 
 pub struct NullScrollbackCollector;
 
-impl ScrolbackCollector for NullScrollbackCollector {
+impl ScrollbackCollector for NullScrollbackCollector {
     type Error = Infallible;
 
     fn collect(&mut self, _lines: impl Iterator<Item = Line>) -> Result<(), Self::Error> {
@@ -347,7 +347,7 @@ impl Buffer {
         &self.lines[..]
     }
 
-    pub fn gc<C: ScrolbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
+    pub fn gc<C: ScrollbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
         if self.trim_needed {
             self.trim_scrollback(sc)?;
             self.trim_needed = false;
@@ -372,7 +372,7 @@ impl Buffer {
         self.lines.extend(filler);
     }
 
-    fn trim_scrollback<C: ScrolbackCollector>(&mut self, mut sc: C) -> Result<(), C::Error> {
+    fn trim_scrollback<C: ScrollbackCollector>(&mut self, mut sc: C) -> Result<(), C::Error> {
         if let Some(limit) = &self.scrollback_limit {
             let line_count = self.lines.len();
             let scrollback_size = line_count - self.rows;

@@ -1,4 +1,4 @@
-use crate::buffer::{NullScrollbackCollector, ScrolbackCollector};
+use crate::buffer::{NullScrollbackCollector, ScrollbackCollector};
 use crate::dump::Dump;
 use crate::line::Line;
 use crate::parser::Parser;
@@ -26,7 +26,7 @@ impl Vt {
         self.terminal.changes()
     }
 
-    pub fn feed_str_sc<C: ScrolbackCollector>(
+    pub fn feed_str_sc<C: ScrollbackCollector>(
         &mut self,
         s: &str,
         sc: C,

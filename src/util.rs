@@ -1,4 +1,4 @@
-use crate::buffer::ScrolbackCollector;
+use crate::buffer::ScrollbackCollector;
 use crate::line::Line;
 use crate::vt::Vt;
 use std::convert::Infallible;
@@ -67,7 +67,7 @@ impl<O: TextCollectorOutput> ScrollbackTextCollector<O> {
     }
 }
 
-impl<O: TextCollectorOutput> ScrolbackCollector for &mut ScrollbackTextCollector<O> {
+impl<O: TextCollectorOutput> ScrollbackCollector for &mut ScrollbackTextCollector<O> {
     type Error = O::Error;
 
     fn collect(&mut self, lines: impl Iterator<Item = Line>) -> Result<(), Self::Error> {

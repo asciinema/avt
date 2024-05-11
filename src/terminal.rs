@@ -2,7 +2,7 @@ mod cursor;
 mod dirty_lines;
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
-use crate::buffer::{Buffer, EraseMode, NullScrollbackCollector, ScrolbackCollector};
+use crate::buffer::{Buffer, EraseMode, NullScrollbackCollector, ScrollbackCollector};
 use crate::cell::Cell;
 use crate::charset::Charset;
 use crate::color::Color;
@@ -89,7 +89,7 @@ impl Terminal {
         self.cursor
     }
 
-    pub fn gc<C: ScrolbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
+    pub fn gc<C: ScrollbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
         match self.active_buffer_type {
             BufferType::Primary => self.buffer.gc(sc),
 
