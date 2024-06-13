@@ -30,7 +30,10 @@ pub enum State {
 }
 
 #[derive(Debug, PartialEq)]
-pub struct Params(Vec<u16>);
+pub struct Params(Vec<Param>);
+
+#[derive(Debug, PartialEq, Clone)]
+pub struct Param(Vec<u16>);
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Intermediates(Vec<char>);
@@ -106,7 +109,7 @@ impl Parser {
                 executor.print(input);
             }
 
-            (State::CsiParam, '\u{30}'..='\u{39}') | (State::CsiParam, '\u{3b}') => {
+            (State::CsiParam, '\u{30}'..='\u{3b}') => {
                 self.param(input);
             }
 
@@ -168,7 +171,7 @@ impl Parser {
                 self.state = State::Ground;
             }
 
-            (State::CsiParam, '\u{3a}') | (State::CsiParam, '\u{3c}'..='\u{3f}') => {
+            (State::CsiParam, '\u{3c}'..='\u{3f}') => {
                 self.state = State::CsiIgnore;
             }
 
@@ -389,13 +392,7 @@ impl Parser {
     }
 
     fn param(&mut self, input: char) {
-        if input == ';' {
-            self.params.0.push(0);
-        } else {
-            let n = self.params.0.len() - 1;
-            let p = &mut self.params.0[n];
-            *p = (10 * (*p as u32) + (input as u32) - 0x30) as u16;
-        }
+        self.params.push(input);
     }
 
     fn esc_dispatch<E: Executor>(&mut self, executor: &mut E, input: char) {
@@ -488,16 +485,28 @@ impl Parser {
 }
 
 impl Params {
-    pub fn iter(&self) -> std::slice::Iter<u16> {
+    fn push(&mut self, input: char) {
+        if input == ';' {
+            self.0.push(Param::default());
+        } else if input == ':' {
+            let idx = self.0.len() - 1;
+            self.0[idx].add_part();
+        } else {
+            let idx = self.0.len() - 1;
+            self.0[idx].extend_part((input as u8) - 0x30);
+        }
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<Param> {
         self.0.iter()
     }
 
-    pub fn as_slice(&self) -> &[u16] {
+    pub fn as_slice(&self) -> &[Param] {
         &self.0[..]
     }
 
     pub fn get(&self, i: usize, default: usize) -> usize {
-        let param = *self.0.get(i).unwrap_or(&0);
+        let param = self.0.get(i).map(|p| p.first_part()).unwrap_or(0);
 
         if param == 0 {
             default
@@ -510,7 +519,7 @@ impl Params {
 impl Default for Params {
     fn default() -> Self {
         let mut params = Vec::with_capacity(8);
-        params.push(0);
+        params.push(Param::default());
 
         Self(params)
     }
@@ -518,7 +527,70 @@ impl Default for Params {
 
 impl From<Vec<u16>> for Params {
     fn from(values: Vec<u16>) -> Self {
-        Params(values)
+        let params = values.iter().map(|v| Param(vec![*v])).collect();
+
+        Self(params)
+    }
+}
+
+impl Param {
+    fn add_part(&mut self) {
+        self.0.push(0);
+    }
+
+    fn extend_part(&mut self, input: u8) {
+        let last_idx = self.0.len() - 1;
+        let number = &mut self.0[last_idx];
+        *number = (10 * (*number as u32) + (input as u32)) as u16;
+    }
+
+    fn first_part(&self) -> u16 {
+        self.0[0]
+    }
+
+    pub fn as_slice(&self) -> &[u16] {
+        &self.0[..]
+    }
+}
+
+impl ToString for Param {
+    fn to_string(&self) -> String {
+        match &self.0[..] {
+            [] => unreachable!(),
+
+            [part] => part.to_string(),
+
+            [first, rest @ ..] => {
+                rest.iter()
+                    .map(u16::to_string)
+                    .fold(first.to_string(), |mut acc, part| {
+                        acc.push(':');
+                        acc.push_str(&part);
+                        acc
+                    })
+            }
+        }
+    }
+}
+
+impl Default for Param {
+    fn default() -> Self {
+        let mut param = Vec::with_capacity(2);
+        param.push(0);
+
+        Self(param)
+    }
+}
+
+impl PartialEq<u16> for Param {
+    fn eq(&self, other: &u16) -> bool {
+        self.0[0] == *other
+    }
+}
+
+impl PartialEq<Vec<u16>> for Param {
+    fn eq(&self, other: &Vec<u16>) -> bool {
+        self.0 == other[..]
     }
 }
 
@@ -602,10 +674,11 @@ impl Dump for Parser {
 
 #[cfg(test)]
 mod tests {
-    use super::{Executor, Params, Parser};
+    use super::Dump;
+    use super::{Executor, Param, Params, Parser};
 
     struct TestExecutor {
-        params: Vec<u16>,
+        params: Vec<Param>,
     }
 
     impl Executor for TestExecutor {
@@ -622,5 +695,22 @@ mod tests {
         parser.feed_str("\x1b[;1;;23;456;m", &mut executor);
 
         assert_eq!(executor.params, vec![0, 1, 0, 23, 456, 0]);
+
+        parser.feed_str("\x1b[;1;;38:2:1:2:3;m", &mut executor);
+
+        assert_eq!(
+            executor.params,
+            vec![vec![0], vec![1], vec![0], vec![38, 2, 1, 2, 3], vec![0]]
+        );
+    }
+
+    #[test]
+    fn dump() {
+        let mut parser = Parser::new();
+        let mut executor = TestExecutor { params: Vec::new() };
+
+        parser.feed_str("\x1b[;1;;38:2:1:2:3;", &mut executor);
+
+        assert_eq!(parser.dump(), "\u{9b}0;1;0;38:2:1:2:3;0");
     }
 }

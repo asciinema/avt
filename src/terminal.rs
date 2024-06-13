@@ -765,9 +765,9 @@ impl Executor for Terminal {
 
     fn sm(&mut self, params: &Params) {
         for param in params.iter() {
-            match param {
-                4 => self.insert_mode = true,
-                20 => self.new_line_mode = true,
+            match param.as_slice() {
+                [4] => self.insert_mode = true,
+                [20] => self.new_line_mode = true,
                 _ => (),
             }
         }
@@ -775,9 +775,9 @@ impl Executor for Terminal {
 
     fn rm(&mut self, params: &Params) {
         for param in params.iter() {
-            match param {
-                4 => self.insert_mode = false,
-                20 => self.new_line_mode = false,
+            match param.as_slice() {
+                [4] => self.insert_mode = false,
+                [20] => self.new_line_mode = false,
                 _ => (),
             }
         }
@@ -787,97 +787,101 @@ impl Executor for Terminal {
         let mut ps = params.as_slice();
 
         while let Some(param) = ps.first() {
-            match param {
-                0 => {
+            match param.as_slice() {
+                [0] => {
                     self.pen = Pen::default();
                     ps = &ps[1..];
                 }
 
-                1 => {
+                [1] => {
                     self.pen.intensity = Intensity::Bold;
                     ps = &ps[1..];
                 }
 
-                2 => {
+                [2] => {
                     self.pen.intensity = Intensity::Faint;
                     ps = &ps[1..];
                 }
 
-                3 => {
+                [3] => {
                     self.pen.set_italic();
                     ps = &ps[1..];
                 }
 
-                4 => {
+                [4] => {
                     self.pen.set_underline();
                     ps = &ps[1..];
                 }
 
-                5 => {
+                [5] => {
                     self.pen.set_blink();
                     ps = &ps[1..];
                 }
 
-                7 => {
+                [7] => {
                     self.pen.set_inverse();
                     ps = &ps[1..];
                 }
 
-                9 => {
+                [9] => {
                     self.pen.set_strikethrough();
                     ps = &ps[1..];
                 }
 
-                21 | 22 => {
+                [21] | [22] => {
                     self.pen.intensity = Intensity::Normal;
                     ps = &ps[1..];
                 }
 
-                23 => {
+                [23] => {
                     self.pen.unset_italic();
                     ps = &ps[1..];
                 }
 
-                24 => {
+                [24] => {
                     self.pen.unset_underline();
                     ps = &ps[1..];
                 }
 
-                25 => {
+                [25] => {
                     self.pen.unset_blink();
                     ps = &ps[1..];
                 }
 
-                27 => {
+                [27] => {
                     self.pen.unset_inverse();
                     ps = &ps[1..];
                 }
 
-                param if *param >= 30 && *param <= 37 => {
+                [param] if *param >= 30 && *param <= 37 => {
                     self.pen.foreground = Some(Color::Indexed((param - 30) as u8));
                     ps = &ps[1..];
                 }
 
-                38 => match ps.get(1) {
+                [38] => match ps.get(1).map(|p| p.as_slice()) {
                     None => {
                         ps = &ps[1..];
                     }
 
-                    Some(2) => {
+                    Some([2]) => {
                         if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap();
-                            let g = ps.get(3).unwrap();
+                            let r = ps.get(2).unwrap().as_slice()[0];
+                            let g = ps.get(3).unwrap().as_slice()[0];
+                            let b = b.as_slice()[0];
+
                             self.pen.foreground =
-                                Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
+                                Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
+
                             ps = &ps[5..];
                         } else {
                             ps = &ps[2..];
                         }
                     }
 
-                    Some(5) => {
-                        if let Some(param) = ps.get(2) {
-                            self.pen.foreground = Some(Color::Indexed(*param as u8));
+                    Some([5]) => {
+                        if let Some(idx) = ps.get(2) {
+                            let idx = idx.as_slice()[0];
+                            self.pen.foreground = Some(Color::Indexed(idx as u8));
                             ps = &ps[3..];
                         } else {
                             ps = &ps[2..];
@@ -889,36 +893,40 @@ impl Executor for Terminal {
                     }
                 },
 
-                39 => {
+                [39] => {
                     self.pen.foreground = None;
                     ps = &ps[1..];
                 }
 
-                param if *param >= 40 && *param <= 47 => {
+                [param] if *param >= 40 && *param <= 47 => {
                     self.pen.background = Some(Color::Indexed((param - 40) as u8));
                     ps = &ps[1..];
                 }
 
-                48 => match ps.get(1) {
+                [48] => match ps.get(1).map(|p| p.as_slice()) {
                     None => {
                         ps = &ps[1..];
                     }
 
-                    Some(2) => {
+                    Some([2]) => {
                         if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap();
-                            let g = ps.get(3).unwrap();
+                            let r = ps.get(2).unwrap().as_slice()[0];
+                            let g = ps.get(3).unwrap().as_slice()[0];
+                            let b = b.as_slice()[0];
+
                             self.pen.background =
-                                Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
+                                Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
+
                             ps = &ps[5..];
                         } else {
                             ps = &ps[2..];
                         }
                     }
 
-                    Some(5) => {
-                        if let Some(param) = ps.get(2) {
-                            self.pen.background = Some(Color::Indexed(*param as u8));
+                    Some([5]) => {
+                        if let Some(idx) = ps.get(2) {
+                            let idx = idx.as_slice()[0];
+                            self.pen.background = Some(Color::Indexed(idx as u8));
                             ps = &ps[3..];
                         } else {
                             ps = &ps[2..];
@@ -930,17 +938,17 @@ impl Executor for Terminal {
                     }
                 },
 
-                49 => {
+                [49] => {
                     self.pen.background = None;
                     ps = &ps[1..];
                 }
 
-                param if *param >= 90 && *param <= 97 => {
+                [param] if *param >= 90 && *param <= 97 => {
                     self.pen.foreground = Some(Color::Indexed((param - 90 + 8) as u8));
                     ps = &ps[1..];
                 }
 
-                param if *param >= 100 && *param <= 107 => {
+                [param] if *param >= 100 && *param <= 107 => {
                     self.pen.background = Some(Color::Indexed((param - 100 + 8) as u8));
                     ps = &ps[1..];
                 }
@@ -1011,28 +1019,28 @@ impl Executor for Terminal {
 
     fn prv_sm(&mut self, params: &Params) {
         for param in params.iter() {
-            match param {
-                6 => {
+            match param.as_slice() {
+                [6] => {
                     self.origin_mode = true;
                     self.move_cursor_home();
                 }
 
-                7 => self.auto_wrap_mode = true,
-                25 => self.cursor.visible = true,
+                [7] => self.auto_wrap_mode = true,
+                [25] => self.cursor.visible = true,
 
-                47 => {
+                [47] => {
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
 
-                1047 => {
+                [1047] => {
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
 
-                1048 => self.save_cursor(),
+                [1048] => self.save_cursor(),
 
-                1049 => {
+                [1049] => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
                     self.reflow();
@@ -1044,28 +1052,28 @@ impl Executor for Terminal {
 
     fn prv_rm(&mut self, params: &Params) {
         for param in params.iter() {
-            match param {
-                6 => {
+            match param.as_slice() {
+                [6] => {
                     self.origin_mode = false;
                     self.move_cursor_home();
                 }
 
-                7 => self.auto_wrap_mode = false,
-                25 => self.cursor.visible = false,
+                [7] => self.auto_wrap_mode = false,
+                [25] => self.cursor.visible = false,
 
-                47 => {
+                [47] => {
                     self.switch_to_primary_buffer();
                     self.reflow();
                 }
 
-                1047 => {
+                [1047] => {
                     self.switch_to_primary_buffer();
                     self.reflow();
                 }
 
-                1048 => self.restore_cursor(),
+                [1048] => self.restore_cursor(),
 
-                1049 => {
+                [1049] => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
                     self.reflow();
