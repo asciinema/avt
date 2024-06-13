@@ -489,11 +489,11 @@ impl Params {
         if input == ';' {
             self.0.push(Param::default());
         } else if input == ':' {
-            let idx = self.0.len() - 1;
-            self.0[idx].add_part();
+            let last_idx = self.0.len() - 1;
+            self.0[last_idx].add_part();
         } else {
-            let idx = self.0.len() - 1;
-            self.0[idx].extend_part((input as u8) - 0x30);
+            let last_idx = self.0.len() - 1;
+            self.0[last_idx].extend_part((input as u8) - 0x30);
         }
     }
 
