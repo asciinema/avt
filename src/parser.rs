@@ -528,11 +528,9 @@ impl Default for Params {
     }
 }
 
-impl From<Vec<u16>> for Params {
-    fn from(values: Vec<u16>) -> Self {
-        let params = values.iter().map(|v| Param::new(*v)).collect();
-
-        Self(params)
+impl From<Vec<Param>> for Params {
+    fn from(values: Vec<Param>) -> Self {
+        Self(values)
     }
 }
 
@@ -584,7 +582,27 @@ impl ToString for Param {
 
 impl Default for Param {
     fn default() -> Self {
-        Param::new(0)
+        Self::new(0)
+    }
+}
+
+impl From<u16> for Param {
+    fn from(value: u16) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Vec<u16>> for Param {
+    fn from(values: Vec<u16>) -> Self {
+        let mut parts = [0u16; 6];
+        let mut cur_part = 0;
+
+        for (i, v) in values.iter().take(6).enumerate() {
+            cur_part = i;
+            parts[i] = *v;
+        }
+
+        Self { cur_part, parts }
     }
 }
 

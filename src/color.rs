@@ -15,11 +15,11 @@ impl Color {
             Color::Indexed(c) if *c < 16 => (base + 52 + c).to_string(),
 
             Color::Indexed(c) => {
-                format!("{};5;{}", base + 8, c)
+                format!("{}:5:{}", base + 8, c)
             }
 
             Color::RGB(c) => {
-                format!("{};2;{};{};{}", base + 8, c.r, c.g, c.b)
+                format!("{}:2:{}:{}:{}", base + 8, c.r, c.g, c.b)
             }
         }
     }

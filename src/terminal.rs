@@ -858,6 +858,16 @@ impl Executor for Terminal {
                     ps = &ps[1..];
                 }
 
+                [38, 2, r, g, b] => {
+                    self.pen.foreground = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
+                    ps = &ps[1..];
+                }
+
+                [38, 5, idx] => {
+                    self.pen.foreground = Some(Color::Indexed(*idx as u8));
+                    ps = &ps[1..];
+                }
+
                 [38] => match ps.get(1).map(|p| p.as_slice()) {
                     None => {
                         ps = &ps[1..];
@@ -900,6 +910,16 @@ impl Executor for Terminal {
 
                 [param] if *param >= 40 && *param <= 47 => {
                     self.pen.background = Some(Color::Indexed((param - 40) as u8));
+                    ps = &ps[1..];
+                }
+
+                [48, 2, r, g, b] => {
+                    self.pen.background = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
+                    ps = &ps[1..];
+                }
+
+                [48, 5, idx] => {
+                    self.pen.background = Some(Color::Indexed(*idx as u8));
                     ps = &ps[1..];
                 }
 
@@ -1324,12 +1344,14 @@ impl Dump for Terminal {
 #[cfg(test)]
 mod tests {
     use super::Terminal;
-    use crate::parser::{Executor, Params};
+    use crate::parser::{Executor, Param, Params};
     use crate::terminal::{Color, Intensity};
     use rgb::RGB8;
 
-    fn params<T: Into<Vec<u16>>>(values: T) -> Params {
-        Params::from(values.into())
+    fn params<P: Into<Param> + Clone, T: AsRef<[P]>>(values: T) -> Params {
+        let params: Vec<Param> = values.as_ref().iter().map(|p| (p.clone()).into()).collect();
+
+        Params::from(params)
     }
 
     #[test]
@@ -1388,17 +1410,32 @@ mod tests {
 
         assert_eq!(term.pen.background, None);
 
-        term.sgr(&params([1, 38, 5, 88, 48, 5, 99, 5]));
+        term.sgr(&params(vec![
+            vec![1],
+            vec![38, 5, 88],
+            vec![48, 5, 99],
+            vec![5],
+        ]));
 
         assert_eq!(term.pen.intensity, Intensity::Bold);
         assert!(term.pen.is_blink());
         assert_eq!(term.pen.foreground, Some(Color::Indexed(88)));
         assert_eq!(term.pen.background, Some(Color::Indexed(99)));
 
-        term.sgr(&params([1, 38, 2, 1, 101, 201, 48, 2, 2, 102, 202, 5]));
+        term.sgr(&params(vec![
+            vec![38, 2, 101, 102, 103],
+            vec![48, 2, 201, 202, 203],
+        ]));
 
-        assert_eq!(term.pen.intensity, Intensity::Bold);
-        assert!(term.pen.is_blink());
+        assert_eq!(
+            term.pen.foreground,
+            Some(Color::RGB(RGB8::new(101, 102, 103)))
+        );
+
+        assert_eq!(
+            term.pen.background,
+            Some(Color::RGB(RGB8::new(201, 202, 203)))
+        );
 
         term.sgr(&params([23, 24, 25, 27]));
 
@@ -1406,15 +1443,27 @@ mod tests {
         assert!(!term.pen.is_underline());
         assert!(!term.pen.is_blink());
         assert!(!term.pen.is_inverse());
+    }
+
+    #[test]
+    fn sgr_colon_colors() {
+        let mut term = Terminal::default();
+
+        term.sgr(&params([38, 5, 88, 48, 5, 99]));
+
+        assert_eq!(term.pen.foreground, Some(Color::Indexed(88)));
+        assert_eq!(term.pen.background, Some(Color::Indexed(99)));
+
+        term.sgr(&params([38, 2, 101, 102, 103, 48, 2, 201, 202, 203]));
 
         assert_eq!(
             term.pen.foreground,
-            Some(Color::RGB(RGB8::new(1, 101, 201)))
+            Some(Color::RGB(RGB8::new(101, 102, 103)))
         );
 
         assert_eq!(
             term.pen.background,
-            Some(Color::RGB(RGB8::new(2, 102, 202)))
+            Some(Color::RGB(RGB8::new(201, 202, 203)))
         );
     }
 
