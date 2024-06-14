@@ -10,13 +10,9 @@ pub enum Color {
 impl Color {
     pub(crate) fn sgr_params(&self, base: u8) -> String {
         match self {
-            Color::Indexed(c) if *c < 8 => {
-                format!("{}", base + c)
-            }
+            Color::Indexed(c) if *c < 8 => (base + c).to_string(),
 
-            Color::Indexed(c) if *c < 16 => {
-                format!("{}", base + 52 + c)
-            }
+            Color::Indexed(c) if *c < 16 => (base + 52 + c).to_string(),
 
             Color::Indexed(c) => {
                 format!("{};5;{}", base + 8, c)
