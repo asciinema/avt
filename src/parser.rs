@@ -3,6 +3,8 @@
 
 use crate::{charset::Charset, dump::Dump};
 
+const MAX_PARAM_LEN: usize = 6;
+
 #[derive(Debug, Default)]
 pub struct Parser {
     pub state: State,
@@ -35,7 +37,7 @@ pub struct Params(Vec<Param>);
 #[derive(Debug, PartialEq, Clone)]
 pub struct Param {
     cur_part: usize,
-    parts: [u16; 6],
+    parts: [u16; MAX_PARAM_LEN],
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -594,10 +596,10 @@ impl From<u16> for Param {
 
 impl From<Vec<u16>> for Param {
     fn from(values: Vec<u16>) -> Self {
-        let mut parts = [0u16; 6];
+        let mut parts = [0u16; MAX_PARAM_LEN];
         let mut cur_part = 0;
 
-        for (i, v) in values.iter().take(6).enumerate() {
+        for (i, v) in values.iter().take(MAX_PARAM_LEN).enumerate() {
             cur_part = i;
             parts[i] = *v;
         }
