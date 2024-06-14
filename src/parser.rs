@@ -33,7 +33,10 @@ pub enum State {
 pub struct Params(Vec<Param>);
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Param(Vec<u16>);
+pub struct Param {
+    cur_part: usize,
+    parts: [u16; 6],
+}
 
 #[derive(Debug, Default, PartialEq)]
 pub(crate) struct Intermediates(Vec<char>);
@@ -527,35 +530,41 @@ impl Default for Params {
 
 impl From<Vec<u16>> for Params {
     fn from(values: Vec<u16>) -> Self {
-        let params = values.iter().map(|v| Param(vec![*v])).collect();
+        let params = values.iter().map(|v| Param::new(*v)).collect();
 
         Self(params)
     }
 }
 
 impl Param {
+    fn new(number: u16) -> Self {
+        Self {
+            cur_part: 0,
+            parts: [number, 0, 0, 0, 0, 0],
+        }
+    }
+
     fn add_part(&mut self) {
-        self.0.push(0);
+        self.cur_part = (self.cur_part + 1).min(5);
     }
 
     fn extend_part(&mut self, input: u8) {
-        let last_idx = self.0.len() - 1;
-        let number = &mut self.0[last_idx];
+        let number = &mut self.parts[self.cur_part];
         *number = (10 * (*number as u32) + (input as u32)) as u16;
     }
 
     fn first_part(&self) -> u16 {
-        self.0[0]
+        self.parts[0]
     }
 
     pub fn as_slice(&self) -> &[u16] {
-        &self.0[..]
+        &self.parts[..=self.cur_part]
     }
 }
 
 impl ToString for Param {
     fn to_string(&self) -> String {
-        match &self.0[..] {
+        match self.as_slice() {
             [] => unreachable!(),
 
             [part] => part.to_string(),
@@ -575,22 +584,19 @@ impl ToString for Param {
 
 impl Default for Param {
     fn default() -> Self {
-        let mut param = Vec::with_capacity(2);
-        param.push(0);
-
-        Self(param)
+        Param::new(0)
     }
 }
 
 impl PartialEq<u16> for Param {
     fn eq(&self, other: &u16) -> bool {
-        self.0[0] == *other
+        self.parts[0] == *other
     }
 }
 
 impl PartialEq<Vec<u16>> for Param {
     fn eq(&self, other: &Vec<u16>) -> bool {
-        self.0 == other[..]
+        self.parts[..=self.cur_part] == other[..]
     }
 }
 
