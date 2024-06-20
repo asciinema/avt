@@ -65,6 +65,10 @@ impl Vt {
         self.terminal.cursor()
     }
 
+    pub fn arrow_key_app_mode(&self) -> bool {
+        self.terminal.arrow_key_app_mode()
+    }
+
     pub fn dump(&self) -> String {
         let mut seq = self.terminal.dump();
         seq.push_str(&self.parser.dump());
@@ -1200,7 +1204,7 @@ mod tests {
     }
 
     fn gen_csi_sm_rm_param() -> impl Strategy<Value = Vec<char>> {
-        let modes = vec![4, 6, 7, 20, 25, 47, 1047, 1048, 1049];
+        let modes = vec![1, 4, 6, 7, 20, 25, 47, 1047, 1048, 1049];
 
         prop_oneof![
             prop::sample::select(modes).prop_map(|n| n.to_string().chars().collect()),

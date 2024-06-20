@@ -31,6 +31,7 @@ pub(crate) struct Terminal {
     origin_mode: OriginMode,
     auto_wrap_mode: bool,
     new_line_mode: bool,
+    arrow_key_mode: ArrowKeyMode,
     next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
@@ -51,6 +52,12 @@ enum BufferType {
 pub enum OriginMode {
     Absolute,
     Relative,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ArrowKeyMode {
+    Normal,
+    Application,
 }
 
 #[derive(Debug, PartialEq)]
@@ -100,6 +107,7 @@ impl Terminal {
             origin_mode: OriginMode::Absolute,
             auto_wrap_mode: true,
             new_line_mode: false,
+            arrow_key_mode: ArrowKeyMode::Normal,
             next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
@@ -396,6 +404,10 @@ impl Terminal {
         self.primary_buffer().text()
     }
 
+    pub fn arrow_key_app_mode(&self) -> bool {
+        self.arrow_key_mode == ArrowKeyMode::Application
+    }
+
     #[cfg(test)]
     pub fn verify(&self) {
         assert!(self.cursor.row < self.rows);
@@ -420,6 +432,7 @@ impl Terminal {
         assert_eq!(self.origin_mode, other.origin_mode);
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
+        assert_eq!(self.arrow_key_mode, other.arrow_key_mode);
         assert_eq!(self.next_print_wraps, other.next_print_wraps);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
@@ -1064,6 +1077,10 @@ impl Executor for Terminal {
     fn prv_sm(&mut self, params: &Params) {
         for param in params.iter() {
             match param.as_slice() {
+                [1] => {
+                    self.arrow_key_mode = ArrowKeyMode::Application;
+                }
+
                 [6] => {
                     self.origin_mode = OriginMode::Relative;
                     self.move_cursor_home();
@@ -1097,6 +1114,10 @@ impl Executor for Terminal {
     fn prv_rm(&mut self, params: &Params) {
         for param in params.iter() {
             match param.as_slice() {
+                [1] => {
+                    self.arrow_key_mode = ArrowKeyMode::Normal;
+                }
+
                 [6] => {
                     self.origin_mode = OriginMode::Absolute;
                     self.move_cursor_home();
@@ -1320,7 +1341,7 @@ impl Dump for Terminal {
             seq.push_str("\u{9b}?25l");
         }
 
-        // Below 3 must happen after ALL prints as they alter print behaviour,
+        // Following 3 steps must happen after ALL prints as they alter print behaviour,
         // including the "move cursor past right border one" above.
 
         // 10. setup charset
@@ -1359,6 +1380,13 @@ impl Dump for Terminal {
         if self.new_line_mode {
             // enable new line mode
             seq.push_str("\u{9b}20h");
+        }
+
+        // 14. setup cursor key mode
+
+        if self.arrow_key_mode == ArrowKeyMode::Application {
+            // enable new line mode
+            seq.push_str("\u{9b}?1h");
         }
 
         seq
