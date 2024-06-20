@@ -10,7 +10,6 @@ use crate::dump::Dump;
 use crate::line::Line;
 use crate::parser::{Executor, Params};
 use crate::pen::{Intensity, Pen};
-use crate::saved_ctx::SavedCtx;
 use crate::tabs::Tabs;
 use rgb::RGB8;
 use std::cmp::Ordering;
@@ -29,7 +28,7 @@ pub(crate) struct Terminal {
     active_charset: usize,
     tabs: Tabs,
     insert_mode: bool,
-    origin_mode: bool,
+    origin_mode: OriginMode,
     auto_wrap_mode: bool,
     new_line_mode: bool,
     next_print_wraps: bool,
@@ -46,6 +45,33 @@ pub(crate) struct Terminal {
 enum BufferType {
     Primary,
     Alternate,
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum OriginMode {
+    Absolute,
+    Relative,
+}
+
+#[derive(Debug, PartialEq)]
+pub struct SavedCtx {
+    pub cursor_col: usize,
+    pub cursor_row: usize,
+    pub pen: Pen,
+    pub origin_mode: OriginMode,
+    pub auto_wrap_mode: bool,
+}
+
+impl Default for SavedCtx {
+    fn default() -> Self {
+        SavedCtx {
+            cursor_col: 0,
+            cursor_row: 0,
+            pen: Pen::default(),
+            origin_mode: OriginMode::Absolute,
+            auto_wrap_mode: true,
+        }
+    }
 }
 
 impl Terminal {
@@ -71,7 +97,7 @@ impl Terminal {
             charsets: [Charset::Ascii, Charset::Ascii],
             active_charset: 0,
             insert_mode: false,
-            origin_mode: false,
+            origin_mode: OriginMode::Absolute,
             auto_wrap_mode: true,
             new_line_mode: false,
             next_print_wraps: false,
@@ -214,18 +240,16 @@ impl Terminal {
     // margins
 
     fn actual_top_margin(&self) -> usize {
-        if self.origin_mode {
-            self.top_margin
-        } else {
-            0
+        match self.origin_mode {
+            OriginMode::Absolute => 0,
+            OriginMode::Relative => self.top_margin,
         }
     }
 
     fn actual_bottom_margin(&self) -> usize {
-        if self.origin_mode {
-            self.bottom_margin
-        } else {
-            self.rows - 1
+        match self.origin_mode {
+            OriginMode::Absolute => self.rows - 1,
+            OriginMode::Relative => self.bottom_margin,
         }
     }
 
@@ -308,7 +332,7 @@ impl Terminal {
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.insert_mode = false;
-        self.origin_mode = false;
+        self.origin_mode = OriginMode::Absolute;
         self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
@@ -328,7 +352,7 @@ impl Terminal {
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
         self.insert_mode = false;
-        self.origin_mode = false;
+        self.origin_mode = OriginMode::Absolute;
         self.auto_wrap_mode = true;
         self.new_line_mode = false;
         self.next_print_wraps = false;
@@ -1041,7 +1065,7 @@ impl Executor for Terminal {
         for param in params.iter() {
             match param.as_slice() {
                 [6] => {
-                    self.origin_mode = true;
+                    self.origin_mode = OriginMode::Relative;
                     self.move_cursor_home();
                 }
 
@@ -1074,7 +1098,7 @@ impl Executor for Terminal {
         for param in params.iter() {
             match param.as_slice() {
                 [6] => {
-                    self.origin_mode = false;
+                    self.origin_mode = OriginMode::Absolute;
                     self.move_cursor_home();
                 }
 
@@ -1134,7 +1158,7 @@ impl Dump for Terminal {
             seq.push_str("\u{9b}?7l");
         }
 
-        if primary_ctx.origin_mode {
+        if primary_ctx.origin_mode == OriginMode::Relative {
             // enable origin mode
             seq.push_str("\u{9b}?6h");
         }
@@ -1157,7 +1181,7 @@ impl Dump for Terminal {
             seq.push_str("\u{9b}?7h");
         }
 
-        if primary_ctx.origin_mode {
+        if primary_ctx.origin_mode == OriginMode::Relative {
             // re-disable origin mode
             seq.push_str("\u{9b}?6l");
         }
@@ -1182,7 +1206,7 @@ impl Dump for Terminal {
             seq.push_str("\u{9b}?7l");
         }
 
-        if alternate_ctx.origin_mode {
+        if alternate_ctx.origin_mode == OriginMode::Relative {
             // enable origin mode
             seq.push_str("\u{9b}?6h");
         }
@@ -1205,7 +1229,7 @@ impl Dump for Terminal {
             seq.push_str("\u{9b}?7h");
         }
 
-        if alternate_ctx.origin_mode {
+        if alternate_ctx.origin_mode == OriginMode::Relative {
             // re-disable origin mode
             seq.push_str("\u{9b}?6l");
         }
@@ -1219,7 +1243,7 @@ impl Dump for Terminal {
 
         // 7. setup origin mode
 
-        if self.origin_mode {
+        if self.origin_mode == OriginMode::Relative {
             // enable origin mode
             // note: this resets cursor position - must be done before fixing cursor
             seq.push_str("\u{9b}?6h");
@@ -1239,7 +1263,7 @@ impl Dump for Terminal {
         let col = self.cursor.col;
         let mut row = self.cursor.row;
 
-        if self.origin_mode {
+        if self.origin_mode == OriginMode::Relative {
             if row < self.top_margin || row > self.bottom_margin {
                 // bring cursor outside scroll region by restoring saved cursor
                 // and moving it to desired position via CSI A/B/C/D

@@ -6,7 +6,6 @@ mod dump;
 mod line;
 pub mod parser;
 mod pen;
-mod saved_ctx;
 mod segment;
 mod tabs;
 mod terminal;
