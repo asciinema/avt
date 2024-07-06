@@ -4,6 +4,7 @@ mod charset;
 mod color;
 mod dump;
 mod line;
+pub mod ops;
 pub mod parser;
 mod pen;
 mod segment;

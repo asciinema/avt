@@ -8,7 +8,8 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{Executor, Operation, Param};
+use crate::ops::{Operation, Param};
+use crate::parser::Executor;
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -1647,13 +1648,12 @@ impl Dump for Terminal {
 #[cfg(test)]
 mod tests {
     use super::Terminal;
-    use crate::parser::{
-        Executor,
-        Operation::{self, *},
-        Param,
-    };
-    use crate::terminal::{Color, Intensity};
+    use crate::color::Color;
+    use crate::ops::{Operation, Param};
+    use crate::parser::Executor;
+    use crate::pen::Intensity;
     use rgb::RGB8;
+    use Operation::*;
 
     fn p(number: u16) -> Param {
         Param::new(number)

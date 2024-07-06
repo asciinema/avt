@@ -1,4 +1,5 @@
-use avt::parser::{Executor, Operation, Parser};
+use avt::ops::Operation;
+use avt::parser::{Executor, Parser};
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use std::fs;
 

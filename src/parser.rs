@@ -1,9 +1,9 @@
 // Based on Paul Williams' parser for ANSI-compatible video terminals:
 // https://www.vt100.net/emu/dec_ansi_parser
 
-mod param;
-use crate::{charset::Charset, dump::Dump};
-pub use param::Param;
+use crate::charset::Charset;
+use crate::dump::Dump;
+use crate::ops::{Operation, Param};
 use std::mem;
 
 #[derive(Debug, Default)]
@@ -33,62 +33,10 @@ pub enum State {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum Operation {
-    Bs,
-    Cbt(Option<Param>),
-    Cha(Option<Param>),
-    Cht(Option<Param>),
-    Cnl(Option<Param>),
-    Cpl(Option<Param>),
-    Cr,
-    Ctc(Option<Param>),
-    Cub(Option<Param>),
-    Cud(Option<Param>),
-    Cuf(Option<Param>),
-    Cup(Option<Param>, Option<Param>),
-    Cuu(Option<Param>),
-    Dch(Option<Param>),
-    Decaln,
-    Decstbm(Option<Param>, Option<Param>),
-    Decstr,
-    Dl(Option<Param>),
-    Ech(Option<Param>),
-    Ed(Option<Param>),
-    El(Option<Param>),
-    G1d4(Charset),
-    Gzd4(Charset),
-    Ht,
-    Hts,
-    Ich(Option<Param>),
-    Il(Option<Param>),
-    Lf,
-    Nel,
-    Print(char),
-    PrvRm(Vec<Param>),
-    PrvSm(Vec<Param>),
-    Rc,
-    Rep(Option<Param>),
-    Ri,
-    Ris,
-    Rm(Vec<Param>),
-    Sc,
-    Sd(Option<Param>),
-    Sgr(Vec<Param>),
-    Si,
-    Sm(Vec<Param>),
-    So,
-    Su(Option<Param>),
-    Tbc(Option<Param>),
-    Vpa(Option<Param>),
-    Vpr(Option<Param>),
-    Xtwinops(Option<Param>, Option<Param>, Option<Param>),
-}
-
-#[derive(Debug, PartialEq)]
-pub struct Params(Vec<Param>);
+struct Params(Vec<Param>);
 
 #[derive(Debug, Default, PartialEq)]
-pub(crate) struct Intermediates(Vec<char>);
+struct Intermediates(Vec<char>);
 
 pub trait Executor {
     fn execute(&mut self, op: Operation);
@@ -491,133 +439,133 @@ impl Parser {
     fn csi_dispatch<E: Executor>(&mut self, input: char, executor: &mut E) {
         use Operation::*;
 
-        let ps = &mut self.params.0;
+        let ps = &mut self.params;
 
         match (self.intermediates.0.first(), input) {
             (None, '@') => {
-                executor.execute(Ich(ps.drain(..).next()));
+                executor.execute(Ich(ps.drain().next()));
             }
 
             (None, 'A') => {
-                executor.execute(Cuu(ps.drain(..).next()));
+                executor.execute(Cuu(ps.drain().next()));
             }
 
             (None, 'B') => {
-                executor.execute(Cud(ps.drain(..).next()));
+                executor.execute(Cud(ps.drain().next()));
             }
 
             (None, 'C') => {
-                executor.execute(Cuf(ps.drain(..).next()));
+                executor.execute(Cuf(ps.drain().next()));
             }
 
             (None, 'D') => {
-                executor.execute(Cub(ps.drain(..).next()));
+                executor.execute(Cub(ps.drain().next()));
             }
 
             (None, 'E') => {
-                executor.execute(Cnl(ps.drain(..).next()));
+                executor.execute(Cnl(ps.drain().next()));
             }
 
             (None, 'F') => {
-                executor.execute(Cpl(ps.drain(..).next()));
+                executor.execute(Cpl(ps.drain().next()));
             }
 
             (None, 'G') => {
-                executor.execute(Cha(ps.drain(..).next()));
+                executor.execute(Cha(ps.drain().next()));
             }
 
             (None, 'H') => {
-                let mut ps = ps.drain(..);
+                let mut ps = ps.drain();
                 executor.execute(Cup(ps.next(), ps.next()));
             }
 
             (None, 'I') => {
-                executor.execute(Cht(ps.drain(..).next()));
+                executor.execute(Cht(ps.drain().next()));
             }
 
             (None, 'J') => {
-                executor.execute(Ed(ps.drain(..).next()));
+                executor.execute(Ed(ps.drain().next()));
             }
 
             (None, 'K') => {
-                executor.execute(El(ps.drain(..).next()));
+                executor.execute(El(ps.drain().next()));
             }
 
             (None, 'L') => {
-                executor.execute(Il(ps.drain(..).next()));
+                executor.execute(Il(ps.drain().next()));
             }
 
             (None, 'M') => {
-                executor.execute(Dl(ps.drain(..).next()));
+                executor.execute(Dl(ps.drain().next()));
             }
 
             (None, 'P') => {
-                executor.execute(Dch(ps.drain(..).next()));
+                executor.execute(Dch(ps.drain().next()));
             }
 
             (None, 'S') => {
-                executor.execute(Su(ps.drain(..).next()));
+                executor.execute(Su(ps.drain().next()));
             }
 
             (None, 'T') => {
-                executor.execute(Sd(ps.drain(..).next()));
+                executor.execute(Sd(ps.drain().next()));
             }
 
             (None, 'W') => {
-                executor.execute(Ctc(ps.drain(..).next()));
+                executor.execute(Ctc(ps.drain().next()));
             }
 
             (None, 'X') => {
-                executor.execute(Ech(ps.drain(..).next()));
+                executor.execute(Ech(ps.drain().next()));
             }
 
             (None, 'Z') => {
-                executor.execute(Cbt(ps.drain(..).next()));
+                executor.execute(Cbt(ps.drain().next()));
             }
 
             (None, '`') => {
-                executor.execute(Cha(ps.drain(..).next()));
+                executor.execute(Cha(ps.drain().next()));
             }
 
             (None, 'a') => {
-                executor.execute(Cuf(ps.drain(..).next()));
+                executor.execute(Cuf(ps.drain().next()));
             }
 
             (None, 'b') => {
-                executor.execute(Rep(ps.drain(..).next()));
+                executor.execute(Rep(ps.drain().next()));
             }
 
             (None, 'd') => {
-                executor.execute(Vpa(ps.drain(..).next()));
+                executor.execute(Vpa(ps.drain().next()));
             }
 
             (None, 'e') => {
-                executor.execute(Vpr(ps.drain(..).next()));
+                executor.execute(Vpr(ps.drain().next()));
             }
 
             (None, 'f') => {
-                let mut ps = ps.drain(..);
+                let mut ps = ps.drain();
                 executor.execute(Cup(ps.next(), ps.next()));
             }
 
             (None, 'g') => {
-                executor.execute(Tbc(ps.drain(..).next()));
+                executor.execute(Tbc(ps.drain().next()));
             }
 
             (None, 'h') => {
-                executor.execute(Sm(mem::take(ps)));
+                executor.execute(Sm(ps.take()));
             }
 
             (None, 'l') => {
-                executor.execute(Rm(mem::take(ps)));
+                executor.execute(Rm(ps.take()));
             }
 
             (None, 'm') => {
-                executor.execute(Sgr(mem::take(ps)));
+                executor.execute(Sgr(ps.take()));
             }
 
             (None, 'r') => {
-                let mut ps = ps.drain(..);
+                let mut ps = ps.drain();
                 executor.execute(Decstbm(ps.next(), ps.next()));
             }
 
@@ -626,7 +574,7 @@ impl Parser {
             }
 
             (None, 't') => {
-                let mut ps = ps.drain(..);
+                let mut ps = ps.drain();
                 executor.execute(Xtwinops(ps.next(), ps.next(), ps.next()));
             }
 
@@ -639,11 +587,11 @@ impl Parser {
             }
 
             (Some('?'), 'h') => {
-                executor.execute(PrvSm(mem::take(ps)));
+                executor.execute(PrvSm(ps.take()));
             }
 
             (Some('?'), 'l') => {
-                executor.execute(PrvRm(mem::take(ps)));
+                executor.execute(PrvRm(ps.take()));
             }
 
             _ => {}
@@ -686,12 +634,16 @@ impl Params {
         }
     }
 
-    pub fn iter(&self) -> std::slice::Iter<Param> {
+    fn iter(&self) -> std::slice::Iter<Param> {
         self.0.iter()
     }
 
-    pub fn as_slice(&self) -> &[Param] {
-        &self.0[..]
+    fn drain(&mut self) -> impl Iterator<Item = Param> + '_ {
+        self.0.drain(..)
+    }
+
+    fn take(&mut self) -> Vec<Param> {
+        mem::take(&mut self.0)
     }
 }
 
@@ -790,7 +742,10 @@ impl Dump for Parser {
 
 #[cfg(test)]
 mod tests {
-    use super::{Dump, Operation::*, Param, Parser};
+    use super::Parser;
+    use crate::dump::Dump;
+    use crate::ops::{Operation, Param};
+    use Operation::*;
 
     fn p(number: u16) -> Param {
         Param::new(number)

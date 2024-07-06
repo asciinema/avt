@@ -1,4 +1,58 @@
+use crate::charset::Charset;
+
 const MAX_PARAM_LEN: usize = 6;
+
+#[derive(Debug, PartialEq)]
+pub enum Operation {
+    Bs,
+    Cbt(Option<Param>),
+    Cha(Option<Param>),
+    Cht(Option<Param>),
+    Cnl(Option<Param>),
+    Cpl(Option<Param>),
+    Cr,
+    Ctc(Option<Param>),
+    Cub(Option<Param>),
+    Cud(Option<Param>),
+    Cuf(Option<Param>),
+    Cup(Option<Param>, Option<Param>),
+    Cuu(Option<Param>),
+    Dch(Option<Param>),
+    Decaln,
+    Decstbm(Option<Param>, Option<Param>),
+    Decstr,
+    Dl(Option<Param>),
+    Ech(Option<Param>),
+    Ed(Option<Param>),
+    El(Option<Param>),
+    G1d4(Charset),
+    Gzd4(Charset),
+    Ht,
+    Hts,
+    Ich(Option<Param>),
+    Il(Option<Param>),
+    Lf,
+    Nel,
+    Print(char),
+    PrvRm(Vec<Param>),
+    PrvSm(Vec<Param>),
+    Rc,
+    Rep(Option<Param>),
+    Ri,
+    Ris,
+    Rm(Vec<Param>),
+    Sc,
+    Sd(Option<Param>),
+    Sgr(Vec<Param>),
+    Si,
+    Sm(Vec<Param>),
+    So,
+    Su(Option<Param>),
+    Tbc(Option<Param>),
+    Vpa(Option<Param>),
+    Vpr(Option<Param>),
+    Xtwinops(Option<Param>, Option<Param>, Option<Param>),
+}
 
 #[derive(Debug, PartialEq, Clone)]
 pub struct Param {
