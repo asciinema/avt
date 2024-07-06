@@ -13,6 +13,7 @@ use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
 use std::cmp::Ordering;
+use std::mem;
 
 #[derive(Debug)]
 pub(crate) struct Terminal {
@@ -294,8 +295,8 @@ impl Terminal {
     fn switch_to_alternate_buffer(&mut self) {
         if let BufferType::Primary = self.active_buffer_type {
             self.active_buffer_type = BufferType::Alternate;
-            std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
-            std::mem::swap(&mut self.buffer, &mut self.other_buffer);
+            mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
+            mem::swap(&mut self.buffer, &mut self.other_buffer);
             self.buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
             self.dirty_lines.extend(0..self.rows);
         }
@@ -304,8 +305,8 @@ impl Terminal {
     fn switch_to_primary_buffer(&mut self) {
         if let BufferType::Alternate = self.active_buffer_type {
             self.active_buffer_type = BufferType::Primary;
-            std::mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
-            std::mem::swap(&mut self.buffer, &mut self.other_buffer);
+            mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
+            mem::swap(&mut self.buffer, &mut self.other_buffer);
             self.dirty_lines.extend(0..self.rows);
         }
     }
