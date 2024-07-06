@@ -3,11 +3,11 @@ use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use std::fs;
 
 pub fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("feed mixed in bulk", |b| {
+    c.bench_function("vt: feed mixed in bulk", |b| {
         b.iter_batched(setup_feed("mixed.txt"), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("feed mixed in chunks", |b| {
+    c.bench_function("vt: feed mixed in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("mixed.txt")),
             run_feed,
@@ -15,11 +15,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("feed cacademo in bulk", |b| {
+    c.bench_function("vt: feed cacademo in bulk", |b| {
         b.iter_batched(setup_feed("cacademo.txt"), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("feed cacademo in chunks", |b| {
+    c.bench_function("vt: feed cacademo in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("cacademo.txt")),
             run_feed,
@@ -27,11 +27,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("feed licenses in bulk", |b| {
+    c.bench_function("vt: feed licenses in bulk", |b| {
         b.iter_batched(setup_feed("licenses.txt"), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("feed licenses in chunks", |b| {
+    c.bench_function("vt: feed licenses in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("licenses.txt")),
             run_feed,
@@ -39,7 +39,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("feed licenses-lolcat in bulk", |b| {
+    c.bench_function("vt: feed licenses-lolcat in bulk", |b| {
         b.iter_batched(
             setup_feed("licenses-lolcat.txt"),
             run_feed,
@@ -47,7 +47,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("feed licenses-lolcat in chunks", |b| {
+    c.bench_function("vt: feed licenses-lolcat in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("licenses-lolcat.txt")),
             run_feed,
@@ -55,7 +55,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("dump", |b| {
+    c.bench_function("vt: dump", |b| {
         b.iter_batched(setup_dump, run_dump, BatchSize::SmallInput)
     });
 }
