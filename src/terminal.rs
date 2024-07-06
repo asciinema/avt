@@ -654,7 +654,7 @@ impl Terminal {
                 self.dirty_lines.extend(0..self.rows);
             }
 
-            _ => (),
+            _ => {}
         }
     }
 
@@ -689,7 +689,7 @@ impl Terminal {
                 self.dirty_lines.add(self.cursor.row);
             }
 
-            _ => (),
+            _ => {}
         }
     }
 
@@ -743,10 +743,19 @@ impl Terminal {
 
     fn ctc(&mut self, param: Option<Param>) {
         match as_usize_or(param, 0) {
-            0 => self.set_tab(),
-            2 => self.clear_tab(),
-            5 => self.clear_all_tabs(),
-            _ => (),
+            0 => {
+                self.set_tab();
+            }
+
+            2 => {
+                self.clear_tab();
+            }
+
+            5 => {
+                self.clear_all_tabs();
+            }
+
+            _ => {}
         }
     }
 
@@ -787,18 +796,30 @@ impl Terminal {
 
     fn tbc(&mut self, param: Option<Param>) {
         match as_usize_or(param, 0) {
-            0 => self.clear_tab(),
-            3 => self.clear_all_tabs(),
-            _ => (),
+            0 => {
+                self.clear_tab();
+            }
+
+            3 => {
+                self.clear_all_tabs();
+            }
+
+            _ => {}
         }
     }
 
     fn sm(&mut self, params: Vec<Param>) {
         for param in params.iter() {
             match param.as_slice() {
-                [4] => self.insert_mode = true,
-                [20] => self.new_line_mode = true,
-                _ => (),
+                [4] => {
+                    self.insert_mode = true;
+                }
+
+                [20] => {
+                    self.new_line_mode = true;
+                }
+
+                _ => {}
             }
         }
     }
@@ -806,9 +827,15 @@ impl Terminal {
     fn rm(&mut self, params: Vec<Param>) {
         for param in params.iter() {
             match param.as_slice() {
-                [4] => self.insert_mode = false,
-                [20] => self.new_line_mode = false,
-                _ => (),
+                [4] => {
+                    self.insert_mode = false;
+                }
+
+                [20] => {
+                    self.new_line_mode = false;
+                }
+
+                _ => {}
             }
         }
     }
@@ -1033,7 +1060,7 @@ impl Terminal {
                     self.resized = true;
                 }
 
-                std::cmp::Ordering::Equal => (),
+                std::cmp::Ordering::Equal => {}
 
                 std::cmp::Ordering::Greater => {
                     self.tabs.expand(self.cols, cols);
@@ -1048,7 +1075,7 @@ impl Terminal {
                     self.resized = true;
                 }
 
-                std::cmp::Ordering::Equal => (),
+                std::cmp::Ordering::Equal => {}
 
                 std::cmp::Ordering::Greater => {
                     self.top_margin = 0;
@@ -1079,8 +1106,13 @@ impl Terminal {
                     self.move_cursor_home();
                 }
 
-                [7] => self.auto_wrap_mode = true,
-                [25] => self.cursor.visible = true,
+                [7] => {
+                    self.auto_wrap_mode = true;
+                }
+
+                [25] => {
+                    self.cursor.visible = true;
+                }
 
                 [47] => {
                     self.switch_to_alternate_buffer();
@@ -1092,14 +1124,17 @@ impl Terminal {
                     self.reflow();
                 }
 
-                [1048] => self.save_cursor(),
+                [1048] => {
+                    self.save_cursor();
+                }
 
                 [1049] => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
-                _ => (),
+
+                _ => {}
             }
         }
     }
@@ -1116,8 +1151,13 @@ impl Terminal {
                     self.move_cursor_home();
                 }
 
-                [7] => self.auto_wrap_mode = false,
-                [25] => self.cursor.visible = false,
+                [7] => {
+                    self.auto_wrap_mode = false;
+                }
+
+                [25] => {
+                    self.cursor.visible = false;
+                }
 
                 [47] => {
                     self.switch_to_primary_buffer();
@@ -1129,7 +1169,9 @@ impl Terminal {
                     self.reflow();
                 }
 
-                [1048] => self.restore_cursor(),
+                [1048] => {
+                    self.restore_cursor();
+                }
 
                 [1049] => {
                     self.switch_to_primary_buffer();
@@ -1137,7 +1179,7 @@ impl Terminal {
                     self.reflow();
                 }
 
-                _ => (),
+                _ => {}
             }
         }
     }
@@ -1164,54 +1206,197 @@ impl Executor for Terminal {
         use Operation::*;
 
         match op {
-            Bs => self.bs(),
-            Cbt(param) => self.cbt(param),
-            Cha(param) => self.cha(param),
-            Cht(param) => self.cht(param),
-            Cnl(param) => self.cnl(param),
-            Cpl(param) => self.cpl(param),
-            Cr => self.cr(),
-            Ctc(param) => self.ctc(param),
-            Cub(param) => self.cub(param),
-            Cud(param) => self.cud(param),
-            Cuf(param) => self.cuf(param),
-            Cup(param1, param2) => self.cup(param1, param2),
-            Cuu(param) => self.cuu(param),
-            Dch(param) => self.dch(param),
-            Decaln => self.decaln(),
-            Decstbm(param1, param2) => self.decstbm(param1, param2),
-            Decstr => self.decstr(),
-            Dl(param) => self.dl(param),
-            Ech(param) => self.ech(param),
-            Ed(param) => self.ed(param),
-            El(param) => self.el(param),
-            G1d4(charset) => self.g1d4(charset),
-            Gzd4(charset) => self.gzd4(charset),
-            Ht => self.ht(),
-            Hts => self.hts(),
-            Ich(param) => self.ich(param),
-            Il(param) => self.il(param),
-            Lf => self.lf(),
-            Nel => self.nel(),
-            Print(ch) => self.print(ch),
-            PrvRm(params) => self.prv_rm(params),
-            PrvSm(params) => self.prv_sm(params),
-            Rc => self.rc(),
-            Rep(param) => self.rep(param),
-            Ri => self.ri(),
-            Ris => self.ris(),
-            Rm(params) => self.rm(params),
-            Sc => self.sc(),
-            Sd(param) => self.sd(param),
-            Sgr(params) => self.sgr(params),
-            Si => self.si(),
-            Sm(params) => self.sm(params),
-            So => self.so(),
-            Su(param) => self.su(param),
-            Tbc(param) => self.tbc(param),
-            Vpa(param) => self.vpa(param),
-            Vpr(param) => self.vpr(param),
-            Xtwinops(param1, param2, param3) => self.xtwinops(param1, param2, param3),
+            Bs => {
+                self.bs();
+            }
+
+            Cbt(param) => {
+                self.cbt(param);
+            }
+
+            Cha(param) => {
+                self.cha(param);
+            }
+
+            Cht(param) => {
+                self.cht(param);
+            }
+
+            Cnl(param) => {
+                self.cnl(param);
+            }
+
+            Cpl(param) => {
+                self.cpl(param);
+            }
+
+            Cr => {
+                self.cr();
+            }
+
+            Ctc(param) => {
+                self.ctc(param);
+            }
+
+            Cub(param) => {
+                self.cub(param);
+            }
+
+            Cud(param) => {
+                self.cud(param);
+            }
+
+            Cuf(param) => {
+                self.cuf(param);
+            }
+
+            Cup(param1, param2) => {
+                self.cup(param1, param2);
+            }
+
+            Cuu(param) => {
+                self.cuu(param);
+            }
+
+            Dch(param) => {
+                self.dch(param);
+            }
+
+            Decaln => {
+                self.decaln();
+            }
+
+            Decstbm(param1, param2) => {
+                self.decstbm(param1, param2);
+            }
+
+            Decstr => {
+                self.decstr();
+            }
+
+            Dl(param) => {
+                self.dl(param);
+            }
+
+            Ech(param) => {
+                self.ech(param);
+            }
+
+            Ed(param) => {
+                self.ed(param);
+            }
+
+            El(param) => {
+                self.el(param);
+            }
+
+            G1d4(charset) => {
+                self.g1d4(charset);
+            }
+
+            Gzd4(charset) => {
+                self.gzd4(charset);
+            }
+
+            Ht => {
+                self.ht();
+            }
+
+            Hts => {
+                self.hts();
+            }
+
+            Ich(param) => {
+                self.ich(param);
+            }
+
+            Il(param) => {
+                self.il(param);
+            }
+
+            Lf => {
+                self.lf();
+            }
+
+            Nel => {
+                self.nel();
+            }
+
+            Print(ch) => {
+                self.print(ch);
+            }
+
+            PrvRm(params) => {
+                self.prv_rm(params);
+            }
+
+            PrvSm(params) => {
+                self.prv_sm(params);
+            }
+
+            Rc => {
+                self.rc();
+            }
+
+            Rep(param) => {
+                self.rep(param);
+            }
+
+            Ri => {
+                self.ri();
+            }
+
+            Ris => {
+                self.ris();
+            }
+
+            Rm(params) => {
+                self.rm(params);
+            }
+
+            Sc => {
+                self.sc();
+            }
+
+            Sd(param) => {
+                self.sd(param);
+            }
+
+            Sgr(params) => {
+                self.sgr(params);
+            }
+
+            Si => {
+                self.si();
+            }
+
+            Sm(params) => {
+                self.sm(params);
+            }
+
+            So => {
+                self.so();
+            }
+
+            Su(param) => {
+                self.su(param);
+            }
+
+            Tbc(param) => {
+                self.tbc(param);
+            }
+
+            Vpa(param) => {
+                self.vpa(param);
+            }
+
+            Vpr(param) => {
+                self.vpr(param);
+            }
+
+            Xtwinops(param1, param2, param3) => {
+                self.xtwinops(param1, param2, param3);
+            }
         }
     }
 }
