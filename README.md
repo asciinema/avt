@@ -21,7 +21,7 @@ Following aspects of terminal emulation are not in scope of this project:
 - input handling,
 - rendering.
 
-Therefore avt is small and focused, although a full-fledged terminal emulator may be
+While avt is small and focused, a full-fledged terminal emulator could potentially be
 built on top of it.
 
 avt doesn't try to 100% replicate any specific terminal variant like VT102 or VT520,
