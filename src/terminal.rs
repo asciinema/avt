@@ -810,7 +810,7 @@ impl Terminal {
 
     fn sm(&mut self, params: Vec<Param>) {
         for param in params.iter() {
-            match param.as_slice() {
+            match param.parts() {
                 [4] => {
                     self.insert_mode = true;
                 }
@@ -826,7 +826,7 @@ impl Terminal {
 
     fn rm(&mut self, params: Vec<Param>) {
         for param in params.iter() {
-            match param.as_slice() {
+            match param.parts() {
                 [4] => {
                     self.insert_mode = false;
                 }
@@ -844,7 +844,7 @@ impl Terminal {
         let mut ps = params.as_slice();
 
         while let Some(param) = ps.first() {
-            match param.as_slice() {
+            match param.parts() {
                 [0] => {
                     self.pen = Pen::default();
                     ps = &ps[1..];
@@ -925,16 +925,16 @@ impl Terminal {
                     ps = &ps[1..];
                 }
 
-                [38] => match ps.get(1).map(|p| p.as_slice()) {
+                [38] => match ps.get(1).map(|p| p.parts()) {
                     None => {
                         ps = &ps[1..];
                     }
 
                     Some([2]) => {
                         if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap().as_slice()[0];
-                            let g = ps.get(3).unwrap().as_slice()[0];
-                            let b = b.as_slice()[0];
+                            let r = ps.get(2).unwrap().parts()[0];
+                            let g = ps.get(3).unwrap().parts()[0];
+                            let b = b.parts()[0];
 
                             self.pen.foreground =
                                 Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
@@ -947,7 +947,7 @@ impl Terminal {
 
                     Some([5]) => {
                         if let Some(idx) = ps.get(2) {
-                            let idx = idx.as_slice()[0];
+                            let idx = idx.parts()[0];
                             self.pen.foreground = Some(Color::Indexed(idx as u8));
                             ps = &ps[3..];
                         } else {
@@ -980,16 +980,16 @@ impl Terminal {
                     ps = &ps[1..];
                 }
 
-                [48] => match ps.get(1).map(|p| p.as_slice()) {
+                [48] => match ps.get(1).map(|p| p.parts()) {
                     None => {
                         ps = &ps[1..];
                     }
 
                     Some([2]) => {
                         if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap().as_slice()[0];
-                            let g = ps.get(3).unwrap().as_slice()[0];
-                            let b = b.as_slice()[0];
+                            let r = ps.get(2).unwrap().parts()[0];
+                            let g = ps.get(3).unwrap().parts()[0];
+                            let b = b.parts()[0];
 
                             self.pen.background =
                                 Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
@@ -1002,7 +1002,7 @@ impl Terminal {
 
                     Some([5]) => {
                         if let Some(idx) = ps.get(2) {
-                            let idx = idx.as_slice()[0];
+                            let idx = idx.parts()[0];
                             self.pen.background = Some(Color::Indexed(idx as u8));
                             ps = &ps[3..];
                         } else {
@@ -1096,7 +1096,7 @@ impl Terminal {
 
     fn prv_sm(&mut self, params: Vec<Param>) {
         for param in params.iter() {
-            match param.as_slice() {
+            match param.parts() {
                 [1] => {
                     self.arrow_key_mode = ArrowKeyMode::Application;
                 }
@@ -1141,7 +1141,7 @@ impl Terminal {
 
     fn prv_rm(&mut self, params: Vec<Param>) {
         for param in params.iter() {
-            match param.as_slice() {
+            match param.parts() {
                 [1] => {
                     self.arrow_key_mode = ArrowKeyMode::Normal;
                 }

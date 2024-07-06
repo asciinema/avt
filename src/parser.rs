@@ -682,7 +682,7 @@ impl Params {
             self.0[last_idx].add_part();
         } else {
             let last_idx = self.0.len() - 1;
-            self.0[last_idx].extend_part((input as u8) - 0x30);
+            self.0[last_idx].add_digit((input as u8) - 0x30);
         }
     }
 

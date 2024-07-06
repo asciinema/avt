@@ -32,7 +32,7 @@ impl Param {
         self.cur_part = (self.cur_part + 1).min(5);
     }
 
-    pub fn extend_part(&mut self, input: u8) {
+    pub fn add_digit(&mut self, input: u8) {
         let number = &mut self.parts[self.cur_part];
         *number = (10 * (*number as u32) + (input as u32)) as u16;
     }
@@ -41,14 +41,14 @@ impl Param {
         self.parts[0]
     }
 
-    pub fn as_slice(&self) -> &[u16] {
+    pub fn parts(&self) -> &[u16] {
         &self.parts[..=self.cur_part]
     }
 }
 
 impl ToString for Param {
     fn to_string(&self) -> String {
-        match self.as_slice() {
+        match self.parts() {
             [] => unreachable!(),
 
             [part] => part.to_string(),
