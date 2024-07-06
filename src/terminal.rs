@@ -33,7 +33,7 @@ pub(crate) struct Terminal {
     origin_mode: OriginMode,
     auto_wrap_mode: bool,
     new_line_mode: bool,
-    arrow_key_mode: ArrowKeyMode,
+    cursor_key_mode: CursorKeyMode,
     next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
@@ -57,7 +57,7 @@ pub enum OriginMode {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum ArrowKeyMode {
+pub enum CursorKeyMode {
     Normal,
     Application,
 }
@@ -109,7 +109,7 @@ impl Terminal {
             origin_mode: OriginMode::Absolute,
             auto_wrap_mode: true,
             new_line_mode: false,
-            arrow_key_mode: ArrowKeyMode::Normal,
+            cursor_key_mode: CursorKeyMode::Normal,
             next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
@@ -406,8 +406,8 @@ impl Terminal {
         self.primary_buffer().text()
     }
 
-    pub fn arrow_key_app_mode(&self) -> bool {
-        self.arrow_key_mode == ArrowKeyMode::Application
+    pub fn cursor_key_app_mode(&self) -> bool {
+        self.cursor_key_mode == CursorKeyMode::Application
     }
 
     #[cfg(test)]
@@ -434,7 +434,7 @@ impl Terminal {
         assert_eq!(self.origin_mode, other.origin_mode);
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
-        assert_eq!(self.arrow_key_mode, other.arrow_key_mode);
+        assert_eq!(self.cursor_key_mode, other.cursor_key_mode);
         assert_eq!(self.next_print_wraps, other.next_print_wraps);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
@@ -1099,7 +1099,7 @@ impl Terminal {
         for param in params.iter() {
             match param.parts() {
                 [1] => {
-                    self.arrow_key_mode = ArrowKeyMode::Application;
+                    self.cursor_key_mode = CursorKeyMode::Application;
                 }
 
                 [6] => {
@@ -1144,7 +1144,7 @@ impl Terminal {
         for param in params.iter() {
             match param.parts() {
                 [1] => {
-                    self.arrow_key_mode = ArrowKeyMode::Normal;
+                    self.cursor_key_mode = CursorKeyMode::Normal;
                 }
 
                 [6] => {
@@ -1636,7 +1636,7 @@ impl Dump for Terminal {
 
         // 14. setup cursor key mode
 
-        if self.arrow_key_mode == ArrowKeyMode::Application {
+        if self.cursor_key_mode == CursorKeyMode::Application {
             // enable new line mode
             seq.push_str("\u{9b}?1h");
         }
