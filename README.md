@@ -21,12 +21,12 @@ Following aspects of terminal emulation are not in scope of this project:
 - input handling,
 - rendering.
 
-Therefore avt is small and focused but a full-fledged terminal emulator can't be
-built with it.
+Therefore avt is small and focused, although a full-fledged terminal emulator may be
+built on top of it.
 
-avt doesn't try to replicate a specific terminal variant like VT102 or VT220, however
-it implements most control sequences found in modern terminal emulators
-like xterm, Gnome Terminal, Alacritty, iTerm, mosh etc.
+avt doesn't try to 100% replicate any specific terminal variant like VT102 or VT520,
+instead it implements most control sequences supported by modern terminal emulators
+like xterm, Gnome Terminal, WezTerm, Alacritty, iTerm, mosh etc.
 
 ## License
 
