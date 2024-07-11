@@ -9,7 +9,6 @@ use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
 use crate::ops::{Operation, Param};
-use crate::parser::Executor;
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -118,6 +117,204 @@ impl Terminal {
             dirty_lines,
             resizable,
             resized: false,
+        }
+    }
+
+    pub fn execute(&mut self, op: Operation) {
+        use Operation::*;
+
+        match op {
+            Bs => {
+                self.bs();
+            }
+
+            Cbt(param) => {
+                self.cbt(param);
+            }
+
+            Cha(param) => {
+                self.cha(param);
+            }
+
+            Cht(param) => {
+                self.cht(param);
+            }
+
+            Cnl(param) => {
+                self.cnl(param);
+            }
+
+            Cpl(param) => {
+                self.cpl(param);
+            }
+
+            Cr => {
+                self.cr();
+            }
+
+            Ctc(param) => {
+                self.ctc(param);
+            }
+
+            Cub(param) => {
+                self.cub(param);
+            }
+
+            Cud(param) => {
+                self.cud(param);
+            }
+
+            Cuf(param) => {
+                self.cuf(param);
+            }
+
+            Cup(param1, param2) => {
+                self.cup(param1, param2);
+            }
+
+            Cuu(param) => {
+                self.cuu(param);
+            }
+
+            Dch(param) => {
+                self.dch(param);
+            }
+
+            Decaln => {
+                self.decaln();
+            }
+
+            Decstbm(param1, param2) => {
+                self.decstbm(param1, param2);
+            }
+
+            Decstr => {
+                self.decstr();
+            }
+
+            Dl(param) => {
+                self.dl(param);
+            }
+
+            Ech(param) => {
+                self.ech(param);
+            }
+
+            Ed(param) => {
+                self.ed(param);
+            }
+
+            El(param) => {
+                self.el(param);
+            }
+
+            G1d4(charset) => {
+                self.g1d4(charset);
+            }
+
+            Gzd4(charset) => {
+                self.gzd4(charset);
+            }
+
+            Ht => {
+                self.ht();
+            }
+
+            Hts => {
+                self.hts();
+            }
+
+            Ich(param) => {
+                self.ich(param);
+            }
+
+            Il(param) => {
+                self.il(param);
+            }
+
+            Lf => {
+                self.lf();
+            }
+
+            Nel => {
+                self.nel();
+            }
+
+            Print(ch) => {
+                self.print(ch);
+            }
+
+            PrvRm(params) => {
+                self.prv_rm(params);
+            }
+
+            PrvSm(params) => {
+                self.prv_sm(params);
+            }
+
+            Rc => {
+                self.rc();
+            }
+
+            Rep(param) => {
+                self.rep(param);
+            }
+
+            Ri => {
+                self.ri();
+            }
+
+            Ris => {
+                self.ris();
+            }
+
+            Rm(params) => {
+                self.rm(params);
+            }
+
+            Sc => {
+                self.sc();
+            }
+
+            Sd(param) => {
+                self.sd(param);
+            }
+
+            Sgr(params) => {
+                self.sgr(params);
+            }
+
+            Si => {
+                self.si();
+            }
+
+            Sm(params) => {
+                self.sm(params);
+            }
+
+            So => {
+                self.so();
+            }
+
+            Su(param) => {
+                self.su(param);
+            }
+
+            Tbc(param) => {
+                self.tbc(param);
+            }
+
+            Vpa(param) => {
+                self.vpa(param);
+            }
+
+            Vpr(param) => {
+                self.vpr(param);
+            }
+
+            Xtwinops(param1, param2, param3) => {
+                self.xtwinops(param1, param2, param3);
+            }
         }
     }
 
@@ -1203,206 +1400,6 @@ impl Default for Terminal {
     }
 }
 
-impl Executor for Terminal {
-    fn execute(&mut self, op: Operation) {
-        use Operation::*;
-
-        match op {
-            Bs => {
-                self.bs();
-            }
-
-            Cbt(param) => {
-                self.cbt(param);
-            }
-
-            Cha(param) => {
-                self.cha(param);
-            }
-
-            Cht(param) => {
-                self.cht(param);
-            }
-
-            Cnl(param) => {
-                self.cnl(param);
-            }
-
-            Cpl(param) => {
-                self.cpl(param);
-            }
-
-            Cr => {
-                self.cr();
-            }
-
-            Ctc(param) => {
-                self.ctc(param);
-            }
-
-            Cub(param) => {
-                self.cub(param);
-            }
-
-            Cud(param) => {
-                self.cud(param);
-            }
-
-            Cuf(param) => {
-                self.cuf(param);
-            }
-
-            Cup(param1, param2) => {
-                self.cup(param1, param2);
-            }
-
-            Cuu(param) => {
-                self.cuu(param);
-            }
-
-            Dch(param) => {
-                self.dch(param);
-            }
-
-            Decaln => {
-                self.decaln();
-            }
-
-            Decstbm(param1, param2) => {
-                self.decstbm(param1, param2);
-            }
-
-            Decstr => {
-                self.decstr();
-            }
-
-            Dl(param) => {
-                self.dl(param);
-            }
-
-            Ech(param) => {
-                self.ech(param);
-            }
-
-            Ed(param) => {
-                self.ed(param);
-            }
-
-            El(param) => {
-                self.el(param);
-            }
-
-            G1d4(charset) => {
-                self.g1d4(charset);
-            }
-
-            Gzd4(charset) => {
-                self.gzd4(charset);
-            }
-
-            Ht => {
-                self.ht();
-            }
-
-            Hts => {
-                self.hts();
-            }
-
-            Ich(param) => {
-                self.ich(param);
-            }
-
-            Il(param) => {
-                self.il(param);
-            }
-
-            Lf => {
-                self.lf();
-            }
-
-            Nel => {
-                self.nel();
-            }
-
-            Print(ch) => {
-                self.print(ch);
-            }
-
-            PrvRm(params) => {
-                self.prv_rm(params);
-            }
-
-            PrvSm(params) => {
-                self.prv_sm(params);
-            }
-
-            Rc => {
-                self.rc();
-            }
-
-            Rep(param) => {
-                self.rep(param);
-            }
-
-            Ri => {
-                self.ri();
-            }
-
-            Ris => {
-                self.ris();
-            }
-
-            Rm(params) => {
-                self.rm(params);
-            }
-
-            Sc => {
-                self.sc();
-            }
-
-            Sd(param) => {
-                self.sd(param);
-            }
-
-            Sgr(params) => {
-                self.sgr(params);
-            }
-
-            Si => {
-                self.si();
-            }
-
-            Sm(params) => {
-                self.sm(params);
-            }
-
-            So => {
-                self.so();
-            }
-
-            Su(param) => {
-                self.su(param);
-            }
-
-            Tbc(param) => {
-                self.tbc(param);
-            }
-
-            Vpa(param) => {
-                self.vpa(param);
-            }
-
-            Vpr(param) => {
-                self.vpr(param);
-            }
-
-            Xtwinops(param1, param2, param3) => {
-                self.xtwinops(param1, param2, param3);
-            }
-        }
-    }
-}
-
 impl Dump for Terminal {
     fn dump(&self) -> String {
         let (primary_ctx, alternate_ctx): (&SavedCtx, &SavedCtx) = match self.active_buffer_type {
@@ -1651,7 +1648,6 @@ mod tests {
     use super::Terminal;
     use crate::color::Color;
     use crate::ops::{Operation, Param};
-    use crate::parser::Executor;
     use crate::pen::Intensity;
     use rgb::RGB8;
     use Operation::*;

@@ -1,5 +1,4 @@
-use avt::ops::Operation;
-use avt::parser::{Executor, Parser};
+use avt::parser::Parser;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
 use std::fs;
 
@@ -21,28 +20,23 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-struct NoopExecutor;
-
-impl Executor for NoopExecutor {
-    fn execute(&mut self, _op: Operation) {}
-}
-
-fn setup(filename: &str) -> impl Fn() -> (Parser, String, NoopExecutor) {
+fn setup(filename: &str) -> impl Fn() -> (Parser, String) {
     let filename = filename.to_owned();
 
     move || {
         let parser = Parser::default();
         let text = sample_text(&filename);
-        let executor = NoopExecutor {};
 
-        (parser, text, executor)
+        (parser, text)
     }
 }
 
-fn run<E: Executor>((mut parser, text, mut executor): (Parser, String, E)) -> (Parser, String, E) {
-    parser.feed_str(&text, &mut executor);
+fn run((mut parser, text): (Parser, String)) -> (Parser, String) {
+    text.chars().for_each(|ch| {
+        parser.feed(ch);
+    });
 
-    (parser, text, executor)
+    (parser, text)
 }
 
 fn sample_text(filename: &str) -> String {

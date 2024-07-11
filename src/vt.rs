@@ -19,7 +19,10 @@ impl Vt {
     }
 
     pub fn feed_str(&mut self, s: &str) -> Changes {
-        self.parser.feed_str(s, &mut self.terminal);
+        s.chars()
+            .filter_map(|ch| self.parser.feed(ch))
+            .for_each(|op| self.terminal.execute(op));
+
         let (lines, resized) = self.terminal.changes();
         let scrollback = self.terminal.gc();
 
@@ -31,7 +34,9 @@ impl Vt {
     }
 
     pub fn feed(&mut self, input: char) {
-        self.parser.feed(input, &mut self.terminal);
+        if let Some(op) = self.parser.feed(input) {
+            self.terminal.execute(op);
+        }
     }
 
     pub fn size(&self) -> (usize, usize) {

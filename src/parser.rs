@@ -38,33 +38,17 @@ struct Params(Vec<Param>);
 #[derive(Debug, Default, PartialEq)]
 struct Intermediates(Vec<char>);
 
-pub trait Executor {
-    fn execute(&mut self, op: Operation);
-}
-
-impl Executor for Vec<Operation> {
-    fn execute(&mut self, op: Operation) {
-        self.push(op);
-    }
-}
-
 impl Parser {
     pub fn new() -> Self {
         Default::default()
     }
 
-    pub fn feed_str<S: AsRef<str>, E: Executor>(&mut self, input: S, executor: &mut E) {
-        for ch in input.as_ref().chars() {
-            self.feed(ch, executor);
-        }
-    }
-
-    pub fn feed<E: Executor>(&mut self, input: char, executor: &mut E) {
+    pub fn feed(&mut self, input: char) -> Option<Operation> {
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
             (State::Ground, '\u{20}'..='\u{7f}') => {
-                executor.execute(Operation::Print(input));
+                return Some(Operation::Print(input));
             }
 
             (State::CsiParam, '\u{30}'..='\u{3b}') => {
@@ -83,7 +67,7 @@ impl Parser {
 
             (State::CsiParam, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
-                self.csi_dispatch(input, executor);
+                return self.csi_dispatch(input);
             }
 
             (State::CsiEntry, '\u{30}'..='\u{39}') | (State::CsiEntry, '\u{3b}') => {
@@ -94,12 +78,12 @@ impl Parser {
             (State::Ground, '\u{00}'..='\u{17}')
             | (State::Ground, '\u{19}')
             | (State::Ground, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::CsiEntry, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
-                self.csi_dispatch(input, executor);
+                return self.csi_dispatch(input);
             }
 
             (State::OscString, '\u{20}'..='\u{7f}') => {
@@ -113,7 +97,7 @@ impl Parser {
 
             (State::EscapeIntermediate, '\u{30}'..='\u{7e}') => {
                 self.state = State::Ground;
-                self.esc_dispatch(input, executor);
+                return self.esc_dispatch(input);
             }
 
             (State::CsiEntry, '\u{3c}'..='\u{3f}') => {
@@ -140,7 +124,7 @@ impl Parser {
             | (State::Escape, '\u{5c}')
             | (State::Escape, '\u{60}'..='\u{7e}') => {
                 self.state = State::Ground;
-                self.esc_dispatch(input, executor);
+                return self.esc_dispatch(input);
             }
 
             (State::Escape, '\u{5d}') => {
@@ -159,7 +143,7 @@ impl Parser {
             | (_, '\u{99}')
             | (_, '\u{9a}') => {
                 self.state = State::Ground;
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::Escape, '\u{50}') => {
@@ -174,7 +158,7 @@ impl Parser {
 
             (State::CsiIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = State::Ground;
-                self.csi_dispatch(input, executor);
+                return self.csi_dispatch(input);
             }
 
             (State::DcsParam, '\u{30}'..='\u{39}') | (State::DcsParam, '\u{3b}') => {
@@ -193,13 +177,13 @@ impl Parser {
             (State::CsiParam, '\u{00}'..='\u{17}')
             | (State::CsiParam, '\u{19}')
             | (State::CsiParam, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::Escape, '\u{00}'..='\u{17}')
             | (State::Escape, '\u{19}')
             | (State::Escape, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::DcsEntry, '\u{20}'..='\u{2f}') => {
@@ -220,7 +204,7 @@ impl Parser {
             (State::CsiEntry, '\u{00}'..='\u{17}')
             | (State::CsiEntry, '\u{19}')
             | (State::CsiEntry, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::DcsEntry, '\u{40}'..='\u{7e}') => {
@@ -247,7 +231,7 @@ impl Parser {
             (State::EscapeIntermediate, '\u{00}'..='\u{17}')
             | (State::EscapeIntermediate, '\u{19}')
             | (State::EscapeIntermediate, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::Escape, '\u{58}') | (State::Escape, '\u{5e}') | (State::Escape, '\u{5f}') => {
@@ -288,7 +272,7 @@ impl Parser {
             (State::CsiIntermediate, '\u{00}'..='\u{17}')
             | (State::CsiIntermediate, '\u{19}')
             | (State::CsiIntermediate, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::DcsEntry, '\u{3a}') => {
@@ -302,7 +286,7 @@ impl Parser {
             (State::CsiIgnore, '\u{00}'..='\u{17}')
             | (State::CsiIgnore, '\u{19}')
             | (State::CsiIgnore, '\u{1c}'..='\u{1f}') => {
-                self.execute(input, executor);
+                return self.execute(input);
             }
 
             (State::DcsParam, '\u{20}'..='\u{2f}') => {
@@ -320,61 +304,27 @@ impl Parser {
 
             _ => {}
         }
+
+        None
     }
 
-    fn execute<E: Executor>(&mut self, input: char, executor: &mut E) {
+    fn execute(&mut self, input: char) -> Option<Operation> {
         use Operation::*;
 
         match input {
-            '\u{08}' => {
-                executor.execute(Bs);
-            }
-
-            '\u{09}' => {
-                executor.execute(Ht);
-            }
-
-            '\u{0a}' => {
-                executor.execute(Lf);
-            }
-
-            '\u{0b}' => {
-                executor.execute(Lf);
-            }
-
-            '\u{0c}' => {
-                executor.execute(Lf);
-            }
-
-            '\u{0d}' => {
-                executor.execute(Cr);
-            }
-
-            '\u{0e}' => {
-                executor.execute(So);
-            }
-
-            '\u{0f}' => {
-                executor.execute(Si);
-            }
-
-            '\u{84}' => {
-                executor.execute(Lf);
-            }
-
-            '\u{85}' => {
-                executor.execute(Nel);
-            }
-
-            '\u{88}' => {
-                executor.execute(Hts);
-            }
-
-            '\u{8d}' => {
-                executor.execute(Ri);
-            }
-
-            _ => {}
+            '\u{08}' => Some(Bs),
+            '\u{09}' => Some(Ht),
+            '\u{0a}' => Some(Lf),
+            '\u{0b}' => Some(Lf),
+            '\u{0c}' => Some(Lf),
+            '\u{0d}' => Some(Cr),
+            '\u{0e}' => Some(So),
+            '\u{0f}' => Some(Si),
+            '\u{84}' => Some(Lf),
+            '\u{85}' => Some(Nel),
+            '\u{88}' => Some(Hts),
+            '\u{8d}' => Some(Ri),
+            _ => None,
         }
     }
 
@@ -391,210 +341,128 @@ impl Parser {
         self.params.push(input);
     }
 
-    fn esc_dispatch<E: Executor>(&mut self, input: char, executor: &mut E) {
+    fn esc_dispatch(&mut self, input: char) -> Option<Operation> {
         use Operation::*;
 
         match (self.intermediates.0.first(), input) {
-            (None, c) if ('@'..='_').contains(&c) => {
-                self.execute(((input as u8) + 0x40) as char, executor)
-            }
+            (None, c) if ('@'..='_').contains(&c) => self.execute(((input as u8) + 0x40) as char),
 
-            (None, '7') => {
-                executor.execute(Sc);
-            }
+            (None, '7') => Some(Sc),
 
-            (None, '8') => {
-                executor.execute(Rc);
-            }
+            (None, '8') => Some(Rc),
 
             (None, 'c') => {
                 self.state = State::Ground;
-                executor.execute(Ris);
+                Some(Ris)
             }
 
-            (Some('#'), '8') => {
-                executor.execute(Decaln);
-            }
+            (Some('#'), '8') => Some(Decaln),
 
-            (Some('('), '0') => {
-                executor.execute(Gzd4(Charset::Drawing));
-            }
+            (Some('('), '0') => Some(Gzd4(Charset::Drawing)),
 
-            (Some('('), _) => {
-                executor.execute(Gzd4(Charset::Ascii));
-            }
+            (Some('('), _) => Some(Gzd4(Charset::Ascii)),
 
-            (Some(')'), '0') => {
-                executor.execute(G1d4(Charset::Drawing));
-            }
+            (Some(')'), '0') => Some(G1d4(Charset::Drawing)),
 
-            (Some(')'), _) => {
-                executor.execute(G1d4(Charset::Ascii));
-            }
+            (Some(')'), _) => Some(G1d4(Charset::Ascii)),
 
-            _ => {}
+            _ => None,
         }
     }
 
-    fn csi_dispatch<E: Executor>(&mut self, input: char, executor: &mut E) {
+    fn csi_dispatch(&mut self, input: char) -> Option<Operation> {
         use Operation::*;
 
         let ps = &mut self.params;
 
         match (self.intermediates.0.first(), input) {
-            (None, '@') => {
-                executor.execute(Ich(ps.drain().next()));
-            }
+            (None, '@') => Some(Ich(ps.drain().next())),
 
-            (None, 'A') => {
-                executor.execute(Cuu(ps.drain().next()));
-            }
+            (None, 'A') => Some(Cuu(ps.drain().next())),
 
-            (None, 'B') => {
-                executor.execute(Cud(ps.drain().next()));
-            }
+            (None, 'B') => Some(Cud(ps.drain().next())),
 
-            (None, 'C') => {
-                executor.execute(Cuf(ps.drain().next()));
-            }
+            (None, 'C') => Some(Cuf(ps.drain().next())),
 
-            (None, 'D') => {
-                executor.execute(Cub(ps.drain().next()));
-            }
+            (None, 'D') => Some(Cub(ps.drain().next())),
 
-            (None, 'E') => {
-                executor.execute(Cnl(ps.drain().next()));
-            }
+            (None, 'E') => Some(Cnl(ps.drain().next())),
 
-            (None, 'F') => {
-                executor.execute(Cpl(ps.drain().next()));
-            }
+            (None, 'F') => Some(Cpl(ps.drain().next())),
 
-            (None, 'G') => {
-                executor.execute(Cha(ps.drain().next()));
-            }
+            (None, 'G') => Some(Cha(ps.drain().next())),
 
             (None, 'H') => {
                 let mut ps = ps.drain();
-                executor.execute(Cup(ps.next(), ps.next()));
+                Some(Cup(ps.next(), ps.next()))
             }
 
-            (None, 'I') => {
-                executor.execute(Cht(ps.drain().next()));
-            }
+            (None, 'I') => Some(Cht(ps.drain().next())),
 
-            (None, 'J') => {
-                executor.execute(Ed(ps.drain().next()));
-            }
+            (None, 'J') => Some(Ed(ps.drain().next())),
 
-            (None, 'K') => {
-                executor.execute(El(ps.drain().next()));
-            }
+            (None, 'K') => Some(El(ps.drain().next())),
 
-            (None, 'L') => {
-                executor.execute(Il(ps.drain().next()));
-            }
+            (None, 'L') => Some(Il(ps.drain().next())),
 
-            (None, 'M') => {
-                executor.execute(Dl(ps.drain().next()));
-            }
+            (None, 'M') => Some(Dl(ps.drain().next())),
 
-            (None, 'P') => {
-                executor.execute(Dch(ps.drain().next()));
-            }
+            (None, 'P') => Some(Dch(ps.drain().next())),
 
-            (None, 'S') => {
-                executor.execute(Su(ps.drain().next()));
-            }
+            (None, 'S') => Some(Su(ps.drain().next())),
 
-            (None, 'T') => {
-                executor.execute(Sd(ps.drain().next()));
-            }
+            (None, 'T') => Some(Sd(ps.drain().next())),
 
-            (None, 'W') => {
-                executor.execute(Ctc(ps.drain().next()));
-            }
+            (None, 'W') => Some(Ctc(ps.drain().next())),
 
-            (None, 'X') => {
-                executor.execute(Ech(ps.drain().next()));
-            }
+            (None, 'X') => Some(Ech(ps.drain().next())),
 
-            (None, 'Z') => {
-                executor.execute(Cbt(ps.drain().next()));
-            }
+            (None, 'Z') => Some(Cbt(ps.drain().next())),
 
-            (None, '`') => {
-                executor.execute(Cha(ps.drain().next()));
-            }
+            (None, '`') => Some(Cha(ps.drain().next())),
 
-            (None, 'a') => {
-                executor.execute(Cuf(ps.drain().next()));
-            }
+            (None, 'a') => Some(Cuf(ps.drain().next())),
 
-            (None, 'b') => {
-                executor.execute(Rep(ps.drain().next()));
-            }
+            (None, 'b') => Some(Rep(ps.drain().next())),
 
-            (None, 'd') => {
-                executor.execute(Vpa(ps.drain().next()));
-            }
+            (None, 'd') => Some(Vpa(ps.drain().next())),
 
-            (None, 'e') => {
-                executor.execute(Vpr(ps.drain().next()));
-            }
+            (None, 'e') => Some(Vpr(ps.drain().next())),
 
             (None, 'f') => {
                 let mut ps = ps.drain();
-                executor.execute(Cup(ps.next(), ps.next()));
+                Some(Cup(ps.next(), ps.next()))
             }
 
-            (None, 'g') => {
-                executor.execute(Tbc(ps.drain().next()));
-            }
+            (None, 'g') => Some(Tbc(ps.drain().next())),
 
-            (None, 'h') => {
-                executor.execute(Sm(ps.take()));
-            }
+            (None, 'h') => Some(Sm(ps.take())),
 
-            (None, 'l') => {
-                executor.execute(Rm(ps.take()));
-            }
+            (None, 'l') => Some(Rm(ps.take())),
 
-            (None, 'm') => {
-                executor.execute(Sgr(ps.take()));
-            }
+            (None, 'm') => Some(Sgr(ps.take())),
 
             (None, 'r') => {
                 let mut ps = ps.drain();
-                executor.execute(Decstbm(ps.next(), ps.next()));
+                Some(Decstbm(ps.next(), ps.next()))
             }
 
-            (None, 's') => {
-                executor.execute(Sc);
-            }
+            (None, 's') => Some(Sc),
 
             (None, 't') => {
                 let mut ps = ps.drain();
-                executor.execute(Xtwinops(ps.next(), ps.next(), ps.next()));
+                Some(Xtwinops(ps.next(), ps.next(), ps.next()))
             }
 
-            (None, 'u') => {
-                executor.execute(Rc);
-            }
+            (None, 'u') => Some(Rc),
 
-            (Some('!'), 'p') => {
-                executor.execute(Decstr);
-            }
+            (Some('!'), 'p') => Some(Decstr),
 
-            (Some('?'), 'h') => {
-                executor.execute(PrvSm(ps.take()));
-            }
+            (Some('?'), 'h') => Some(PrvSm(ps.take())),
 
-            (Some('?'), 'l') => {
-                executor.execute(PrvRm(ps.take()));
-            }
+            (Some('?'), 'l') => Some(PrvRm(ps.take())),
 
-            _ => {}
+            _ => None,
         }
     }
 
@@ -762,15 +630,18 @@ mod tests {
     #[test]
     fn sgr() {
         let mut parser = Parser::new();
-        let mut ops = Vec::new();
 
-        parser.feed_str("\x1b[;1;;23;456;m", &mut ops);
+        let ops = "\x1b[;1;;23;456;m"
+            .chars()
+            .filter_map(|ch| parser.feed(ch))
+            .collect::<Vec<_>>();
 
         assert_eq!(ops, vec![Sgr(ps(&[0, 1, 0, 23, 456, 0]))]);
 
-        ops.clear();
-
-        parser.feed_str("\x1b[;1;;38:2:1:2:3;m", &mut ops);
+        let ops = "\x1b[;1;;38:2:1:2:3;m"
+            .chars()
+            .filter_map(|ch| parser.feed(ch))
+            .collect::<Vec<_>>();
 
         assert_eq!(
             ops,
@@ -781,9 +652,10 @@ mod tests {
     #[test]
     fn dump() {
         let mut parser = Parser::new();
-        let mut ops = Vec::new();
 
-        parser.feed_str("\x1b[;1;;38:2:1:2:3;", &mut ops);
+        for ch in "\x1b[;1;;38:2:1:2:3;".chars() {
+            parser.feed(ch);
+        }
 
         assert_eq!(parser.dump(), "\u{9b}0;1;0;38:2:1:2:3;0");
     }
