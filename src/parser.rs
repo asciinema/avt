@@ -537,9 +537,11 @@ impl Dump for Parser {
         let mut seq = String::new();
 
         match self.state {
-            Ground => (),
+            Ground => {}
 
-            Escape => seq.push('\u{1b}'),
+            Escape => {
+                seq.push('\u{1b}');
+            }
 
             EscapeIntermediate => {
                 let intermediates = self.intermediates.0.iter().collect::<String>();
@@ -547,7 +549,9 @@ impl Dump for Parser {
                 seq.push_str(&s);
             }
 
-            CsiEntry => seq.push('\u{9b}'),
+            CsiEntry => {
+                seq.push('\u{9b}');
+            }
 
             CsiParam => {
                 let intermediates = self.intermediates.0.iter().collect::<String>();
@@ -569,9 +573,13 @@ impl Dump for Parser {
                 seq.push_str(s);
             }
 
-            CsiIgnore => seq.push_str("\u{9b}\u{3a}"),
+            CsiIgnore => {
+                seq.push_str("\u{9b}\u{3a}");
+            }
 
-            DcsEntry => seq.push('\u{90}'),
+            DcsEntry => {
+                seq.push('\u{90}');
+            }
 
             DcsIntermediate => {
                 let intermediates = self.intermediates.0.iter().collect::<String>();
@@ -599,11 +607,17 @@ impl Dump for Parser {
                 seq.push_str(s);
             }
 
-            DcsIgnore => seq.push_str("\u{90}\u{3a}"),
+            DcsIgnore => {
+                seq.push_str("\u{90}\u{3a}");
+            }
 
-            OscString => seq.push('\u{9d}'),
+            OscString => {
+                seq.push('\u{9d}');
+            }
 
-            SosPmApcString => seq.push('\u{98}'),
+            SosPmApcString => {
+                seq.push('\u{98}');
+            }
         }
 
         seq
