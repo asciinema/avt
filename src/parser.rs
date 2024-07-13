@@ -4,13 +4,15 @@
 use crate::charset::Charset;
 use crate::dump::Dump;
 use crate::ops::{Operation, Param};
-use std::mem;
+
+const PARAMS_LEN: usize = 32;
 
 #[derive(Debug, Default)]
 pub struct Parser {
     pub state: State,
-    params: Params,
-    intermediates: Intermediates,
+    params: [Param; PARAMS_LEN],
+    cur_param: usize,
+    intermediates: Vec<char>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -31,12 +33,6 @@ pub enum State {
     OscString,
     SosPmApcString,
 }
-
-#[derive(Debug, PartialEq)]
-struct Params(Vec<Param>);
-
-#[derive(Debug, Default, PartialEq)]
-struct Intermediates(Vec<char>);
 
 impl Parser {
     pub fn new() -> Self {
@@ -327,22 +323,37 @@ impl Parser {
     }
 
     fn clear(&mut self) {
-        self.params = Params::default();
-        self.intermediates = Intermediates::default();
+        for p in &mut self.params[..=self.cur_param] {
+            p.clear();
+        }
+
+        self.cur_param = 0;
+
+        self.intermediates.clear();
     }
 
     fn collect(&mut self, input: char) {
-        self.intermediates.0.push(input);
+        self.intermediates.push(input);
     }
 
     fn param(&mut self, input: char) {
-        self.params.push(input);
+        if input == ';' {
+            self.cur_param += 1;
+
+            if self.cur_param == PARAMS_LEN {
+                self.cur_param = PARAMS_LEN - 1;
+            }
+        } else if input == ':' {
+            self.params[self.cur_param].add_part();
+        } else {
+            self.params[self.cur_param].add_digit((input as u8) - 0x30);
+        }
     }
 
     fn esc_dispatch(&mut self, input: char) -> Option<Operation> {
         use Operation::*;
 
-        match (self.intermediates.0.first(), input) {
+        match (self.intermediates.first(), input) {
             (None, c) if ('@'..='_').contains(&c) => self.execute(((input as u8) + 0x40) as char),
 
             (None, '7') => Some(Sc),
@@ -371,94 +382,82 @@ impl Parser {
     fn csi_dispatch(&mut self, input: char) -> Option<Operation> {
         use Operation::*;
 
-        let ps = &mut self.params;
+        let ps = &self.params;
 
-        match (self.intermediates.0.first(), input) {
-            (None, '@') => Some(Ich(ps.drain().next())),
+        match (self.intermediates.first(), input) {
+            (None, '@') => Some(Ich(ps[0])),
 
-            (None, 'A') => Some(Cuu(ps.drain().next())),
+            (None, 'A') => Some(Cuu(ps[0])),
 
-            (None, 'B') => Some(Cud(ps.drain().next())),
+            (None, 'B') => Some(Cud(ps[0])),
 
-            (None, 'C') => Some(Cuf(ps.drain().next())),
+            (None, 'C') => Some(Cuf(ps[0])),
 
-            (None, 'D') => Some(Cub(ps.drain().next())),
+            (None, 'D') => Some(Cub(ps[0])),
 
-            (None, 'E') => Some(Cnl(ps.drain().next())),
+            (None, 'E') => Some(Cnl(ps[0])),
 
-            (None, 'F') => Some(Cpl(ps.drain().next())),
+            (None, 'F') => Some(Cpl(ps[0])),
 
-            (None, 'G') => Some(Cha(ps.drain().next())),
+            (None, 'G') => Some(Cha(ps[0])),
 
-            (None, 'H') => {
-                let mut ps = ps.drain();
-                Some(Cup(ps.next(), ps.next()))
-            }
+            (None, 'H') => Some(Cup(ps[0], ps[1])),
 
-            (None, 'I') => Some(Cht(ps.drain().next())),
+            (None, 'I') => Some(Cht(ps[0])),
 
-            (None, 'J') => Some(Ed(ps.drain().next())),
+            (None, 'J') => Some(Ed(ps[0])),
 
-            (None, 'K') => Some(El(ps.drain().next())),
+            (None, 'K') => Some(El(ps[0])),
 
-            (None, 'L') => Some(Il(ps.drain().next())),
+            (None, 'L') => Some(Il(ps[0])),
 
-            (None, 'M') => Some(Dl(ps.drain().next())),
+            (None, 'M') => Some(Dl(ps[0])),
 
-            (None, 'P') => Some(Dch(ps.drain().next())),
+            (None, 'P') => Some(Dch(ps[0])),
 
-            (None, 'S') => Some(Su(ps.drain().next())),
+            (None, 'S') => Some(Su(ps[0])),
 
-            (None, 'T') => Some(Sd(ps.drain().next())),
+            (None, 'T') => Some(Sd(ps[0])),
 
-            (None, 'W') => Some(Ctc(ps.drain().next())),
+            (None, 'W') => Some(Ctc(ps[0])),
 
-            (None, 'X') => Some(Ech(ps.drain().next())),
+            (None, 'X') => Some(Ech(ps[0])),
 
-            (None, 'Z') => Some(Cbt(ps.drain().next())),
+            (None, 'Z') => Some(Cbt(ps[0])),
 
-            (None, '`') => Some(Cha(ps.drain().next())),
+            (None, '`') => Some(Cha(ps[0])),
 
-            (None, 'a') => Some(Cuf(ps.drain().next())),
+            (None, 'a') => Some(Cuf(ps[0])),
 
-            (None, 'b') => Some(Rep(ps.drain().next())),
+            (None, 'b') => Some(Rep(ps[0])),
 
-            (None, 'd') => Some(Vpa(ps.drain().next())),
+            (None, 'd') => Some(Vpa(ps[0])),
 
-            (None, 'e') => Some(Vpr(ps.drain().next())),
+            (None, 'e') => Some(Vpr(ps[0])),
 
-            (None, 'f') => {
-                let mut ps = ps.drain();
-                Some(Cup(ps.next(), ps.next()))
-            }
+            (None, 'f') => Some(Cup(ps[0], ps[1])),
 
-            (None, 'g') => Some(Tbc(ps.drain().next())),
+            (None, 'g') => Some(Tbc(ps[0])),
 
-            (None, 'h') => Some(Sm(ps.take())),
+            (None, 'h') => Some(Sm(ps[..=self.cur_param].to_vec())),
 
-            (None, 'l') => Some(Rm(ps.take())),
+            (None, 'l') => Some(Rm(ps[..=self.cur_param].to_vec())),
 
-            (None, 'm') => Some(Sgr(ps.take())),
+            (None, 'm') => Some(Sgr(ps[..=self.cur_param].to_vec())),
 
-            (None, 'r') => {
-                let mut ps = ps.drain();
-                Some(Decstbm(ps.next(), ps.next()))
-            }
+            (None, 'r') => Some(Decstbm(ps[0], ps[1])),
 
             (None, 's') => Some(Sc),
 
-            (None, 't') => {
-                let mut ps = ps.drain();
-                Some(Xtwinops(ps.next(), ps.next(), ps.next()))
-            }
+            (None, 't') => Some(Xtwinops(ps[0], ps[1], ps[2])),
 
             (None, 'u') => Some(Rc),
 
             (Some('!'), 'p') => Some(Decstr),
 
-            (Some('?'), 'h') => Some(PrvSm(ps.take())),
+            (Some('?'), 'h') => Some(PrvSm(ps[..=self.cur_param].to_vec())),
 
-            (Some('?'), 'l') => Some(PrvRm(ps.take())),
+            (Some('?'), 'l') => Some(PrvRm(ps[..=self.cur_param].to_vec())),
 
             _ => None,
         }
@@ -489,47 +488,6 @@ impl Parser {
     }
 }
 
-impl Params {
-    fn push(&mut self, input: char) {
-        if input == ';' {
-            self.0.push(Param::default());
-        } else if input == ':' {
-            let last_idx = self.0.len() - 1;
-            self.0[last_idx].add_part();
-        } else {
-            let last_idx = self.0.len() - 1;
-            self.0[last_idx].add_digit((input as u8) - 0x30);
-        }
-    }
-
-    fn iter(&self) -> std::slice::Iter<Param> {
-        self.0.iter()
-    }
-
-    fn drain(&mut self) -> impl Iterator<Item = Param> + '_ {
-        self.0.drain(..)
-    }
-
-    fn take(&mut self) -> Vec<Param> {
-        mem::take(&mut self.0)
-    }
-}
-
-impl Default for Params {
-    fn default() -> Self {
-        let mut params = Vec::with_capacity(8);
-        params.push(Param::default());
-
-        Self(params)
-    }
-}
-
-impl From<Vec<Param>> for Params {
-    fn from(values: Vec<Param>) -> Self {
-        Self(values)
-    }
-}
-
 impl Dump for Parser {
     fn dump(&self) -> String {
         use State::*;
@@ -544,7 +502,7 @@ impl Dump for Parser {
             }
 
             EscapeIntermediate => {
-                let intermediates = self.intermediates.0.iter().collect::<String>();
+                let intermediates = self.intermediates.iter().collect::<String>();
                 let s = format!("\u{1b}{intermediates}");
                 seq.push_str(&s);
             }
@@ -554,10 +512,9 @@ impl Dump for Parser {
             }
 
             CsiParam => {
-                let intermediates = self.intermediates.0.iter().collect::<String>();
+                let intermediates = self.intermediates.iter().collect::<String>();
 
-                let params = self
-                    .params
+                let params = &self.params[..=self.cur_param]
                     .iter()
                     .map(|param| param.to_string())
                     .collect::<Vec<_>>()
@@ -568,7 +525,7 @@ impl Dump for Parser {
             }
 
             CsiIntermediate => {
-                let intermediates = self.intermediates.0.iter().collect::<String>();
+                let intermediates = self.intermediates.iter().collect::<String>();
                 let s = &format!("\u{9b}{intermediates}");
                 seq.push_str(s);
             }
@@ -582,16 +539,15 @@ impl Dump for Parser {
             }
 
             DcsIntermediate => {
-                let intermediates = self.intermediates.0.iter().collect::<String>();
+                let intermediates = self.intermediates.iter().collect::<String>();
                 let s = &format!("\u{90}{intermediates}");
                 seq.push_str(s);
             }
 
             DcsParam => {
-                let intermediates = self.intermediates.0.iter().collect::<String>();
+                let intermediates = self.intermediates.iter().collect::<String>();
 
-                let params = self
-                    .params
+                let params = &self.params[..=self.cur_param]
                     .iter()
                     .map(|param| param.to_string())
                     .collect::<Vec<_>>()
@@ -602,7 +558,7 @@ impl Dump for Parser {
             }
 
             DcsPassthrough => {
-                let intermediates = self.intermediates.0.iter().collect::<String>();
+                let intermediates = self.intermediates.iter().collect::<String>();
                 let s = &format!("\u{90}{intermediates}\u{40}");
                 seq.push_str(s);
             }

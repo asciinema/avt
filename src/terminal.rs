@@ -767,30 +767,30 @@ impl Terminal {
         self.charsets[1] = charset;
     }
 
-    fn ich(&mut self, param: Option<Param>) {
+    fn ich(&mut self, param: Param) {
         self.buffer.insert(
             (self.cursor.col, self.cursor.row),
-            as_usize_or(param, 1),
+            param.as_usize_or(1),
             Cell::blank(self.pen),
         );
 
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn cuu(&mut self, param: Option<Param>) {
-        self.cursor_up(as_usize_or(param, 1));
+    fn cuu(&mut self, param: Param) {
+        self.cursor_up(param.as_usize_or(1));
     }
 
-    fn cud(&mut self, param: Option<Param>) {
-        self.cursor_down(as_usize_or(param, 1));
+    fn cud(&mut self, param: Param) {
+        self.cursor_down(param.as_usize_or(1));
     }
 
-    fn cuf(&mut self, param: Option<Param>) {
-        self.move_cursor_to_rel_col(as_usize_or(param, 1) as isize);
+    fn cuf(&mut self, param: Param) {
+        self.move_cursor_to_rel_col(param.as_usize_or(1) as isize);
     }
 
-    fn cub(&mut self, param: Option<Param>) {
-        let mut rel_col = -(as_usize_or(param, 1) as isize);
+    fn cub(&mut self, param: Param) {
+        let mut rel_col = -(param.as_usize_or(1) as isize);
 
         if self.next_print_wraps {
             rel_col -= 1;
@@ -799,33 +799,33 @@ impl Terminal {
         self.move_cursor_to_rel_col(rel_col);
     }
 
-    fn cnl(&mut self, param: Option<Param>) {
-        self.cursor_down(as_usize_or(param, 1));
+    fn cnl(&mut self, param: Param) {
+        self.cursor_down(param.as_usize_or(1));
         self.do_move_cursor_to_col(0);
     }
 
-    fn cpl(&mut self, param: Option<Param>) {
-        self.cursor_up(as_usize_or(param, 1));
+    fn cpl(&mut self, param: Param) {
+        self.cursor_up(param.as_usize_or(1));
         self.do_move_cursor_to_col(0);
     }
 
-    fn cha(&mut self, param: Option<Param>) {
-        self.move_cursor_to_col(as_usize_or(param, 1) - 1);
+    fn cha(&mut self, param: Param) {
+        self.move_cursor_to_col(param.as_usize_or(1) - 1);
     }
 
-    fn cup(&mut self, param1: Option<Param>, param2: Option<Param>) {
-        self.move_cursor_to_col(as_usize_or(param2, 1) - 1);
-        self.move_cursor_to_row(as_usize_or(param1, 1) - 1);
+    fn cup(&mut self, param1: Param, param2: Param) {
+        self.move_cursor_to_col(param2.as_usize_or(1) - 1);
+        self.move_cursor_to_row(param1.as_usize_or(1) - 1);
     }
 
-    fn cht(&mut self, param: Option<Param>) {
-        self.move_cursor_to_next_tab(as_usize_or(param, 1));
+    fn cht(&mut self, param: Param) {
+        self.move_cursor_to_next_tab(param.as_usize_or(1));
     }
 
-    fn ed(&mut self, param: Option<Param>) {
+    fn ed(&mut self, param: Param) {
         use EraseMode::*;
 
-        match as_usize_or(param, 0) {
+        match param.as_usize_or(0) {
             0 => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
@@ -857,10 +857,10 @@ impl Terminal {
         }
     }
 
-    fn el(&mut self, param: Option<Param>) {
+    fn el(&mut self, param: Param) {
         use EraseMode::*;
 
-        match as_usize_or(param, 0) {
+        match param.as_usize_or(0) {
             0 => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
@@ -892,7 +892,7 @@ impl Terminal {
         }
     }
 
-    fn il(&mut self, param: Option<Param>) {
+    fn il(&mut self, param: Param) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -900,12 +900,12 @@ impl Terminal {
         };
 
         self.buffer
-            .scroll_down(range.clone(), as_usize_or(param, 1), &self.pen);
+            .scroll_down(range.clone(), param.as_usize_or(1), &self.pen);
 
         self.dirty_lines.extend(range);
     }
 
-    fn dl(&mut self, param: Option<Param>) {
+    fn dl(&mut self, param: Param) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -913,35 +913,35 @@ impl Terminal {
         };
 
         self.buffer
-            .scroll_up(range.clone(), as_usize_or(param, 1), &self.pen);
+            .scroll_up(range.clone(), param.as_usize_or(1), &self.pen);
 
         self.dirty_lines.extend(range);
     }
 
-    fn dch(&mut self, param: Option<Param>) {
+    fn dch(&mut self, param: Param) {
         if self.cursor.col >= self.cols {
             self.move_cursor_to_col(self.cols - 1);
         }
 
         self.buffer.delete(
             (self.cursor.col, self.cursor.row),
-            as_usize_or(param, 1),
+            param.as_usize_or(1),
             &self.pen,
         );
 
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn su(&mut self, param: Option<Param>) {
-        self.scroll_up_in_region(as_usize_or(param, 1));
+    fn su(&mut self, param: Param) {
+        self.scroll_up_in_region(param.as_usize_or(1));
     }
 
-    fn sd(&mut self, param: Option<Param>) {
-        self.scroll_down_in_region(as_usize_or(param, 1));
+    fn sd(&mut self, param: Param) {
+        self.scroll_down_in_region(param.as_usize_or(1));
     }
 
-    fn ctc(&mut self, param: Option<Param>) {
-        match as_usize_or(param, 0) {
+    fn ctc(&mut self, param: Param) {
+        match param.as_usize_or(0) {
             0 => {
                 self.set_tab();
             }
@@ -958,8 +958,8 @@ impl Terminal {
         }
     }
 
-    fn ech(&mut self, param: Option<Param>) {
-        let n = as_usize_or(param, 1);
+    fn ech(&mut self, param: Param) {
+        let n = param.as_usize_or(1);
 
         self.buffer.erase(
             (self.cursor.col, self.cursor.row),
@@ -970,13 +970,13 @@ impl Terminal {
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn cbt(&mut self, param: Option<Param>) {
-        self.move_cursor_to_prev_tab(as_usize_or(param, 1));
+    fn cbt(&mut self, param: Param) {
+        self.move_cursor_to_prev_tab(param.as_usize_or(1));
     }
 
-    fn rep(&mut self, param: Option<Param>) {
+    fn rep(&mut self, param: Param) {
         if self.cursor.col > 0 {
-            let n = as_usize_or(param, 1);
+            let n = param.as_usize_or(1);
             let char = self.buffer[(self.cursor.col - 1, self.cursor.row)].0;
 
             for _n in 0..n {
@@ -985,16 +985,16 @@ impl Terminal {
         }
     }
 
-    fn vpa(&mut self, param: Option<Param>) {
-        self.move_cursor_to_row(as_usize_or(param, 1) - 1);
+    fn vpa(&mut self, param: Param) {
+        self.move_cursor_to_row(param.as_usize_or(1) - 1);
     }
 
-    fn vpr(&mut self, param: Option<Param>) {
-        self.cursor_down(as_usize_or(param, 1));
+    fn vpr(&mut self, param: Param) {
+        self.cursor_down(param.as_usize_or(1));
     }
 
-    fn tbc(&mut self, param: Option<Param>) {
-        match as_usize_or(param, 0) {
+    fn tbc(&mut self, param: Param) {
+        match param.as_usize_or(0) {
             0 => {
                 self.clear_tab();
             }
@@ -1236,9 +1236,9 @@ impl Terminal {
         }
     }
 
-    fn decstbm(&mut self, param1: Option<Param>, param2: Option<Param>) {
-        let top = as_usize_or(param1, 1) - 1;
-        let bottom = as_usize_or(param2, self.rows) - 1;
+    fn decstbm(&mut self, param1: Param, param2: Param) {
+        let top = param1.as_usize_or(1) - 1;
+        let bottom = param2.as_usize_or(self.rows) - 1;
 
         if top < bottom && bottom < self.rows {
             self.top_margin = top;
@@ -1248,10 +1248,10 @@ impl Terminal {
         self.move_cursor_home();
     }
 
-    fn xtwinops(&mut self, param1: Option<Param>, param2: Option<Param>, param3: Option<Param>) {
-        if self.resizable && as_usize_or(param1, 0) == 8 {
-            let cols = as_usize_or(param3, self.cols);
-            let rows = as_usize_or(param2, self.rows);
+    fn xtwinops(&mut self, param1: Param, param2: Param, param3: Param) {
+        if self.resizable && param1.as_usize_or(0) == 8 {
+            let cols = param3.as_usize_or(self.cols);
+            let rows = param2.as_usize_or(self.rows);
 
             match cols.cmp(&self.cols) {
                 std::cmp::Ordering::Less => {
@@ -1381,16 +1381,6 @@ impl Terminal {
                 _ => {}
             }
         }
-    }
-}
-
-fn as_usize_or(param: Option<Param>, default: usize) -> usize {
-    let value = param.as_ref().map(|p| p.as_u16()).unwrap_or(0);
-
-    if value == 0 {
-        default
-    } else {
-        value as usize
     }
 }
 
@@ -1671,7 +1661,7 @@ mod tests {
     }
 
     fn xtwinops(params: [u16; 3]) -> Operation {
-        Xtwinops(Some(p(params[0])), Some(p(params[1])), Some(p(params[2])))
+        Xtwinops(p(params[0]), p(params[1]), p(params[2]))
     }
 
     #[test]
@@ -1811,7 +1801,7 @@ mod tests {
         let mut term = Terminal::new((20, 5), None, true);
 
         // move cursor to col 15
-        term.execute(Cuf(Some(p(15))));
+        term.execute(Cuf(p(15)));
 
         assert_eq!(term.cursor.col, 15);
 
