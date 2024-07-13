@@ -12,7 +12,7 @@ pub struct Parser {
     pub state: State,
     params: [Param; PARAMS_LEN],
     cur_param: usize,
-    intermediates: Vec<char>,
+    intermediate: Option<char>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -328,12 +328,11 @@ impl Parser {
         }
 
         self.cur_param = 0;
-
-        self.intermediates.clear();
+        self.intermediate = None;
     }
 
     fn collect(&mut self, input: char) {
-        self.intermediates.push(input);
+        self.intermediate = Some(input);
     }
 
     fn param(&mut self, input: char) {
@@ -353,7 +352,7 @@ impl Parser {
     fn esc_dispatch(&mut self, input: char) -> Option<Operation> {
         use Operation::*;
 
-        match (self.intermediates.first(), input) {
+        match (self.intermediate, input) {
             (None, c) if ('@'..='_').contains(&c) => self.execute(((input as u8) + 0x40) as char),
 
             (None, '7') => Some(Sc),
@@ -384,7 +383,7 @@ impl Parser {
 
         let ps = &self.params;
 
-        match (self.intermediates.first(), input) {
+        match (self.intermediate, input) {
             (None, '@') => Some(Ich(ps[0])),
 
             (None, 'A') => Some(Cuu(ps[0])),
@@ -483,7 +482,7 @@ impl Parser {
             || self.state == DcsIntermediate
             || self.state == DcsParam
         {
-            assert_eq!(self.intermediates, other.intermediates);
+            assert_eq!(self.intermediate, other.intermediate);
         }
     }
 }
@@ -502,7 +501,7 @@ impl Dump for Parser {
             }
 
             EscapeIntermediate => {
-                let intermediates = self.intermediates.iter().collect::<String>();
+                let intermediates = self.intermediate.iter().collect::<String>();
                 let s = format!("\u{1b}{intermediates}");
                 seq.push_str(&s);
             }
@@ -512,7 +511,7 @@ impl Dump for Parser {
             }
 
             CsiParam => {
-                let intermediates = self.intermediates.iter().collect::<String>();
+                let intermediates = self.intermediate.iter().collect::<String>();
 
                 let params = &self.params[..=self.cur_param]
                     .iter()
@@ -525,7 +524,7 @@ impl Dump for Parser {
             }
 
             CsiIntermediate => {
-                let intermediates = self.intermediates.iter().collect::<String>();
+                let intermediates = self.intermediate.iter().collect::<String>();
                 let s = &format!("\u{9b}{intermediates}");
                 seq.push_str(s);
             }
@@ -539,13 +538,13 @@ impl Dump for Parser {
             }
 
             DcsIntermediate => {
-                let intermediates = self.intermediates.iter().collect::<String>();
+                let intermediates = self.intermediate.iter().collect::<String>();
                 let s = &format!("\u{90}{intermediates}");
                 seq.push_str(s);
             }
 
             DcsParam => {
-                let intermediates = self.intermediates.iter().collect::<String>();
+                let intermediates = self.intermediate.iter().collect::<String>();
 
                 let params = &self.params[..=self.cur_param]
                     .iter()
@@ -558,7 +557,7 @@ impl Dump for Parser {
             }
 
             DcsPassthrough => {
-                let intermediates = self.intermediates.iter().collect::<String>();
+                let intermediates = self.intermediate.iter().collect::<String>();
                 let s = &format!("\u{90}{intermediates}\u{40}");
                 seq.push_str(s);
             }
