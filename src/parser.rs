@@ -384,79 +384,89 @@ impl Parser {
         let ps = &self.params;
 
         match (self.intermediate, input) {
-            (None, '@') => Some(Ich(ps[0])),
+            (None, '@') => Some(Ich(ps[0].as_u16())),
 
-            (None, 'A') => Some(Cuu(ps[0])),
+            (None, 'A') => Some(Cuu(ps[0].as_u16())),
 
-            (None, 'B') => Some(Cud(ps[0])),
+            (None, 'B') => Some(Cud(ps[0].as_u16())),
 
-            (None, 'C') => Some(Cuf(ps[0])),
+            (None, 'C') => Some(Cuf(ps[0].as_u16())),
 
-            (None, 'D') => Some(Cub(ps[0])),
+            (None, 'D') => Some(Cub(ps[0].as_u16())),
 
-            (None, 'E') => Some(Cnl(ps[0])),
+            (None, 'E') => Some(Cnl(ps[0].as_u16())),
 
-            (None, 'F') => Some(Cpl(ps[0])),
+            (None, 'F') => Some(Cpl(ps[0].as_u16())),
 
-            (None, 'G') => Some(Cha(ps[0])),
+            (None, 'G') => Some(Cha(ps[0].as_u16())),
 
-            (None, 'H') => Some(Cup(ps[0], ps[1])),
+            (None, 'H') => Some(Cup(ps[0].as_u16(), ps[1].as_u16())),
 
-            (None, 'I') => Some(Cht(ps[0])),
+            (None, 'I') => Some(Cht(ps[0].as_u16())),
 
-            (None, 'J') => Some(Ed(ps[0])),
+            (None, 'J') => Some(Ed(ps[0].as_u16())),
 
-            (None, 'K') => Some(El(ps[0])),
+            (None, 'K') => Some(El(ps[0].as_u16())),
 
-            (None, 'L') => Some(Il(ps[0])),
+            (None, 'L') => Some(Il(ps[0].as_u16())),
 
-            (None, 'M') => Some(Dl(ps[0])),
+            (None, 'M') => Some(Dl(ps[0].as_u16())),
 
-            (None, 'P') => Some(Dch(ps[0])),
+            (None, 'P') => Some(Dch(ps[0].as_u16())),
 
-            (None, 'S') => Some(Su(ps[0])),
+            (None, 'S') => Some(Su(ps[0].as_u16())),
 
-            (None, 'T') => Some(Sd(ps[0])),
+            (None, 'T') => Some(Sd(ps[0].as_u16())),
 
-            (None, 'W') => Some(Ctc(ps[0])),
+            (None, 'W') => Some(Ctc(ps[0].as_u16())),
 
-            (None, 'X') => Some(Ech(ps[0])),
+            (None, 'X') => Some(Ech(ps[0].as_u16())),
 
-            (None, 'Z') => Some(Cbt(ps[0])),
+            (None, 'Z') => Some(Cbt(ps[0].as_u16())),
 
-            (None, '`') => Some(Cha(ps[0])),
+            (None, '`') => Some(Cha(ps[0].as_u16())),
 
-            (None, 'a') => Some(Cuf(ps[0])),
+            (None, 'a') => Some(Cuf(ps[0].as_u16())),
 
-            (None, 'b') => Some(Rep(ps[0])),
+            (None, 'b') => Some(Rep(ps[0].as_u16())),
 
-            (None, 'd') => Some(Vpa(ps[0])),
+            (None, 'd') => Some(Vpa(ps[0].as_u16())),
 
-            (None, 'e') => Some(Vpr(ps[0])),
+            (None, 'e') => Some(Vpr(ps[0].as_u16())),
 
-            (None, 'f') => Some(Cup(ps[0], ps[1])),
+            (None, 'f') => Some(Cup(ps[0].as_u16(), ps[1].as_u16())),
 
-            (None, 'g') => Some(Tbc(ps[0])),
+            (None, 'g') => Some(Tbc(ps[0].as_u16())),
 
-            (None, 'h') => Some(Sm(ps[..=self.cur_param].to_vec())),
+            (None, 'h') => Some(Sm(ps[..=self.cur_param]
+                .iter()
+                .map(|p| p.as_u16())
+                .collect())),
 
-            (None, 'l') => Some(Rm(ps[..=self.cur_param].to_vec())),
+            (None, 'l') => Some(Rm(ps[..=self.cur_param]
+                .iter()
+                .map(|p| p.as_u16())
+                .collect())),
 
             (None, 'm') => Some(Sgr(ps[..=self.cur_param].to_vec())),
 
-            (None, 'r') => Some(Decstbm(ps[0], ps[1])),
+            (None, 'r') => Some(Decstbm(ps[0].as_u16(), ps[1].as_u16())),
 
             (None, 's') => Some(Sc),
 
-            (None, 't') => Some(Xtwinops(ps[0], ps[1], ps[2])),
+            (None, 't') => Some(Xtwinops(ps[0].as_u16(), ps[1].as_u16(), ps[2].as_u16())),
 
             (None, 'u') => Some(Rc),
 
             (Some('!'), 'p') => Some(Decstr),
 
-            (Some('?'), 'h') => Some(PrvSm(ps[..=self.cur_param].to_vec())),
+            (Some('?'), 'h') => Some(PrvSm(
+                ps[..=self.cur_param].iter().map(|p| p.as_u16()).collect(),
+            )),
 
-            (Some('?'), 'l') => Some(PrvRm(ps[..=self.cur_param].to_vec())),
+            (Some('?'), 'l') => Some(PrvRm(
+                ps[..=self.cur_param].iter().map(|p| p.as_u16()).collect(),
+            )),
 
             _ => None,
         }

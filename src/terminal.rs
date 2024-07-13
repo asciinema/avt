@@ -767,30 +767,30 @@ impl Terminal {
         self.charsets[1] = charset;
     }
 
-    fn ich(&mut self, param: Param) {
+    fn ich(&mut self, param: u16) {
         self.buffer.insert(
             (self.cursor.col, self.cursor.row),
-            param.as_usize_or(1),
+            as_usize(param, 1),
             Cell::blank(self.pen),
         );
 
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn cuu(&mut self, param: Param) {
-        self.cursor_up(param.as_usize_or(1));
+    fn cuu(&mut self, param: u16) {
+        self.cursor_up(as_usize(param, 1));
     }
 
-    fn cud(&mut self, param: Param) {
-        self.cursor_down(param.as_usize_or(1));
+    fn cud(&mut self, param: u16) {
+        self.cursor_down(as_usize(param, 1));
     }
 
-    fn cuf(&mut self, param: Param) {
-        self.move_cursor_to_rel_col(param.as_usize_or(1) as isize);
+    fn cuf(&mut self, param: u16) {
+        self.move_cursor_to_rel_col(as_usize(param, 1) as isize);
     }
 
-    fn cub(&mut self, param: Param) {
-        let mut rel_col = -(param.as_usize_or(1) as isize);
+    fn cub(&mut self, param: u16) {
+        let mut rel_col = -(as_usize(param, 1) as isize);
 
         if self.next_print_wraps {
             rel_col -= 1;
@@ -799,33 +799,33 @@ impl Terminal {
         self.move_cursor_to_rel_col(rel_col);
     }
 
-    fn cnl(&mut self, param: Param) {
-        self.cursor_down(param.as_usize_or(1));
+    fn cnl(&mut self, param: u16) {
+        self.cursor_down(as_usize(param, 1));
         self.do_move_cursor_to_col(0);
     }
 
-    fn cpl(&mut self, param: Param) {
-        self.cursor_up(param.as_usize_or(1));
+    fn cpl(&mut self, param: u16) {
+        self.cursor_up(as_usize(param, 1));
         self.do_move_cursor_to_col(0);
     }
 
-    fn cha(&mut self, param: Param) {
-        self.move_cursor_to_col(param.as_usize_or(1) - 1);
+    fn cha(&mut self, param: u16) {
+        self.move_cursor_to_col(as_usize(param, 1) - 1);
     }
 
-    fn cup(&mut self, param1: Param, param2: Param) {
-        self.move_cursor_to_col(param2.as_usize_or(1) - 1);
-        self.move_cursor_to_row(param1.as_usize_or(1) - 1);
+    fn cup(&mut self, param1: u16, param2: u16) {
+        self.move_cursor_to_col(as_usize(param2, 1) - 1);
+        self.move_cursor_to_row(as_usize(param1, 1) - 1);
     }
 
-    fn cht(&mut self, param: Param) {
-        self.move_cursor_to_next_tab(param.as_usize_or(1));
+    fn cht(&mut self, param: u16) {
+        self.move_cursor_to_next_tab(as_usize(param, 1));
     }
 
-    fn ed(&mut self, param: Param) {
+    fn ed(&mut self, param: u16) {
         use EraseMode::*;
 
-        match param.as_usize_or(0) {
+        match param {
             0 => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
@@ -857,10 +857,10 @@ impl Terminal {
         }
     }
 
-    fn el(&mut self, param: Param) {
+    fn el(&mut self, param: u16) {
         use EraseMode::*;
 
-        match param.as_usize_or(0) {
+        match param {
             0 => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
@@ -892,7 +892,7 @@ impl Terminal {
         }
     }
 
-    fn il(&mut self, param: Param) {
+    fn il(&mut self, param: u16) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -900,12 +900,12 @@ impl Terminal {
         };
 
         self.buffer
-            .scroll_down(range.clone(), param.as_usize_or(1), &self.pen);
+            .scroll_down(range.clone(), as_usize(param, 1), &self.pen);
 
         self.dirty_lines.extend(range);
     }
 
-    fn dl(&mut self, param: Param) {
+    fn dl(&mut self, param: u16) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -913,35 +913,35 @@ impl Terminal {
         };
 
         self.buffer
-            .scroll_up(range.clone(), param.as_usize_or(1), &self.pen);
+            .scroll_up(range.clone(), as_usize(param, 1), &self.pen);
 
         self.dirty_lines.extend(range);
     }
 
-    fn dch(&mut self, param: Param) {
+    fn dch(&mut self, param: u16) {
         if self.cursor.col >= self.cols {
             self.move_cursor_to_col(self.cols - 1);
         }
 
         self.buffer.delete(
             (self.cursor.col, self.cursor.row),
-            param.as_usize_or(1),
+            as_usize(param, 1),
             &self.pen,
         );
 
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn su(&mut self, param: Param) {
-        self.scroll_up_in_region(param.as_usize_or(1));
+    fn su(&mut self, param: u16) {
+        self.scroll_up_in_region(as_usize(param, 1));
     }
 
-    fn sd(&mut self, param: Param) {
-        self.scroll_down_in_region(param.as_usize_or(1));
+    fn sd(&mut self, param: u16) {
+        self.scroll_down_in_region(as_usize(param, 1));
     }
 
-    fn ctc(&mut self, param: Param) {
-        match param.as_usize_or(0) {
+    fn ctc(&mut self, param: u16) {
+        match param {
             0 => {
                 self.set_tab();
             }
@@ -958,8 +958,8 @@ impl Terminal {
         }
     }
 
-    fn ech(&mut self, param: Param) {
-        let n = param.as_usize_or(1);
+    fn ech(&mut self, param: u16) {
+        let n = as_usize(param, 1);
 
         self.buffer.erase(
             (self.cursor.col, self.cursor.row),
@@ -970,13 +970,13 @@ impl Terminal {
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn cbt(&mut self, param: Param) {
-        self.move_cursor_to_prev_tab(param.as_usize_or(1));
+    fn cbt(&mut self, param: u16) {
+        self.move_cursor_to_prev_tab(as_usize(param, 1));
     }
 
-    fn rep(&mut self, param: Param) {
+    fn rep(&mut self, param: u16) {
         if self.cursor.col > 0 {
-            let n = param.as_usize_or(1);
+            let n = as_usize(param, 1);
             let char = self.buffer[(self.cursor.col - 1, self.cursor.row)].0;
 
             for _n in 0..n {
@@ -985,16 +985,16 @@ impl Terminal {
         }
     }
 
-    fn vpa(&mut self, param: Param) {
-        self.move_cursor_to_row(param.as_usize_or(1) - 1);
+    fn vpa(&mut self, param: u16) {
+        self.move_cursor_to_row(as_usize(param, 1) - 1);
     }
 
-    fn vpr(&mut self, param: Param) {
-        self.cursor_down(param.as_usize_or(1));
+    fn vpr(&mut self, param: u16) {
+        self.cursor_down(as_usize(param, 1));
     }
 
-    fn tbc(&mut self, param: Param) {
-        match param.as_usize_or(0) {
+    fn tbc(&mut self, param: u16) {
+        match param {
             0 => {
                 self.clear_tab();
             }
@@ -1007,14 +1007,14 @@ impl Terminal {
         }
     }
 
-    fn sm(&mut self, params: Vec<Param>) {
-        for param in params.iter() {
-            match param.parts() {
-                [4] => {
+    fn sm(&mut self, params: Vec<u16>) {
+        for param in params {
+            match param {
+                4 => {
                     self.insert_mode = true;
                 }
 
-                [20] => {
+                20 => {
                     self.new_line_mode = true;
                 }
 
@@ -1023,14 +1023,14 @@ impl Terminal {
         }
     }
 
-    fn rm(&mut self, params: Vec<Param>) {
-        for param in params.iter() {
-            match param.parts() {
-                [4] => {
+    fn rm(&mut self, params: Vec<u16>) {
+        for param in params {
+            match param {
+                4 => {
                     self.insert_mode = false;
                 }
 
-                [20] => {
+                20 => {
                     self.new_line_mode = false;
                 }
 
@@ -1236,9 +1236,9 @@ impl Terminal {
         }
     }
 
-    fn decstbm(&mut self, param1: Param, param2: Param) {
-        let top = param1.as_usize_or(1) - 1;
-        let bottom = param2.as_usize_or(self.rows) - 1;
+    fn decstbm(&mut self, param1: u16, param2: u16) {
+        let top = as_usize(param1, 1) - 1;
+        let bottom = as_usize(param2, self.rows) - 1;
 
         if top < bottom && bottom < self.rows {
             self.top_margin = top;
@@ -1248,10 +1248,10 @@ impl Terminal {
         self.move_cursor_home();
     }
 
-    fn xtwinops(&mut self, param1: Param, param2: Param, param3: Param) {
-        if self.resizable && param1.as_usize_or(0) == 8 {
-            let cols = param3.as_usize_or(self.cols);
-            let rows = param2.as_usize_or(self.rows);
+    fn xtwinops(&mut self, param1: u16, param2: u16, param3: u16) {
+        if self.resizable && as_usize(param1, 0) == 8 {
+            let cols = as_usize(param3, self.cols);
+            let rows = as_usize(param2, self.rows);
 
             match cols.cmp(&self.cols) {
                 std::cmp::Ordering::Less => {
@@ -1293,41 +1293,41 @@ impl Terminal {
         self.soft_reset();
     }
 
-    fn prv_sm(&mut self, params: Vec<Param>) {
-        for param in params.iter() {
-            match param.parts() {
-                [1] => {
+    fn prv_sm(&mut self, params: Vec<u16>) {
+        for param in params {
+            match param {
+                1 => {
                     self.cursor_key_mode = CursorKeyMode::Application;
                 }
 
-                [6] => {
+                6 => {
                     self.origin_mode = OriginMode::Relative;
                     self.move_cursor_home();
                 }
 
-                [7] => {
+                7 => {
                     self.auto_wrap_mode = true;
                 }
 
-                [25] => {
+                25 => {
                     self.cursor.visible = true;
                 }
 
-                [47] => {
+                47 => {
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
 
-                [1047] => {
+                1047 => {
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
 
-                [1048] => {
+                1048 => {
                     self.save_cursor();
                 }
 
-                [1049] => {
+                1049 => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
                     self.reflow();
@@ -1338,41 +1338,41 @@ impl Terminal {
         }
     }
 
-    fn prv_rm(&mut self, params: Vec<Param>) {
-        for param in params.iter() {
-            match param.parts() {
-                [1] => {
+    fn prv_rm(&mut self, params: Vec<u16>) {
+        for param in params {
+            match param {
+                1 => {
                     self.cursor_key_mode = CursorKeyMode::Normal;
                 }
 
-                [6] => {
+                6 => {
                     self.origin_mode = OriginMode::Absolute;
                     self.move_cursor_home();
                 }
 
-                [7] => {
+                7 => {
                     self.auto_wrap_mode = false;
                 }
 
-                [25] => {
+                25 => {
                     self.cursor.visible = false;
                 }
 
-                [47] => {
+                47 => {
                     self.switch_to_primary_buffer();
                     self.reflow();
                 }
 
-                [1047] => {
+                1047 => {
                     self.switch_to_primary_buffer();
                     self.reflow();
                 }
 
-                [1048] => {
+                1048 => {
                     self.restore_cursor();
                 }
 
-                [1049] => {
+                1049 => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
                     self.reflow();
@@ -1381,6 +1381,14 @@ impl Terminal {
                 _ => {}
             }
         }
+    }
+}
+
+fn as_usize(value: u16, default: usize) -> usize {
+    if value == 0 {
+        default
+    } else {
+        value as usize
     }
 }
 
@@ -1660,10 +1668,6 @@ mod tests {
         Sgr(ps(&[param]))
     }
 
-    fn xtwinops(params: [u16; 3]) -> Operation {
-        Xtwinops(p(params[0]), p(params[1]), p(params[2]))
-    }
-
     #[test]
     fn execute_sgr() {
         let mut term = Terminal::default();
@@ -1783,15 +1787,15 @@ mod tests {
 
         assert_eq!(term.tabs, vec![]);
 
-        term.execute(xtwinops([8, 0, 10]));
+        term.execute(Xtwinops(8, 0, 10));
 
         assert_eq!(term.tabs, vec![8]);
 
-        term.execute(xtwinops([8, 0, 30]));
+        term.execute(Xtwinops(8, 0, 30));
 
         assert_eq!(term.tabs, vec![8, 16, 24]);
 
-        term.execute(xtwinops([8, 0, 20]));
+        term.execute(Xtwinops(8, 0, 20));
 
         assert_eq!(term.tabs, vec![8, 16]);
     }
@@ -1801,7 +1805,7 @@ mod tests {
         let mut term = Terminal::new((20, 5), None, true);
 
         // move cursor to col 15
-        term.execute(Cuf(p(15)));
+        term.execute(Cuf(15));
 
         assert_eq!(term.cursor.col, 15);
 
@@ -1811,7 +1815,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // switch to alternate buffer
-        term.execute(PrvSm(ps(&[47])));
+        term.execute(PrvSm(vec![47]));
 
         // save cursor
         term.execute(Sc);
@@ -1819,7 +1823,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // resize to 10x5
-        term.execute(xtwinops([8, 0, 10]));
+        term.execute(Xtwinops(8, 0, 10));
 
         assert_eq!(term.saved_ctx.cursor_col, 9);
     }
