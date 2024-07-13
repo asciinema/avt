@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::ops::{Operation, Param};
+use crate::ops::Operation;
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -1039,11 +1039,11 @@ impl Terminal {
         }
     }
 
-    fn sgr(&mut self, params: Vec<Param>) {
+    fn sgr(&mut self, params: Vec<Vec<u16>>) {
         let mut ps = params.as_slice();
 
-        while let Some(param) = ps.first() {
-            match param.parts() {
+        while let Some(parts) = ps.first() {
+            match parts.as_slice() {
                 [0] => {
                     self.pen = Pen::default();
                     ps = &ps[1..];
@@ -1124,16 +1124,16 @@ impl Terminal {
                     ps = &ps[1..];
                 }
 
-                [38] => match ps.get(1).map(|p| p.parts()) {
+                [38] => match ps.get(1).map(|p| p.as_slice()) {
                     None => {
                         ps = &ps[1..];
                     }
 
                     Some([2]) => {
                         if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap().parts()[0];
-                            let g = ps.get(3).unwrap().parts()[0];
-                            let b = b.parts()[0];
+                            let r = ps.get(2).unwrap()[0];
+                            let g = ps.get(3).unwrap()[0];
+                            let b = b[0];
 
                             self.pen.foreground =
                                 Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
@@ -1146,7 +1146,7 @@ impl Terminal {
 
                     Some([5]) => {
                         if let Some(idx) = ps.get(2) {
-                            let idx = idx.parts()[0];
+                            let idx = idx[0];
                             self.pen.foreground = Some(Color::Indexed(idx as u8));
                             ps = &ps[3..];
                         } else {
@@ -1179,16 +1179,16 @@ impl Terminal {
                     ps = &ps[1..];
                 }
 
-                [48] => match ps.get(1).map(|p| p.parts()) {
+                [48] => match ps.get(1).map(|p| p.as_slice()) {
                     None => {
                         ps = &ps[1..];
                     }
 
                     Some([2]) => {
                         if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap().parts()[0];
-                            let g = ps.get(3).unwrap().parts()[0];
-                            let b = b.parts()[0];
+                            let r = ps.get(2).unwrap()[0];
+                            let g = ps.get(3).unwrap()[0];
+                            let b = b[0];
 
                             self.pen.background =
                                 Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
@@ -1201,7 +1201,7 @@ impl Terminal {
 
                     Some([5]) => {
                         if let Some(idx) = ps.get(2) {
-                            let idx = idx.parts()[0];
+                            let idx = idx[0];
                             self.pen.background = Some(Color::Indexed(idx as u8));
                             ps = &ps[3..];
                         } else {
@@ -1645,21 +1645,25 @@ impl Dump for Terminal {
 mod tests {
     use super::Terminal;
     use crate::color::Color;
-    use crate::ops::{Operation, Param};
+    use crate::ops::Operation;
     use crate::pen::Intensity;
     use rgb::RGB8;
     use Operation::*;
 
-    fn p(number: u16) -> Param {
-        Param::new(number)
+    fn p(number: u16) -> Vec<u16> {
+        vec![number]
     }
 
-    fn ps(numbers: &[u16]) -> Vec<Param> {
+    fn ps(numbers: &[u16]) -> Vec<Vec<u16>> {
         numbers.iter().map(|n| p(*n)).collect()
     }
 
-    fn sgr_multi<P: Into<Param> + Clone, T: AsRef<[P]>>(values: T) -> Operation {
-        let params: Vec<Param> = values.as_ref().iter().map(|p| (p.clone()).into()).collect();
+    fn mp(numbers: &[u16]) -> Vec<u16> {
+        numbers.to_vec()
+    }
+
+    fn sgr_multi<P: Into<Vec<u16>> + Clone, T: AsRef<[P]>>(values: T) -> Operation {
+        let params: Vec<Vec<u16>> = values.as_ref().iter().map(|p| (p.clone()).into()).collect();
 
         Sgr(params)
     }
@@ -1725,10 +1729,10 @@ mod tests {
         assert_eq!(term.pen.background, None);
 
         term.execute(sgr_multi(vec![
-            vec![1],
-            vec![38, 5, 88],
-            vec![48, 5, 99],
-            vec![5],
+            p(1),
+            mp(&[38, 5, 88]),
+            mp(&[48, 5, 99]),
+            p(5),
         ]));
 
         assert_eq!(term.pen.intensity, Intensity::Bold);
@@ -1737,8 +1741,8 @@ mod tests {
         assert_eq!(term.pen.background, Some(Color::Indexed(99)));
 
         term.execute(sgr_multi(vec![
-            vec![38, 2, 101, 102, 103],
-            vec![48, 2, 201, 202, 203],
+            mp(&[38, 2, 101, 102, 103]),
+            mp(&[48, 2, 201, 202, 203]),
         ]));
 
         assert_eq!(
@@ -1751,7 +1755,7 @@ mod tests {
             Some(Color::RGB(RGB8::new(201, 202, 203)))
         );
 
-        term.execute(sgr_multi([23, 24, 25, 27]));
+        term.execute(sgr_multi([p(23), p(24), p(25), p(27)]));
 
         assert!(!term.pen.is_italic());
         assert!(!term.pen.is_underline());
@@ -1760,15 +1764,26 @@ mod tests {
     }
 
     #[test]
-    fn execute_sgr_colon_colors() {
+    fn execute_sgr_semicolon_colors() {
         let mut term = Terminal::default();
 
-        term.execute(sgr_multi([38, 5, 88, 48, 5, 99]));
+        term.execute(sgr_multi([p(38), p(5), p(88), p(48), p(5), p(99)]));
 
         assert_eq!(term.pen.foreground, Some(Color::Indexed(88)));
         assert_eq!(term.pen.background, Some(Color::Indexed(99)));
 
-        term.execute(sgr_multi([38, 2, 101, 102, 103, 48, 2, 201, 202, 203]));
+        term.execute(sgr_multi([
+            p(38),
+            p(2),
+            p(101),
+            p(102),
+            p(103),
+            p(48),
+            p(2),
+            p(201),
+            p(202),
+            p(203),
+        ]));
 
         assert_eq!(
             term.pen.foreground,

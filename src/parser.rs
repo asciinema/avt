@@ -3,7 +3,8 @@
 
 use crate::charset::Charset;
 use crate::dump::Dump;
-use crate::ops::{Operation, Param};
+use crate::ops::Operation;
+use std::fmt::Display;
 
 const PARAMS_LEN: usize = 32;
 
@@ -448,7 +449,10 @@ impl Parser {
                 .map(|p| p.as_u16())
                 .collect())),
 
-            (None, 'm') => Some(Sgr(ps[..=self.cur_param].to_vec())),
+            (None, 'm') => Some(Sgr(ps[..=self.cur_param]
+                .iter()
+                .map(|p| p.parts().to_vec())
+                .collect())),
 
             (None, 'r') => Some(Decstbm(ps[0].as_u16(), ps[1].as_u16())),
 
@@ -589,23 +593,120 @@ impl Dump for Parser {
     }
 }
 
+const MAX_PARAM_LEN: usize = 6;
+
+#[derive(Debug, PartialEq, Clone)]
+struct Param {
+    cur_part: usize,
+    pub parts: [u16; MAX_PARAM_LEN],
+}
+
+impl Param {
+    pub fn new(number: u16) -> Self {
+        Self {
+            cur_part: 0,
+            parts: [number, 0, 0, 0, 0, 0],
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.parts[..=self.cur_part].fill(0);
+        self.cur_part = 0;
+    }
+
+    pub fn add_part(&mut self) {
+        self.cur_part = (self.cur_part + 1).min(5);
+    }
+
+    pub fn add_digit(&mut self, input: u8) {
+        let number = &mut self.parts[self.cur_part];
+        *number = (10 * (*number as u32) + (input as u32)) as u16;
+    }
+
+    pub fn as_u16(&self) -> u16 {
+        self.parts[0]
+    }
+
+    pub fn parts(&self) -> &[u16] {
+        &self.parts[..=self.cur_part]
+    }
+}
+
+impl Display for Param {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.parts() {
+            [] => unreachable!(),
+
+            [part] => write!(f, "{}", part),
+
+            [first, rest @ ..] => {
+                write!(f, "{first}")?;
+
+                for part in rest {
+                    write!(f, ":{part}")?;
+                }
+
+                Ok(())
+            }
+        }
+    }
+}
+
+impl Default for Param {
+    fn default() -> Self {
+        Self::new(0)
+    }
+}
+
+impl From<u16> for Param {
+    fn from(value: u16) -> Self {
+        Self::new(value)
+    }
+}
+
+impl From<Vec<u16>> for Param {
+    fn from(values: Vec<u16>) -> Self {
+        let mut parts = [0u16; MAX_PARAM_LEN];
+        let mut cur_part = 0;
+
+        for (i, v) in values.iter().take(MAX_PARAM_LEN).enumerate() {
+            cur_part = i;
+            parts[i] = *v;
+        }
+
+        Self { cur_part, parts }
+    }
+}
+
+impl PartialEq<u16> for Param {
+    fn eq(&self, other: &u16) -> bool {
+        self.parts[0] == *other
+    }
+}
+
+impl PartialEq<Vec<u16>> for Param {
+    fn eq(&self, other: &Vec<u16>) -> bool {
+        self.parts[..=self.cur_part] == other[..]
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::Parser;
     use crate::dump::Dump;
-    use crate::ops::{Operation, Param};
+    use crate::ops::Operation;
     use Operation::*;
 
-    fn p(number: u16) -> Param {
-        Param::new(number)
+    fn p(number: u16) -> Vec<u16> {
+        vec![number]
     }
 
-    fn ps(numbers: &[u16]) -> Vec<Param> {
+    fn ps(numbers: &[u16]) -> Vec<Vec<u16>> {
         numbers.iter().map(|n| p(*n)).collect()
     }
 
-    fn mp(parts: &[u16]) -> Param {
-        Param::from_slice(parts)
+    fn mp(numbers: &[u16]) -> Vec<u16> {
+        numbers.to_vec()
     }
 
     #[test]
