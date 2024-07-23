@@ -7,6 +7,9 @@ repository = "https://github.com/asciinema/avt"
 description = "asciinema virtual terminal"
 license = "Apache-2.0"
 
+# MSRV
+rust-version = "1.70.0"
+
 [dependencies]
 serde = { version = "1.0.130", features = ["derive"] }
 rgb = "0.8.33"
