@@ -83,22 +83,6 @@ impl Default for SavedCtx {
     }
 }
 
-pub enum Scrollback<I: Iterator<Item = Line>> {
-    Some(I),
-    None,
-}
-
-impl<I: Iterator<Item = Line>> Iterator for Scrollback<I> {
-    type Item = Line;
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            Scrollback::Some(iter) => iter.next(),
-            Scrollback::None => None,
-        }
-    }
-}
-
 impl Terminal {
     pub fn new(
         (cols, rows): (usize, usize),
@@ -141,16 +125,16 @@ impl Terminal {
         self.cursor
     }
 
-    pub fn gc(&mut self) -> Scrollback<impl Iterator<Item = Line> + '_> {
+    pub fn gc(&mut self) -> Box<dyn Iterator<Item = Line> + '_> {
         let lines = self.buffer.gc();
 
         if self.active_buffer_type == BufferType::Alternate {
-            return Scrollback::None;
+            return Box::new(std::iter::empty());
         }
 
         match lines {
-            Some(iter) => Scrollback::Some(iter),
-            None => Scrollback::None,
+            Some(iter) => Box::new(iter),
+            None => Box::new(std::iter::empty()),
         }
     }
 

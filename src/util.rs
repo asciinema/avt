@@ -47,15 +47,17 @@ impl TextCollector {
     }
 
     pub fn feed_str(&mut self, s: &str) -> impl Iterator<Item = String> + '_ {
-        let (_, _, sb) = self.vt.feed_str(s);
-
-        sb.filter_map(|l| self.unwrapper.push(&l))
+        self.vt
+            .feed_str(s)
+            .scrollback
+            .filter_map(|l| self.unwrapper.push(&l))
     }
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> impl Iterator<Item = String> + '_ {
-        let (_, _, sb) = self.vt.feed_str(&format!("\x1b[8;{rows};{cols}t"));
-
-        sb.filter_map(|l| self.unwrapper.push(&l))
+        self.vt
+            .feed_str(&format!("\x1b[8;{rows};{cols}t"))
+            .scrollback
+            .filter_map(|l| self.unwrapper.push(&l))
     }
 
     pub fn flush(self) -> Vec<String> {
