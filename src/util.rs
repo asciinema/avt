@@ -1,125 +1,181 @@
-use crate::buffer::ScrollbackCollector;
 use crate::line::Line;
 use crate::vt::Vt;
-use std::convert::Infallible;
 use std::mem;
 
-pub struct TextCollector<O: TextCollectorOutput> {
-    vt: Vt,
-    stc: ScrollbackTextCollector<O>,
-}
-
-pub trait TextCollectorOutput {
-    type Error;
-
-    fn push(&mut self, line: String) -> Result<(), Self::Error>;
-}
-
-struct ScrollbackTextCollector<O: TextCollectorOutput> {
+#[derive(Default)]
+pub struct TextUnwrapper {
     wrapped_line: String,
-    output: O,
 }
 
-impl<O: TextCollectorOutput> TextCollector<O> {
-    pub fn new(vt: Vt, output: O) -> Self {
-        Self {
-            vt,
-            stc: ScrollbackTextCollector {
-                wrapped_line: String::new(),
-                output,
-            },
+impl TextUnwrapper {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, line: &Line) -> Option<String> {
+        if line.wrapped {
+            self.wrapped_line.push_str(&line.text());
+
+            None
+        } else {
+            self.wrapped_line.push_str(line.text().trim_end());
+
+            Some(mem::take(&mut self.wrapped_line))
+        }
+    }
+
+    pub fn flush(self) -> Option<String> {
+        if self.wrapped_line.is_empty() {
+            None
+        } else {
+            Some(self.wrapped_line)
         }
     }
 }
 
-impl<O: TextCollectorOutput> TextCollector<O> {
-    pub fn feed_str(&mut self, s: &str) -> Result<(), O::Error> {
-        self.vt.feed_str_sc(s, &mut self.stc)?;
+pub struct TextCollector {
+    vt: Vt,
+    unwrapper: TextUnwrapper,
+}
 
-        Ok(())
+impl TextCollector {
+    pub fn new(vt: Vt) -> Self {
+        Self {
+            vt,
+            unwrapper: TextUnwrapper::new(),
+        }
     }
 
-    pub fn resize(&mut self, cols: u16, rows: u16) -> Result<(), O::Error> {
-        self.vt
-            .feed_str_sc(&format!("\x1b[8;{rows};{cols}t"), &mut self.stc)?;
+    pub fn feed_str(&mut self, s: &str) -> impl Iterator<Item = String> + '_ {
+        let (_, _, sb) = self.vt.feed_str(s);
 
-        Ok(())
+        sb.filter_map(|l| self.unwrapper.push(&l))
     }
 
-    pub fn flush(&mut self) -> Result<(), O::Error> {
-        let mut lines = self.vt.text();
+    pub fn resize(&mut self, cols: u16, rows: u16) -> impl Iterator<Item = String> + '_ {
+        let (_, _, sb) = self.vt.feed_str(&format!("\x1b[8;{rows};{cols}t"));
+
+        sb.filter_map(|l| self.unwrapper.push(&l))
+    }
+
+    pub fn flush(self) -> Vec<String> {
+        let mut unwrapper = self.unwrapper;
+
+        let mut lines: Vec<String> = self
+            .vt
+            .lines()
+            .iter()
+            .filter_map(|l| unwrapper.push(l))
+            .collect();
+
+        lines.extend(unwrapper.flush());
 
         while !lines.is_empty() && lines[lines.len() - 1].is_empty() {
             lines.truncate(lines.len() - 1);
         }
 
-        for line in lines {
-            self.stc.push(line)?;
-        }
-
-        Ok(())
-    }
-}
-
-impl<O: TextCollectorOutput> ScrollbackTextCollector<O> {
-    fn push(&mut self, line: String) -> Result<(), O::Error> {
-        self.output.push(line)
-    }
-}
-
-impl<O: TextCollectorOutput> ScrollbackCollector for &mut ScrollbackTextCollector<O> {
-    type Error = O::Error;
-
-    fn collect(&mut self, lines: impl Iterator<Item = Line>) -> Result<(), Self::Error> {
-        for line in lines {
-            if line.wrapped {
-                self.wrapped_line.push_str(&line.text());
-            } else {
-                self.wrapped_line.push_str(line.text().trim_end());
-                self.output.push(mem::take(&mut self.wrapped_line))?;
-            }
-        }
-
-        Ok(())
-    }
-}
-
-impl TextCollectorOutput for &mut Vec<String> {
-    type Error = Infallible;
-
-    fn push(&mut self, line: String) -> Result<(), Self::Error> {
-        Vec::push(self, line);
-
-        Ok(())
+        lines
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::TextCollector;
-    use crate::Vt;
+    use super::TextUnwrapper;
+    use crate::{cell::Cell, util::TextCollector, Line, Pen, Vt};
+
+    #[test]
+    fn text_unwrapper() {
+        let mut tu = TextUnwrapper::new();
+        let pen = Pen::default();
+
+        let mut line = Line::blank(5, pen);
+        line.print(0, Cell('a', pen));
+        line.print(4, Cell('b', pen));
+        line.wrapped = false;
+
+        let text = tu.push(&line);
+
+        assert!(matches!(text, Some(ref x) if x == "a   b"));
+
+        let mut line = Line::blank(5, pen);
+        line.print(0, Cell('c', pen));
+        line.print(4, Cell('d', pen));
+        line.wrapped = true;
+
+        let text = tu.push(&line);
+
+        assert!(text.is_none());
+
+        let mut line = Line::blank(5, pen);
+        line.print(0, Cell('e', pen));
+        line.print(4, Cell('f', pen));
+        line.wrapped = true;
+
+        let text = tu.push(&line);
+
+        assert!(text.is_none());
+
+        let mut line = Line::blank(5, pen);
+        line.print(0, Cell('g', pen));
+        line.print(1, Cell('h', pen));
+        line.wrapped = false;
+
+        let text = tu.push(&line);
+
+        assert!(matches!(text, Some(ref x) if x == "c   de   fgh"));
+
+        let mut line = Line::blank(5, pen);
+        line.print(0, Cell('i', pen));
+        line.wrapped = true;
+
+        let text = tu.push(&line);
+
+        assert!(text.is_none());
+
+        let text = tu.flush();
+
+        assert!(matches!(text, Some(ref x) if x == "i    "));
+    }
 
     #[test]
     fn text_collector_no_scrollback() {
-        let mut output: Vec<String> = Vec::new();
         let vt = Vt::builder().size(10, 2).scrollback_limit(0).build();
-        let mut tc = TextCollector::new(vt, &mut output);
+        let mut tc = TextCollector::new(vt);
 
-        tc.feed_str("a\r\nb\r\nc\r\nd\r\n").unwrap();
-        tc.flush().unwrap();
+        let lines: Vec<String> = tc.feed_str("a\r\nb\r\nc\r\nd\r\n").collect();
 
-        assert_eq!(output, vec!["a", "b", "c", "d"]);
+        assert_eq!(lines, ["a", "b", "c"]);
+
+        let lines: Vec<String> = tc.flush();
+
+        assert_eq!(lines, ["d"]);
     }
 
     #[test]
     fn text_collector_unlimited_scrollback() {
-        let mut output: Vec<String> = Vec::new();
         let vt = Vt::builder().size(10, 2).build();
-        let mut tc = TextCollector::new(vt, &mut output);
+        let mut tc = TextCollector::new(vt);
 
-        tc.feed_str("a\r\nb\r\nc\r\nd\r\n").unwrap();
-        tc.flush().unwrap();
+        let lines: Vec<String> = tc.feed_str("a\r\nb\r\nc\r\nd\r\n").collect();
 
-        assert_eq!(output, vec!["a", "b", "c", "d"]);
+        assert!(lines.is_empty());
+
+        let lines: Vec<String> = tc.flush();
+
+        assert_eq!(lines, ["a", "b", "c", "d"]);
+    }
+
+    #[test]
+    fn text_collector_wrapping() {
+        let vt = Vt::builder().size(10, 2).scrollback_limit(0).build();
+        let mut tc = TextCollector::new(vt);
+
+        let lines: Vec<String> = tc.feed_str("abcdefghijklmno\r\n").collect();
+
+        assert!(lines.is_empty());
+
+        let lines: Vec<String> = tc.flush();
+
+        assert_eq!(lines, vec!["abcdefghijklmno"]);
     }
 }

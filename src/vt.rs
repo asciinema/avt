@@ -1,8 +1,7 @@
-use crate::buffer::{NullScrollbackCollector, ScrollbackCollector};
 use crate::dump::Dump;
 use crate::line::Line;
 use crate::parser::Parser;
-use crate::terminal::{Cursor, Terminal};
+use crate::terminal::{Cursor, Scrollback, Terminal};
 
 #[derive(Debug)]
 pub struct Vt {
@@ -19,22 +18,20 @@ impl Vt {
         Self::builder().size(cols, rows).build()
     }
 
-    pub fn feed_str(&mut self, s: &str) -> (Vec<usize>, bool) {
-        self.parser.feed_str(s, &mut self.terminal);
-        let _ = self.terminal.gc(NullScrollbackCollector);
-
-        self.terminal.changes()
-    }
-
-    pub fn feed_str_sc<C: ScrollbackCollector>(
+    pub fn feed_str(
         &mut self,
         s: &str,
-        sc: C,
-    ) -> Result<(Vec<usize>, bool), C::Error> {
+    ) -> (
+        Vec<usize>,
+        bool,
+        Scrollback<impl Iterator<Item = Line> + '_>,
+    ) {
         self.parser.feed_str(s, &mut self.terminal);
-        self.terminal.gc(sc)?;
+        let (dirty_lines, resized) = self.terminal.changes();
+        let scrollback = self.terminal.gc();
 
-        Ok(self.terminal.changes())
+        // TODO use named struct instead
+        (dirty_lines, resized, scrollback)
     }
 
     pub fn feed(&mut self, input: char) {
@@ -923,11 +920,11 @@ mod tests {
         vt.feed_str("abcdefgh\r\nijklmnop\r\nqrstuw");
         vt.feed_str("\x1b[4;1H");
 
-        let (_, resized) = vt.feed_str("AAA");
+        let (_, resized, _) = vt.feed_str("AAA");
 
         assert!(!resized);
 
-        let (_, resized) = vt.feed_str("\x1b[8;5;t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;5;t");
 
         assert!(resized);
         assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuw\nAAA|\n");
@@ -936,7 +933,7 @@ mod tests {
 
         assert_eq!(vt.cursor(), (8, 3));
 
-        let (_, resized) = vt.feed_str("\x1b[8;;4t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;;4t");
 
         assert!(resized);
         assert_eq!(text(&vt), "qrst\nuw\nAAAB\nBBB|B\n");
@@ -964,7 +961,7 @@ mod tests {
     fn execute_xtwinops_noop() {
         let mut vt = Vt::new(8, 4);
 
-        let (_, resized) = vt.feed_str("\x1b[8;;t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;;t");
 
         assert!(!resized);
     }
@@ -974,7 +971,7 @@ mod tests {
         let mut vt = Vt::builder().size(6, 4).resizable(true).build();
 
         vt.feed_str("AAA\n\rBBB\n\r");
-        let (_, resized) = vt.feed_str("\x1b[8;5;;t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;5;;t");
 
         assert!(resized);
         assert_eq!(text(&vt), "AAA\nBBB\n|\n\n");
@@ -986,17 +983,17 @@ mod tests {
 
         vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
 
-        let (_, resized) = vt.feed_str("\x1b[8;5;;t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;5;;t");
 
         assert!(resized);
         assert_eq!(text(&vt), "AAA\nBBB\nCCC\n|\n");
 
-        let (_, resized) = vt.feed_str("\x1b[8;3;;t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;3;;t");
 
         assert!(resized);
         assert_eq!(text(&vt), "BBB\nCCC\n|");
 
-        let (_, resized) = vt.feed_str("\x1b[8;2;;t");
+        let (_, resized, _) = vt.feed_str("\x1b[8;2;;t");
 
         assert!(resized);
         assert_eq!(text(&vt), "CCC\n|");

@@ -3,7 +3,6 @@ use crate::dump::Dump;
 use crate::line::Line;
 use crate::pen::Pen;
 use std::cmp::Ordering;
-use std::convert::Infallible;
 use std::ops::{Index, IndexMut, Range};
 
 #[derive(Debug)]
@@ -19,22 +18,6 @@ pub(crate) struct Buffer {
 struct ScrollbackLimit {
     soft: usize,
     hard: usize,
-}
-
-pub trait ScrollbackCollector {
-    type Error;
-
-    fn collect(&mut self, lines: impl Iterator<Item = Line>) -> Result<(), Self::Error>;
-}
-
-pub struct NullScrollbackCollector;
-
-impl ScrollbackCollector for NullScrollbackCollector {
-    type Error = Infallible;
-
-    fn collect(&mut self, _lines: impl Iterator<Item = Line>) -> Result<(), Self::Error> {
-        Ok(())
-    }
 }
 
 pub(crate) enum EraseMode {
@@ -347,13 +330,13 @@ impl Buffer {
         &self.lines[..]
     }
 
-    pub fn gc<C: ScrollbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
+    pub fn gc(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
         if self.trim_needed {
-            self.trim_scrollback(sc)?;
             self.trim_needed = false;
+            self.trim_scrollback()
+        } else {
+            None
         }
-
-        Ok(())
     }
 
     fn view_mut(&mut self) -> &mut [Line] {
@@ -372,18 +355,18 @@ impl Buffer {
         self.lines.extend(filler);
     }
 
-    fn trim_scrollback<C: ScrollbackCollector>(&mut self, mut sc: C) -> Result<(), C::Error> {
+    fn trim_scrollback(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
         if let Some(limit) = &self.scrollback_limit {
             let line_count = self.lines.len();
             let scrollback_size = line_count - self.rows;
 
             if scrollback_size > limit.hard {
                 let excess = scrollback_size - limit.soft;
-                sc.collect(self.lines.drain(..excess))?;
+                return Some(self.lines.drain(..excess));
             }
         }
 
-        Ok(())
+        None
     }
 
     #[cfg(test)]
@@ -533,7 +516,6 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
 #[cfg(test)]
 mod tests {
     use super::{Buffer, VisualPosition};
-    use crate::buffer::NullScrollbackCollector;
     use crate::cell::Cell;
     use crate::line::Line;
     use crate::pen::Pen;
@@ -642,7 +624,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc(NullScrollbackCollector).unwrap();
+        buf.gc();
 
         assert_eq!(buf.lines.len(), 7);
 
@@ -654,7 +636,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc(NullScrollbackCollector).unwrap();
+        buf.gc();
 
         assert_eq!(buf.lines.len(), 10);
     }

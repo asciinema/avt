@@ -2,7 +2,7 @@ mod cursor;
 mod dirty_lines;
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
-use crate::buffer::{Buffer, EraseMode, NullScrollbackCollector, ScrollbackCollector};
+use crate::buffer::{Buffer, EraseMode};
 use crate::cell::Cell;
 use crate::charset::Charset;
 use crate::color::Color;
@@ -83,6 +83,22 @@ impl Default for SavedCtx {
     }
 }
 
+pub enum Scrollback<I: Iterator<Item = Line>> {
+    Some(I),
+    None,
+}
+
+impl<I: Iterator<Item = Line>> Iterator for Scrollback<I> {
+    type Item = Line;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Scrollback::Some(iter) => iter.next(),
+            Scrollback::None => None,
+        }
+    }
+}
+
 impl Terminal {
     pub fn new(
         (cols, rows): (usize, usize),
@@ -125,15 +141,16 @@ impl Terminal {
         self.cursor
     }
 
-    pub fn gc<C: ScrollbackCollector>(&mut self, sc: C) -> Result<(), C::Error> {
-        match self.active_buffer_type {
-            BufferType::Primary => self.buffer.gc(sc),
+    pub fn gc(&mut self) -> Scrollback<impl Iterator<Item = Line> + '_> {
+        let lines = self.buffer.gc();
 
-            BufferType::Alternate => {
-                let _ = self.buffer.gc(NullScrollbackCollector);
+        if self.active_buffer_type == BufferType::Alternate {
+            return Scrollback::None;
+        }
 
-                Ok(())
-            }
+        match lines {
+            Some(iter) => Scrollback::Some(iter),
+            None => Scrollback::None,
         }
     }
 
