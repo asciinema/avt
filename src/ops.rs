@@ -1,4 +1,5 @@
 use crate::charset::Charset;
+use std::fmt::Display;
 
 const MAX_PARAM_LEN: usize = 6;
 
@@ -100,21 +101,21 @@ impl Param {
     }
 }
 
-impl ToString for Param {
-    fn to_string(&self) -> String {
+impl Display for Param {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.parts() {
             [] => unreachable!(),
 
-            [part] => part.to_string(),
+            [part] => write!(f, "{}", part),
 
             [first, rest @ ..] => {
-                rest.iter()
-                    .map(u16::to_string)
-                    .fold(first.to_string(), |mut acc, part| {
-                        acc.push(':');
-                        acc.push_str(&part);
-                        acc
-                    })
+                write!(f, "{first}")?;
+
+                for part in rest {
+                    write!(f, ":{part}")?;
+                }
+
+                Ok(())
             }
         }
     }
