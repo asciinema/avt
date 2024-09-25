@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::ops::Operation;
+use crate::parser::Function;
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -120,8 +120,8 @@ impl Terminal {
         }
     }
 
-    pub fn execute(&mut self, op: Operation) {
-        use Operation::*;
+    pub fn execute(&mut self, op: Function) {
+        use Function::*;
 
         match op {
             Bs => {
@@ -1645,10 +1645,10 @@ impl Dump for Terminal {
 mod tests {
     use super::Terminal;
     use crate::color::Color;
-    use crate::ops::Operation;
+    use crate::parser::Function;
     use crate::pen::Intensity;
     use rgb::RGB8;
-    use Operation::*;
+    use Function::*;
 
     fn p(number: u16) -> Vec<u16> {
         vec![number]
@@ -1662,13 +1662,13 @@ mod tests {
         numbers.to_vec()
     }
 
-    fn sgr_multi<P: Into<Vec<u16>> + Clone, T: AsRef<[P]>>(values: T) -> Operation {
+    fn sgr_multi<P: Into<Vec<u16>> + Clone, T: AsRef<[P]>>(values: T) -> Function {
         let params: Vec<Vec<u16>> = values.as_ref().iter().map(|p| (p.clone()).into()).collect();
 
         Sgr(params)
     }
 
-    fn sgr(param: u16) -> Operation {
+    fn sgr(param: u16) -> Function {
         Sgr(ps(&[param]))
     }
 

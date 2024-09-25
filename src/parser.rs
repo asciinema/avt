@@ -3,7 +3,6 @@
 
 use crate::charset::Charset;
 use crate::dump::Dump;
-use crate::ops::Operation;
 use std::fmt::Display;
 
 const PARAMS_LEN: usize = 32;
@@ -35,19 +34,71 @@ pub enum State {
     SosPmApcString,
 }
 
+#[derive(Debug, PartialEq)]
+pub enum Function {
+    Bs,
+    Cbt(u16),
+    Cha(u16),
+    Cht(u16),
+    Cnl(u16),
+    Cpl(u16),
+    Cr,
+    Ctc(u16),
+    Cub(u16),
+    Cud(u16),
+    Cuf(u16),
+    Cup(u16, u16),
+    Cuu(u16),
+    Dch(u16),
+    Decaln,
+    Decstbm(u16, u16),
+    Decstr,
+    Dl(u16),
+    Ech(u16),
+    Ed(u16),
+    El(u16),
+    G1d4(Charset),
+    Gzd4(Charset),
+    Ht,
+    Hts,
+    Ich(u16),
+    Il(u16),
+    Lf,
+    Nel,
+    Print(char),
+    PrvRm(Vec<u16>),
+    PrvSm(Vec<u16>),
+    Rc,
+    Rep(u16),
+    Ri,
+    Ris,
+    Rm(Vec<u16>),
+    Sc,
+    Sd(u16),
+    Sgr(Vec<Vec<u16>>),
+    Si,
+    Sm(Vec<u16>),
+    So,
+    Su(u16),
+    Tbc(u16),
+    Vpa(u16),
+    Vpr(u16),
+    Xtwinops(u16, u16, u16),
+}
+
 impl Parser {
     pub fn new() -> Self {
         Default::default()
     }
 
-    pub fn feed(&mut self, input: char) -> Option<Operation> {
+    pub fn feed(&mut self, input: char) -> Option<Function> {
         use State::*;
 
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
             (Ground, '\u{20}'..='\u{7f}') => {
-                return Some(Operation::Print(input));
+                return Some(Function::Print(input));
             }
 
             (CsiParam, '\u{30}'..='\u{3b}') => {
@@ -303,8 +354,8 @@ impl Parser {
         None
     }
 
-    fn execute(&mut self, input: char) -> Option<Operation> {
-        use Operation::*;
+    fn execute(&mut self, input: char) -> Option<Function> {
+        use Function::*;
 
         match input {
             '\u{08}' => Some(Bs),
@@ -350,8 +401,8 @@ impl Parser {
         }
     }
 
-    fn esc_dispatch(&mut self, input: char) -> Option<Operation> {
-        use Operation::*;
+    fn esc_dispatch(&mut self, input: char) -> Option<Function> {
+        use Function::*;
 
         match (self.intermediate, input) {
             (None, c) if ('@'..='_').contains(&c) => self.execute(((input as u8) + 0x40) as char),
@@ -379,8 +430,8 @@ impl Parser {
         }
     }
 
-    fn csi_dispatch(&mut self, input: char) -> Option<Operation> {
-        use Operation::*;
+    fn csi_dispatch(&mut self, input: char) -> Option<Function> {
+        use Function::*;
 
         let ps = &self.params;
 
@@ -692,10 +743,9 @@ impl PartialEq<Vec<u16>> for Param {
 
 #[cfg(test)]
 mod tests {
+    use super::Function::*;
     use super::Parser;
     use crate::dump::Dump;
-    use crate::ops::Operation;
-    use Operation::*;
 
     fn p(number: u16) -> Vec<u16> {
         vec![number]
