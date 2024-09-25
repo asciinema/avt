@@ -297,7 +297,7 @@ mod tests {
             ..Pen::default()
         };
 
-        let cells = vec![
+        let cells = [
             Cell('a', pen1),
             Cell('b', pen1),
             Cell('c', pen2),
@@ -339,7 +339,7 @@ mod tests {
             ..Pen::default()
         };
 
-        let cells = vec![
+        let cells = [
             Cell('a', pen1),
             Cell('b', pen1),
             Cell('c', pen1),

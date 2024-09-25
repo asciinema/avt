@@ -933,7 +933,7 @@ mod tests {
     }
 
     fn buffer(
-        content: &Vec<(&str, bool)>,
+        content: &[(&str, bool)],
         scrollback_limit: Option<usize>,
         scrollback_size: usize,
     ) -> Buffer {
