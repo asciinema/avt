@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::Function;
+use crate::parser::{EdMode, ElMode, Function};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -822,33 +822,34 @@ impl Terminal {
         self.move_cursor_to_next_tab(as_usize(param, 1));
     }
 
-    fn ed(&mut self, param: u16) {
-        use EraseMode::*;
-
+    fn ed(&mut self, param: EdMode) {
         match param {
-            0 => {
+            EdMode::Below => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
-                    FromCursorToEndOfView,
+                    EraseMode::FromCursorToEndOfView,
                     &self.pen,
                 );
 
                 self.dirty_lines.extend(self.cursor.row..self.rows);
             }
 
-            1 => {
+            EdMode::Above => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
-                    FromStartOfViewToCursor,
+                    EraseMode::FromStartOfViewToCursor,
                     &self.pen,
                 );
 
                 self.dirty_lines.extend(0..self.cursor.row + 1);
             }
 
-            2 => {
-                self.buffer
-                    .erase((self.cursor.col, self.cursor.row), WholeView, &self.pen);
+            EdMode::All => {
+                self.buffer.erase(
+                    (self.cursor.col, self.cursor.row),
+                    EraseMode::WholeView,
+                    &self.pen,
+                );
 
                 self.dirty_lines.extend(0..self.rows);
             }
@@ -857,38 +858,37 @@ impl Terminal {
         }
     }
 
-    fn el(&mut self, param: u16) {
-        use EraseMode::*;
-
+    fn el(&mut self, param: ElMode) {
         match param {
-            0 => {
+            ElMode::ToRight => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
-                    FromCursorToEndOfLine,
+                    EraseMode::FromCursorToEndOfLine,
                     &self.pen,
                 );
 
                 self.dirty_lines.add(self.cursor.row);
             }
 
-            1 => {
+            ElMode::ToLeft => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
-                    FromStartOfLineToCursor,
+                    EraseMode::FromStartOfLineToCursor,
                     &self.pen,
                 );
 
                 self.dirty_lines.add(self.cursor.row);
             }
 
-            2 => {
-                self.buffer
-                    .erase((self.cursor.col, self.cursor.row), WholeLine, &self.pen);
+            ElMode::All => {
+                self.buffer.erase(
+                    (self.cursor.col, self.cursor.row),
+                    EraseMode::WholeLine,
+                    &self.pen,
+                );
 
                 self.dirty_lines.add(self.cursor.row);
             }
-
-            _ => {}
         }
     }
 
