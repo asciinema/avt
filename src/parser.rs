@@ -83,7 +83,7 @@ pub enum Function {
     Tbc(TbcMode),
     Vpa(u16),
     Vpr(u16),
-    Xtwinops(u16, u16, u16),
+    Xtwinops(XtwinopsOp),
 }
 
 #[derive(Debug, PartialEq)]
@@ -112,6 +112,11 @@ pub enum ElMode {
 pub enum TbcMode {
     Clear,
     ClearAll,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum XtwinopsOp {
+    Resize(u16, u16),
 }
 
 impl Parser {
@@ -557,7 +562,16 @@ impl Parser {
 
             (None, 's') => Some(Sc),
 
-            (None, 't') => Some(Xtwinops(ps[0].as_u16(), ps[1].as_u16(), ps[2].as_u16())),
+            (None, 't') => {
+                if ps[0].as_u16() == 8 {
+                    let rows = ps[1].as_u16();
+                    let cols = ps[2].as_u16();
+
+                    Some(Xtwinops(XtwinopsOp::Resize(cols, rows)))
+                } else {
+                    None
+                }
+            }
 
             (None, 'u') => Some(Rc),
 

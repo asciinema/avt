@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{CtcMode, EdMode, ElMode, Function, TbcMode};
+use crate::parser::{CtcMode, EdMode, ElMode, Function, TbcMode, XtwinopsOp};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -312,8 +312,8 @@ impl Terminal {
                 self.vpr(param);
             }
 
-            Xtwinops(param1, param2, param3) => {
-                self.xtwinops(param1, param2, param3);
+            Xtwinops(op) => {
+                self.xtwinops(op);
             }
         }
     }
@@ -1244,10 +1244,11 @@ impl Terminal {
         self.move_cursor_home();
     }
 
-    fn xtwinops(&mut self, param1: u16, param2: u16, param3: u16) {
-        if self.resizable && as_usize(param1, 0) == 8 {
-            let cols = as_usize(param3, self.cols);
-            let rows = as_usize(param2, self.rows);
+    fn xtwinops(&mut self, op: XtwinopsOp) {
+        if self.resizable {
+            let XtwinopsOp::Resize(cols, rows) = op;
+            let cols = as_usize(cols, self.cols);
+            let rows = as_usize(rows, self.rows);
 
             match cols.cmp(&self.cols) {
                 std::cmp::Ordering::Less => {
@@ -1641,7 +1642,7 @@ impl Dump for Terminal {
 mod tests {
     use super::Terminal;
     use crate::color::Color;
-    use crate::parser::Function;
+    use crate::parser::{Function, XtwinopsOp};
     use crate::pen::Intensity;
     use rgb::RGB8;
     use Function::*;
@@ -1798,15 +1799,15 @@ mod tests {
 
         assert_eq!(term.tabs, vec![]);
 
-        term.execute(Xtwinops(8, 0, 10));
+        term.execute(Xtwinops(XtwinopsOp::Resize(10, 0)));
 
         assert_eq!(term.tabs, vec![8]);
 
-        term.execute(Xtwinops(8, 0, 30));
+        term.execute(Xtwinops(XtwinopsOp::Resize(30, 0)));
 
         assert_eq!(term.tabs, vec![8, 16, 24]);
 
-        term.execute(Xtwinops(8, 0, 20));
+        term.execute(Xtwinops(XtwinopsOp::Resize(20, 0)));
 
         assert_eq!(term.tabs, vec![8, 16]);
     }
@@ -1834,7 +1835,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // resize to 10x5
-        term.execute(Xtwinops(8, 0, 10));
+        term.execute(Xtwinops(XtwinopsOp::Resize(10, 0)));
 
         assert_eq!(term.saved_ctx.cursor_col, 9);
     }
