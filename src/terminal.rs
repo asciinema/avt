@@ -184,6 +184,14 @@ impl Terminal {
                 self.decaln();
             }
 
+            Decrst(params) => {
+                self.decrst(params);
+            }
+
+            Decset(params) => {
+                self.decset(params);
+            }
+
             Decstbm(param1, param2) => {
                 self.decstbm(param1, param2);
             }
@@ -242,14 +250,6 @@ impl Terminal {
 
             Print(ch) => {
                 self.print(ch);
-            }
-
-            PrvRm(params) => {
-                self.prv_rm(params);
-            }
-
-            PrvSm(params) => {
-                self.prv_sm(params);
             }
 
             Rc => {
@@ -1293,7 +1293,7 @@ impl Terminal {
         self.soft_reset();
     }
 
-    fn prv_sm(&mut self, params: Vec<u16>) {
+    fn decset(&mut self, params: Vec<u16>) {
         for param in params {
             match param {
                 1 => {
@@ -1338,7 +1338,7 @@ impl Terminal {
         }
     }
 
-    fn prv_rm(&mut self, params: Vec<u16>) {
+    fn decrst(&mut self, params: Vec<u16>) {
         for param in params {
             match param {
                 1 => {
@@ -1830,7 +1830,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // switch to alternate buffer
-        term.execute(PrvSm(vec![47]));
+        term.execute(Decset(vec![47]));
 
         // save cursor
         term.execute(Sc);

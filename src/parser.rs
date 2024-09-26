@@ -51,6 +51,8 @@ pub enum Function {
     Cuu(u16),
     Dch(u16),
     Decaln,
+    Decrst(Vec<u16>),
+    Decset(Vec<u16>),
     Decstbm(u16, u16),
     Decstr,
     Dl(u16),
@@ -66,8 +68,6 @@ pub enum Function {
     Lf,
     Nel,
     Print(char),
-    PrvRm(Vec<u16>),
-    PrvSm(Vec<u16>),
     Rc,
     Rep(u16),
     Ri,
@@ -515,11 +515,11 @@ impl Parser {
 
             (Some('!'), 'p') => Some(Decstr),
 
-            (Some('?'), 'h') => Some(PrvSm(
+            (Some('?'), 'h') => Some(Decset(
                 ps[..=self.cur_param].iter().map(|p| p.as_u16()).collect(),
             )),
 
-            (Some('?'), 'l') => Some(PrvRm(
+            (Some('?'), 'l') => Some(Decrst(
                 ps[..=self.cur_param].iter().map(|p| p.as_u16()).collect(),
             )),
 
