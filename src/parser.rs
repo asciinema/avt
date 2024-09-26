@@ -43,7 +43,7 @@ pub enum Function {
     Cnl(u16),
     Cpl(u16),
     Cr,
-    Ctc(u16),
+    Ctc(CtcMode),
     Cub(u16),
     Cud(u16),
     Cuf(u16),
@@ -84,6 +84,13 @@ pub enum Function {
     Vpa(u16),
     Vpr(u16),
     Xtwinops(u16, u16, u16),
+}
+
+#[derive(Debug, PartialEq)]
+pub enum CtcMode {
+    Set,
+    Clear,
+    ClearAll,
 }
 
 #[derive(Debug, PartialEq)]
@@ -496,7 +503,12 @@ impl Parser {
 
             (None, 'T') => Some(Sd(ps[0].as_u16())),
 
-            (None, 'W') => Some(Ctc(ps[0].as_u16())),
+            (None, 'W') => match ps[0].as_u16() {
+                0 => Some(Ctc(CtcMode::Set)),
+                2 => Some(Ctc(CtcMode::Clear)),
+                5 => Some(Ctc(CtcMode::ClearAll)),
+                _ => None,
+            },
 
             (None, 'X') => Some(Ech(ps[0].as_u16())),
 

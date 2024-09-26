@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{EdMode, ElMode, Function};
+use crate::parser::{CtcMode, EdMode, ElMode, Function};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -940,21 +940,19 @@ impl Terminal {
         self.scroll_down_in_region(as_usize(param, 1));
     }
 
-    fn ctc(&mut self, param: u16) {
+    fn ctc(&mut self, param: CtcMode) {
         match param {
-            0 => {
+            CtcMode::Set => {
                 self.set_tab();
             }
 
-            2 => {
+            CtcMode::Clear => {
                 self.clear_tab();
             }
 
-            5 => {
+            CtcMode::ClearAll => {
                 self.clear_all_tabs();
             }
-
-            _ => {}
         }
     }
 
