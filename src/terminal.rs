@@ -184,8 +184,16 @@ impl Terminal {
                 self.decaln();
             }
 
+            Decrc => {
+                self.rc();
+            }
+
             Decrst(modes) => {
                 self.decrst(modes);
+            }
+
+            Decsc => {
+                self.sc();
             }
 
             Decset(modes) => {
@@ -252,10 +260,6 @@ impl Terminal {
                 self.print(ch);
             }
 
-            Rc => {
-                self.rc();
-            }
-
             Rep(n) => {
                 self.rep(n);
             }
@@ -272,7 +276,11 @@ impl Terminal {
                 self.rm(modes);
             }
 
-            Sc => {
+            Scorc => {
+                self.rc();
+            }
+
+            Scosc => {
                 self.sc();
             }
 
@@ -1822,7 +1830,7 @@ mod tests {
         assert_eq!(term.cursor.col, 15);
 
         // save cursor
-        term.execute(Sc);
+        term.execute(Decsc);
 
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
@@ -1830,7 +1838,7 @@ mod tests {
         term.execute(Decset(vec![47]));
 
         // save cursor
-        term.execute(Sc);
+        term.execute(Decsc);
 
         assert_eq!(term.saved_ctx.cursor_col, 15);
 

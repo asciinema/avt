@@ -51,7 +51,9 @@ pub enum Function {
     Cuu(u16),
     Dch(u16),
     Decaln,
+    Decrc,
     Decrst(Vec<u16>),
+    Decsc,
     Decset(Vec<u16>),
     Decstbm(u16, u16),
     Decstr,
@@ -68,12 +70,12 @@ pub enum Function {
     Lf,
     Nel,
     Print(char),
-    Rc,
     Rep(u16),
     Ri,
     Ris,
     Rm(Vec<u16>),
-    Sc,
+    Scorc,
+    Scosc,
     Sd(u16),
     Sgr(Vec<Vec<u16>>),
     Si,
@@ -440,9 +442,9 @@ impl Parser {
         match (self.intermediate, input) {
             (None, c) if ('@'..='_').contains(&c) => self.execute(((input as u8) + 0x40) as char),
 
-            (None, '7') => Some(Sc),
+            (None, '7') => Some(Decsc),
 
-            (None, '8') => Some(Rc),
+            (None, '8') => Some(Decrc),
 
             (None, 'c') => {
                 self.state = State::Ground;
@@ -560,7 +562,7 @@ impl Parser {
 
             (None, 'r') => Some(Decstbm(ps[0].as_u16(), ps[1].as_u16())),
 
-            (None, 's') => Some(Sc),
+            (None, 's') => Some(Scosc),
 
             (None, 't') => {
                 if ps[0].as_u16() == 8 {
@@ -573,7 +575,7 @@ impl Parser {
                 }
             }
 
-            (None, 'u') => Some(Rc),
+            (None, 'u') => Some(Scorc),
 
             (Some('!'), 'p') => Some(Decstr),
 
