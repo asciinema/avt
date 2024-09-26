@@ -80,7 +80,7 @@ pub enum Function {
     Sm(Vec<u16>),
     So,
     Su(u16),
-    Tbc(u16),
+    Tbc(TbcMode),
     Vpa(u16),
     Vpr(u16),
     Xtwinops(u16, u16, u16),
@@ -106,6 +106,12 @@ pub enum ElMode {
     ToRight,
     ToLeft,
     All,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum TbcMode {
+    Clear,
+    ClearAll,
 }
 
 impl Parser {
@@ -526,7 +532,11 @@ impl Parser {
 
             (None, 'f') => Some(Cup(ps[0].as_u16(), ps[1].as_u16())),
 
-            (None, 'g') => Some(Tbc(ps[0].as_u16())),
+            (None, 'g') => match ps[0].as_u16() {
+                0 => Some(Tbc(TbcMode::Clear)),
+                3 => Some(Tbc(TbcMode::ClearAll)),
+                _ => None,
+            },
 
             (None, 'h') => Some(Sm(ps[..=self.cur_param]
                 .iter()

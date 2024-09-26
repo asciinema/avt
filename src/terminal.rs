@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{CtcMode, EdMode, ElMode, Function};
+use crate::parser::{CtcMode, EdMode, ElMode, Function, TbcMode};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -991,17 +991,15 @@ impl Terminal {
         self.cursor_down(as_usize(param, 1));
     }
 
-    fn tbc(&mut self, param: u16) {
+    fn tbc(&mut self, param: TbcMode) {
         match param {
-            0 => {
+            TbcMode::Clear => {
                 self.clear_tab();
             }
 
-            3 => {
+            TbcMode::ClearAll => {
                 self.clear_all_tabs();
             }
-
-            _ => {}
         }
     }
 
