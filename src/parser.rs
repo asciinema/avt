@@ -43,7 +43,7 @@ pub enum Function {
     Cnl(u16),
     Cpl(u16),
     Cr,
-    Ctc(CtcMode),
+    Ctc(CtcOp),
     Cub(u16),
     Cud(u16),
     Cuf(u16),
@@ -96,9 +96,9 @@ pub enum AnsiMode {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum CtcMode {
+pub enum CtcOp {
     Set,
-    Clear,
+    ClearCurrentColumn,
     ClearAll,
 }
 
@@ -536,9 +536,9 @@ impl Parser {
             (None, 'T') => Some(Sd(ps[0].as_u16())),
 
             (None, 'W') => match ps[0].as_u16() {
-                0 => Some(Ctc(CtcMode::Set)),
-                2 => Some(Ctc(CtcMode::Clear)),
-                5 => Some(Ctc(CtcMode::ClearAll)),
+                0 => Some(Ctc(CtcOp::Set)),
+                2 => Some(Ctc(CtcOp::ClearCurrentColumn)),
+                5 => Some(Ctc(CtcOp::ClearAll)),
                 _ => None,
             },
 
