@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{CtcMode, EdMode, ElMode, Function, TbcMode, XtwinopsOp};
+use crate::parser::{AnsiMode, CtcMode, DecMode, EdMode, ElMode, Function, TbcMode, XtwinopsOp};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -1011,34 +1011,34 @@ impl Terminal {
         }
     }
 
-    fn sm(&mut self, modes: Vec<u16>) {
+    fn sm(&mut self, modes: Vec<AnsiMode>) {
+        use AnsiMode::*;
+
         for mode in modes {
             match mode {
-                4 => {
+                Insert => {
                     self.insert_mode = true;
                 }
 
-                20 => {
+                NewLine => {
                     self.new_line_mode = true;
                 }
-
-                _ => {}
             }
         }
     }
 
-    fn rm(&mut self, modes: Vec<u16>) {
+    fn rm(&mut self, modes: Vec<AnsiMode>) {
+        use AnsiMode::*;
+
         for mode in modes {
             match mode {
-                4 => {
+                Insert => {
                     self.insert_mode = false;
                 }
 
-                20 => {
+                NewLine => {
                     self.new_line_mode = false;
                 }
-
-                _ => {}
             }
         }
     }
@@ -1298,92 +1298,82 @@ impl Terminal {
         self.soft_reset();
     }
 
-    fn decset(&mut self, modes: Vec<u16>) {
+    fn decset(&mut self, modes: Vec<DecMode>) {
+        use DecMode::*;
+
         for mode in modes {
             match mode {
-                1 => {
+                CursorKeys => {
                     self.cursor_key_mode = CursorKeyMode::Application;
                 }
 
-                6 => {
+                Origin => {
                     self.origin_mode = OriginMode::Relative;
                     self.move_cursor_home();
                 }
 
-                7 => {
+                AutoWrap => {
                     self.auto_wrap_mode = true;
                 }
 
-                25 => {
+                TextCursorEnable => {
                     self.cursor.visible = true;
                 }
 
-                47 => {
+                AltScreenBuffer => {
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
 
-                1047 => {
-                    self.switch_to_alternate_buffer();
-                    self.reflow();
-                }
-
-                1048 => {
+                SaveCursor => {
                     self.save_cursor();
                 }
 
-                1049 => {
+                SaveCursorAltScreenBuffer => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
                     self.reflow();
                 }
-
-                _ => {}
             }
         }
     }
 
-    fn decrst(&mut self, modes: Vec<u16>) {
+    fn decrst(&mut self, modes: Vec<DecMode>) {
+        use DecMode::*;
+
         for mode in modes {
             match mode {
-                1 => {
+                CursorKeys => {
                     self.cursor_key_mode = CursorKeyMode::Normal;
                 }
 
-                6 => {
+                Origin => {
                     self.origin_mode = OriginMode::Absolute;
                     self.move_cursor_home();
                 }
 
-                7 => {
+                AutoWrap => {
                     self.auto_wrap_mode = false;
                 }
 
-                25 => {
+                TextCursorEnable => {
                     self.cursor.visible = false;
                 }
 
-                47 => {
+                AltScreenBuffer => {
                     self.switch_to_primary_buffer();
                     self.reflow();
                 }
 
-                1047 => {
-                    self.switch_to_primary_buffer();
-                    self.reflow();
-                }
-
-                1048 => {
+                SaveCursor => {
                     self.restore_cursor();
                 }
 
-                1049 => {
+                SaveCursorAltScreenBuffer => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
                     self.reflow();
                 }
-
-                _ => {}
             }
         }
     }
@@ -1650,7 +1640,7 @@ impl Dump for Terminal {
 mod tests {
     use super::Terminal;
     use crate::color::Color;
-    use crate::parser::{Function, XtwinopsOp};
+    use crate::parser::{DecMode, Function, XtwinopsOp};
     use crate::pen::Intensity;
     use rgb::RGB8;
     use Function::*;
@@ -1835,7 +1825,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // switch to alternate buffer
-        term.execute(Decset(vec![47]));
+        term.execute(Decset(vec![DecMode::AltScreenBuffer]));
 
         // save cursor
         term.execute(Decsc);

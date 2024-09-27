@@ -52,9 +52,9 @@ pub enum Function {
     Dch(u16),
     Decaln,
     Decrc,
-    Decrst(Vec<u16>),
+    Decrst(Vec<DecMode>),
     Decsc,
-    Decset(Vec<u16>),
+    Decset(Vec<DecMode>),
     Decstbm(u16, u16),
     Decstr,
     Dl(u16),
@@ -73,13 +73,13 @@ pub enum Function {
     Rep(u16),
     Ri,
     Ris,
-    Rm(Vec<u16>),
+    Rm(Vec<AnsiMode>),
     Scorc,
     Scosc,
     Sd(u16),
     Sgr(Vec<Vec<u16>>),
     Si,
-    Sm(Vec<u16>),
+    Sm(Vec<AnsiMode>),
     So,
     Su(u16),
     Tbc(TbcMode),
@@ -89,10 +89,29 @@ pub enum Function {
 }
 
 #[derive(Debug, PartialEq)]
+#[repr(u16)]
+pub enum AnsiMode {
+    Insert = 4,   // IRM
+    NewLine = 20, // LNM
+}
+
+#[derive(Debug, PartialEq)]
 pub enum CtcMode {
     Set,
     Clear,
     ClearAll,
+}
+
+#[derive(Debug, PartialEq)]
+#[repr(u16)]
+pub enum DecMode {
+    CursorKeys = 1,                   // DECCKM
+    Origin = 6,                       // DECOM
+    AutoWrap = 7,                     // DECAWM
+    TextCursorEnable = 25,            // DECTCEM
+    AltScreenBuffer = 1047,           // xterm
+    SaveCursor = 1048,                // xterm
+    SaveCursorAltScreenBuffer = 1049, // xterm
 }
 
 #[derive(Debug, PartialEq)]
@@ -547,12 +566,12 @@ impl Parser {
 
             (None, 'h') => Some(Sm(ps[..=self.cur_param]
                 .iter()
-                .map(|p| p.as_u16())
+                .filter_map(ansi_mode)
                 .collect())),
 
             (None, 'l') => Some(Rm(ps[..=self.cur_param]
                 .iter()
-                .map(|p| p.as_u16())
+                .filter_map(ansi_mode)
                 .collect())),
 
             (None, 'm') => Some(Sgr(ps[..=self.cur_param]
@@ -580,11 +599,11 @@ impl Parser {
             (Some('!'), 'p') => Some(Decstr),
 
             (Some('?'), 'h') => Some(Decset(
-                ps[..=self.cur_param].iter().map(|p| p.as_u16()).collect(),
+                ps[..=self.cur_param].iter().filter_map(dec_mode).collect(),
             )),
 
             (Some('?'), 'l') => Some(Decrst(
-                ps[..=self.cur_param].iter().map(|p| p.as_u16()).collect(),
+                ps[..=self.cur_param].iter().filter_map(dec_mode).collect(),
             )),
 
             _ => None,
@@ -613,6 +632,32 @@ impl Parser {
         {
             assert_eq!(self.intermediate, other.intermediate);
         }
+    }
+}
+
+fn ansi_mode(param: &Param) -> Option<AnsiMode> {
+    use AnsiMode::*;
+
+    match param.as_u16() {
+        4 => Some(Insert),
+        20 => Some(NewLine),
+        _ => None,
+    }
+}
+
+fn dec_mode(param: &Param) -> Option<DecMode> {
+    use DecMode::*;
+
+    match param.as_u16() {
+        1 => Some(CursorKeys),
+        6 => Some(Origin),
+        7 => Some(AutoWrap),
+        25 => Some(TextCursorEnable),
+        47 => Some(AltScreenBuffer), // legacy variant of 1047
+        1047 => Some(AltScreenBuffer),
+        1048 => Some(SaveCursor),
+        1049 => Some(SaveCursorAltScreenBuffer),
+        _ => None,
     }
 }
 
