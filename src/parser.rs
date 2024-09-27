@@ -145,6 +145,7 @@ pub enum SgrOp {
     ResetUnderline,            // 24
     ResetBlink,                // 25
     ResetInverse,              // 27
+    ResetStrikethrough,        // 29
     SetForegroundColor(Color), // 30-38
     ResetForegroundColor,      // 39
     SetBackgroundColor(Color), // 40-48
@@ -757,6 +758,12 @@ impl<'a> Iterator for SgrOps<'a> {
                     return Some(ResetInverse);
                 }
 
+                [29] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetStrikethrough);
+                }
+
                 [param] if *param >= 30 && *param <= 37 => {
                     let color = Color::Indexed((param - 30) as u8);
                     self.ps = &self.ps[1..];
@@ -1190,6 +1197,7 @@ mod tests {
         assert_eq!(parse("\x1b[24m"), [Sgr(vec![ResetUnderline])]);
         assert_eq!(parse("\x1b[25m"), [Sgr(vec![ResetBlink])]);
         assert_eq!(parse("\x1b[27m"), [Sgr(vec![ResetInverse])]);
+        assert_eq!(parse("\x1b[29m"), [Sgr(vec![ResetStrikethrough])]);
 
         assert_eq!(
             parse("\x1b[31m"),

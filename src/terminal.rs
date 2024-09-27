@@ -1094,6 +1094,10 @@ impl Terminal {
                     self.pen.unset_inverse();
                 }
 
+                ResetStrikethrough => {
+                    self.pen.unset_strikethrough();
+                }
+
                 SetForegroundColor(color) => {
                     self.pen.foreground = Some(color);
                 }
