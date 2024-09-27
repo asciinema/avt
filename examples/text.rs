@@ -9,22 +9,22 @@ fn main() {
         .build();
 
     let input = std::io::stdin();
+    let mut buf = String::new();
     let mut collector = TextCollector::new(vt);
-    let mut line = String::new();
 
-    while let Ok(n) = input.read_line(&mut line) {
+    while let Ok(n) = input.read_line(&mut buf) {
         if n == 0 {
             break;
         };
 
-        for l in collector.feed_str(&line) {
-            println!("{}", l);
+        for line in collector.feed_str(&buf) {
+            println!("{}", line);
         }
 
-        line = String::new();
+        buf.clear();
     }
 
-    for l in collector.flush() {
-        println!("{}", l);
+    for line in collector.flush() {
+        println!("{}", line);
     }
 }
