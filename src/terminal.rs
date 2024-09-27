@@ -8,7 +8,7 @@ use crate::charset::Charset;
 use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{AnsiMode, CtcMode, DecMode, EdMode, ElMode, Function, TbcMode, XtwinopsOp};
+use crate::parser::{AnsiMode, CtcMode, DecMode, EdScope, ElScope, Function, TbcMode, XtwinopsOp};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use rgb::RGB8;
@@ -824,9 +824,9 @@ impl Terminal {
         self.move_cursor_to_next_tab(as_usize(n, 1));
     }
 
-    fn ed(&mut self, mode: EdMode) {
-        match mode {
-            EdMode::Below => {
+    fn ed(&mut self, scope: EdScope) {
+        match scope {
+            EdScope::Below => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
                     EraseMode::FromCursorToEndOfView,
@@ -836,7 +836,7 @@ impl Terminal {
                 self.dirty_lines.extend(self.cursor.row..self.rows);
             }
 
-            EdMode::Above => {
+            EdScope::Above => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
                     EraseMode::FromStartOfViewToCursor,
@@ -846,7 +846,7 @@ impl Terminal {
                 self.dirty_lines.extend(0..self.cursor.row + 1);
             }
 
-            EdMode::All => {
+            EdScope::All => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
                     EraseMode::WholeView,
@@ -860,9 +860,9 @@ impl Terminal {
         }
     }
 
-    fn el(&mut self, mode: ElMode) {
-        match mode {
-            ElMode::ToRight => {
+    fn el(&mut self, scope: ElScope) {
+        match scope {
+            ElScope::ToRight => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
                     EraseMode::FromCursorToEndOfLine,
@@ -872,7 +872,7 @@ impl Terminal {
                 self.dirty_lines.add(self.cursor.row);
             }
 
-            ElMode::ToLeft => {
+            ElScope::ToLeft => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
                     EraseMode::FromStartOfLineToCursor,
@@ -882,7 +882,7 @@ impl Terminal {
                 self.dirty_lines.add(self.cursor.row);
             }
 
-            ElMode::All => {
+            ElScope::All => {
                 self.buffer.erase(
                     (self.cursor.col, self.cursor.row),
                     EraseMode::WholeLine,

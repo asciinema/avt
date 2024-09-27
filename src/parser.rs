@@ -59,8 +59,8 @@ pub enum Function {
     Decstr,
     Dl(u16),
     Ech(u16),
-    Ed(EdMode),
-    El(ElMode),
+    Ed(EdScope),
+    El(ElScope),
     G1d4(Charset),
     Gzd4(Charset),
     Ht,
@@ -115,7 +115,7 @@ pub enum DecMode {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum EdMode {
+pub enum EdScope {
     Below,
     Above,
     All,
@@ -123,7 +123,7 @@ pub enum EdMode {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum ElMode {
+pub enum ElScope {
     ToRight,
     ToLeft,
     All,
@@ -511,17 +511,17 @@ impl Parser {
             (None, 'I') => Some(Cht(ps[0].as_u16())),
 
             (None, 'J') => match ps[0].as_u16() {
-                0 => Some(Ed(EdMode::Below)),
-                1 => Some(Ed(EdMode::Above)),
-                2 => Some(Ed(EdMode::All)),
-                3 => Some(Ed(EdMode::SavedLines)),
+                0 => Some(Ed(EdScope::Below)),
+                1 => Some(Ed(EdScope::Above)),
+                2 => Some(Ed(EdScope::All)),
+                3 => Some(Ed(EdScope::SavedLines)),
                 _ => None,
             },
 
             (None, 'K') => match ps[0].as_u16() {
-                0 => Some(El(ElMode::ToRight)),
-                1 => Some(El(ElMode::ToLeft)),
-                2 => Some(El(ElMode::All)),
+                0 => Some(El(ElScope::ToRight)),
+                1 => Some(El(ElScope::ToLeft)),
+                2 => Some(El(ElScope::All)),
                 _ => None,
             },
 
