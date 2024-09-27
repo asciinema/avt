@@ -82,7 +82,7 @@ pub enum Function {
     Sm(Vec<AnsiMode>),
     So,
     Su(u16),
-    Tbc(TbcMode),
+    Tbc(TbcScope),
     Vpa(u16),
     Vpr(u16),
     Xtwinops(XtwinopsOp),
@@ -130,9 +130,9 @@ pub enum ElScope {
 }
 
 #[derive(Debug, PartialEq)]
-pub enum TbcMode {
-    Clear,
-    ClearAll,
+pub enum TbcScope {
+    CurrentColumn,
+    All,
 }
 
 #[derive(Debug, PartialEq)]
@@ -559,8 +559,8 @@ impl Parser {
             (None, 'f') => Some(Cup(ps[0].as_u16(), ps[1].as_u16())),
 
             (None, 'g') => match ps[0].as_u16() {
-                0 => Some(Tbc(TbcMode::Clear)),
-                3 => Some(Tbc(TbcMode::ClearAll)),
+                0 => Some(Tbc(TbcScope::CurrentColumn)),
+                3 => Some(Tbc(TbcScope::All)),
                 _ => None,
             },
 
