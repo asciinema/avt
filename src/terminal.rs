@@ -1814,7 +1814,7 @@ mod tests {
     fn execute_xtwinops_vs_saved_ctx() {
         let mut term = Terminal::new((20, 5), None, true);
 
-        // move cursor to col 15
+        // move cursor forward by 15 cols
         term.execute(Cuf(15));
 
         assert_eq!(term.cursor.col, 15);
