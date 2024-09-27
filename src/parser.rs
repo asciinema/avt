@@ -2,6 +2,7 @@
 // https://www.vt100.net/emu/dec_ansi_parser
 
 use crate::charset::Charset;
+use crate::color::Color;
 use crate::dump::Dump;
 use std::fmt::Display;
 
@@ -77,7 +78,7 @@ pub enum Function {
     Scorc,
     Scosc,
     Sd(u16),
-    Sgr(Vec<Vec<u16>>),
+    Sgr(Vec<SgrOp>),
     Si,
     Sm(Vec<AnsiMode>),
     So,
@@ -127,6 +128,27 @@ pub enum ElScope {
     ToRight,
     ToLeft,
     All,
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum SgrOp {
+    Reset,                     // 0
+    SetBoldIntensity,          // 1
+    SetFaintIntensity,         // 2
+    SetItalic,                 // 3
+    SetUnderline,              // 4
+    SetBlink,                  // 5
+    SetInverse,                // 7
+    SetStrikethrough,          // 9
+    ResetIntensity,            // 21, 22
+    ResetItalic,               // 23
+    ResetUnderline,            // 24
+    ResetBlink,                // 25
+    ResetInverse,              // 27
+    SetForegroundColor(Color), // 30-38
+    ResetForegroundColor,      // 39
+    SetBackgroundColor(Color), // 40-48
+    ResetBackgroundColor,      // 49
 }
 
 #[derive(Debug, PartialEq)]
@@ -574,10 +596,10 @@ impl Parser {
                 .filter_map(ansi_mode)
                 .collect())),
 
-            (None, 'm') => Some(Sgr(ps[..=self.cur_param]
-                .iter()
-                .map(|p| p.parts().to_vec())
-                .collect())),
+            (None, 'm') => Some(Sgr(SgrOps {
+                ps: &ps[..=self.cur_param],
+            }
+            .collect())),
 
             (None, 'r') => Some(Decstbm(ps[0].as_u16(), ps[1].as_u16())),
 
@@ -642,6 +664,245 @@ fn ansi_mode(param: &Param) -> Option<AnsiMode> {
         4 => Some(Insert),
         20 => Some(NewLine),
         _ => None,
+    }
+}
+
+struct SgrOps<'a> {
+    ps: &'a [Param],
+}
+
+impl<'a> Iterator for SgrOps<'a> {
+    type Item = SgrOp;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        use SgrOp::*;
+
+        while let Some(param) = self.ps.first() {
+            match param.parts() {
+                [0] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(Reset);
+                }
+
+                [1] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetBoldIntensity);
+                }
+
+                [2] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetFaintIntensity);
+                }
+
+                [3] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetItalic);
+                }
+
+                [4] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetUnderline);
+                }
+
+                [5] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetBlink);
+                }
+
+                [7] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetInverse);
+                }
+
+                [9] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetStrikethrough);
+                }
+
+                [21] | [22] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetIntensity);
+                }
+
+                [23] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetItalic);
+                }
+
+                [24] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetUnderline);
+                }
+
+                [25] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetBlink);
+                }
+
+                [27] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetInverse);
+                }
+
+                [param] if *param >= 30 && *param <= 37 => {
+                    let color = Color::Indexed((param - 30) as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetForegroundColor(color));
+                }
+
+                [38, 2, r, g, b] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetForegroundColor(Color::rgb(*r as u8, *g as u8, *b as u8)));
+                }
+
+                [38, 5, idx] => {
+                    let color = Color::Indexed(*idx as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetForegroundColor(color));
+                }
+
+                [38] => match self.ps.get(1).map(|p| p.parts()) {
+                    None => {
+                        self.ps = &self.ps[1..];
+                    }
+
+                    Some([2]) => {
+                        if let Some(b) = self.ps.get(4) {
+                            let r = self.ps.get(2).unwrap().as_u16();
+                            let g = self.ps.get(3).unwrap().as_u16();
+                            let b = b.as_u16();
+                            let color = Color::rgb(r as u8, g as u8, b as u8);
+                            self.ps = &self.ps[5..];
+
+                            return Some(SetForegroundColor(color));
+                        } else {
+                            self.ps = &self.ps[2..];
+                        }
+                    }
+
+                    Some([5]) => {
+                        if let Some(idx) = self.ps.get(2) {
+                            let idx = idx.as_u16();
+                            let color = Color::Indexed(idx as u8);
+                            self.ps = &self.ps[3..];
+
+                            return Some(SetForegroundColor(color));
+                        } else {
+                            self.ps = &self.ps[2..];
+                        }
+                    }
+
+                    Some(_) => {
+                        self.ps = &self.ps[1..];
+                    }
+                },
+
+                [39] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetForegroundColor);
+                }
+
+                [param] if *param >= 40 && *param <= 47 => {
+                    let color = Color::Indexed((param - 40) as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetBackgroundColor(color));
+                }
+
+                [48, 2, r, g, b] => {
+                    let color = Color::rgb(*r as u8, *g as u8, *b as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetBackgroundColor(color));
+                }
+
+                [48, 5, idx] => {
+                    let color = Color::Indexed(*idx as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetBackgroundColor(color));
+                }
+
+                [48] => match self.ps.get(1).map(|p| p.parts()) {
+                    None => {
+                        self.ps = &self.ps[1..];
+                    }
+
+                    Some([2]) => {
+                        if let Some(b) = self.ps.get(4) {
+                            let r = self.ps.get(2).unwrap().as_u16();
+                            let g = self.ps.get(3).unwrap().as_u16();
+                            let b = b.as_u16();
+                            let color = Color::rgb(r as u8, g as u8, b as u8);
+                            self.ps = &self.ps[5..];
+
+                            return Some(SetBackgroundColor(color));
+                        } else {
+                            self.ps = &self.ps[2..];
+                        }
+                    }
+
+                    Some([5]) => {
+                        if let Some(idx) = self.ps.get(2) {
+                            let idx = idx.as_u16();
+                            let color = Color::Indexed(idx as u8);
+                            self.ps = &self.ps[3..];
+
+                            return Some(SetBackgroundColor(color));
+                        } else {
+                            self.ps = &self.ps[2..];
+                        }
+                    }
+
+                    Some(_) => {
+                        self.ps = &self.ps[1..];
+                    }
+                },
+
+                [49] => {
+                    self.ps = &self.ps[1..];
+
+                    return Some(ResetBackgroundColor);
+                }
+
+                [param] if *param >= 90 && *param <= 97 => {
+                    let color = Color::Indexed((param - 90 + 8) as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetForegroundColor(color));
+                }
+
+                [param] if *param >= 100 && *param <= 107 => {
+                    let color = Color::Indexed((param - 100 + 8) as u8);
+                    self.ps = &self.ps[1..];
+
+                    return Some(SetBackgroundColor(color));
+                }
+
+                _ => {
+                    self.ps = &self.ps[1..];
+                }
+            }
+        }
+
+        None
     }
 }
 
@@ -852,41 +1113,138 @@ impl PartialEq<Vec<u16>> for Param {
 
 #[cfg(test)]
 mod tests {
+    use super::AnsiMode;
+    use super::DecMode;
+    use super::Function;
     use super::Function::*;
     use super::Parser;
+    use super::SgrOp::*;
+    use crate::color::Color;
     use crate::dump::Dump;
 
-    fn p(number: u16) -> Vec<u16> {
-        vec![number]
-    }
+    fn parse(s: &str) -> Vec<Function> {
+        let mut parser = Parser::new();
 
-    fn ps(numbers: &[u16]) -> Vec<Vec<u16>> {
-        numbers.iter().map(|n| p(*n)).collect()
-    }
-
-    fn mp(numbers: &[u16]) -> Vec<u16> {
-        numbers.to_vec()
+        s.chars().filter_map(|ch| parser.feed(ch)).collect()
     }
 
     #[test]
-    fn sgr() {
-        let mut parser = Parser::new();
+    fn parse_c0() {
+        assert_eq!(parse("\x08"), [Bs]);
+        assert_eq!(parse("\x0a"), [Lf]);
+        assert_eq!(parse("\x0d"), [Cr]);
+        assert_eq!(parse("\x0e"), [So]);
+        assert_eq!(parse("\x0f"), [Si]);
+    }
 
-        let ops = "\x1b[;1;;23;456;m"
-            .chars()
-            .filter_map(|ch| parser.feed(ch))
-            .collect::<Vec<_>>();
+    #[test]
+    fn parse_c1() {
+        assert_eq!(parse("\u{84}"), [Lf]);
+        assert_eq!(parse("\u{85}"), [Nel]);
+        assert_eq!(parse("\u{88}"), [Hts]);
+        assert_eq!(parse("\u{8d}"), [Ri]);
+    }
 
-        assert_eq!(ops, vec![Sgr(ps(&[0, 1, 0, 23, 456, 0]))]);
+    #[test]
+    fn parse_esc_seq() {
+        assert_eq!(parse("\x1b7"), [Decsc]);
+        assert_eq!(parse("\x1bc"), [Ris]);
+        assert_eq!(parse("\x1bM"), [Ri]);
+    }
 
-        let ops = "\x1b[;1;;38:2:1:2:3;m"
-            .chars()
-            .filter_map(|ch| parser.feed(ch))
-            .collect::<Vec<_>>();
+    #[test]
+    fn parse_csi_seq() {
+        assert_eq!(parse("\x1b[@"), [Ich(0)]);
+        assert_eq!(parse("\x1b[3;4H"), [Cup(3, 4)]);
 
         assert_eq!(
-            ops,
-            vec![Sgr(vec![p(0), p(1), p(0), mp(&[38, 2, 1, 2, 3]), p(0)])]
+            parse("\x1b[4;20h"),
+            [Sm(vec![AnsiMode::Insert, AnsiMode::NewLine])]
+        );
+
+        assert_eq!(
+            parse("\x1b[?6;1047h"),
+            [Decset(vec![DecMode::Origin, DecMode::AltScreenBuffer])]
+        );
+
+        assert_eq!(parse("\x1b[m"), [Sgr(vec![Reset])]);
+    }
+
+    #[test]
+    fn parse_sgr_seq() {
+        assert_eq!(
+            parse("\x1b[;1;m"),
+            [Sgr(vec![Reset, SetBoldIntensity, Reset])]
+        );
+
+        assert_eq!(parse("\x1b[1m"), [Sgr(vec![SetBoldIntensity])]);
+        assert_eq!(parse("\x1b[2m"), [Sgr(vec![SetFaintIntensity])]);
+        assert_eq!(parse("\x1b[3m"), [Sgr(vec![SetItalic])]);
+        assert_eq!(parse("\x1b[4m"), [Sgr(vec![SetUnderline])]);
+        assert_eq!(parse("\x1b[5m"), [Sgr(vec![SetBlink])]);
+        assert_eq!(parse("\x1b[7m"), [Sgr(vec![SetInverse])]);
+        assert_eq!(parse("\x1b[9m"), [Sgr(vec![SetStrikethrough])]);
+        assert_eq!(parse("\x1b[21m"), [Sgr(vec![ResetIntensity])]);
+        assert_eq!(parse("\x1b[22m"), [Sgr(vec![ResetIntensity])]);
+        assert_eq!(parse("\x1b[23m"), [Sgr(vec![ResetItalic])]);
+        assert_eq!(parse("\x1b[24m"), [Sgr(vec![ResetUnderline])]);
+        assert_eq!(parse("\x1b[25m"), [Sgr(vec![ResetBlink])]);
+        assert_eq!(parse("\x1b[27m"), [Sgr(vec![ResetInverse])]);
+
+        assert_eq!(
+            parse("\x1b[31m"),
+            [Sgr(vec![SetForegroundColor(Color::Indexed(1))])]
+        );
+
+        assert_eq!(
+            parse("\x1b[38:2:1:2:3m"),
+            [Sgr(vec![SetForegroundColor(Color::rgb(1, 2, 3))])]
+        );
+
+        assert_eq!(
+            parse("\x1b[38:5:88m"),
+            [Sgr(vec![SetForegroundColor(Color::Indexed(88))])]
+        );
+
+        assert_eq!(parse("\x1b[39m"), [Sgr(vec![ResetForegroundColor])]);
+
+        assert_eq!(
+            parse("\x1b[41m"),
+            [Sgr(vec![SetBackgroundColor(Color::Indexed(1))])]
+        );
+
+        assert_eq!(
+            parse("\x1b[48:2:1:2:3m"),
+            [Sgr(vec![SetBackgroundColor(Color::rgb(1, 2, 3))])]
+        );
+
+        assert_eq!(
+            parse("\x1b[48:5:99m"),
+            [Sgr(vec![SetBackgroundColor(Color::Indexed(99))])]
+        );
+
+        assert_eq!(parse("\x1b[49m"), [Sgr(vec![ResetBackgroundColor])]);
+
+        // legacy syntax for 24-bit color, within a larger sequence
+        assert_eq!(
+            parse("\x1b[1;38;2;1;2;3;48;2;1;2;3;0m"),
+            [Sgr(vec![
+                SetBoldIntensity,
+                SetForegroundColor(Color::rgb(1, 2, 3)),
+                SetBackgroundColor(Color::rgb(1, 2, 3)),
+                Reset,
+            ])]
+        );
+
+        // legacy syntax for 8-bit color, within a larger sequence
+        assert_eq!(
+            parse("\x1b[1;38;5;88;48;5;99;0m"),
+            [Sgr(vec![
+                SetBoldIntensity,
+                SetForegroundColor(Color::Indexed(88)),
+                SetBackgroundColor(Color::Indexed(99)),
+                Reset,
+            ])]
         );
     }
 

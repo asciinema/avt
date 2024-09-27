@@ -5,13 +5,13 @@ use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::Cell;
 use crate::charset::Charset;
-use crate::color::Color;
 use crate::dump::Dump;
 use crate::line::Line;
-use crate::parser::{AnsiMode, CtcOp, DecMode, EdScope, ElScope, Function, TbcScope, XtwinopsOp};
+use crate::parser::{
+    AnsiMode, CtcOp, DecMode, EdScope, ElScope, Function, SgrOp, TbcScope, XtwinopsOp,
+};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
-use rgb::RGB8;
 use std::cmp::Ordering;
 use std::mem;
 
@@ -1037,198 +1037,77 @@ impl Terminal {
         }
     }
 
-    fn sgr(&mut self, params: Vec<Vec<u16>>) {
-        let mut ps = params.as_slice();
+    fn sgr(&mut self, ops: Vec<SgrOp>) {
+        use SgrOp::*;
 
-        while let Some(parts) = ps.first() {
-            match parts.as_slice() {
-                [0] => {
+        for op in ops {
+            match op {
+                Reset => {
                     self.pen = Pen::default();
-                    ps = &ps[1..];
                 }
 
-                [1] => {
+                SetBoldIntensity => {
                     self.pen.intensity = Intensity::Bold;
-                    ps = &ps[1..];
                 }
 
-                [2] => {
+                SetFaintIntensity => {
                     self.pen.intensity = Intensity::Faint;
-                    ps = &ps[1..];
                 }
 
-                [3] => {
+                SetItalic => {
                     self.pen.set_italic();
-                    ps = &ps[1..];
                 }
 
-                [4] => {
+                SetUnderline => {
                     self.pen.set_underline();
-                    ps = &ps[1..];
                 }
 
-                [5] => {
+                SetBlink => {
                     self.pen.set_blink();
-                    ps = &ps[1..];
                 }
 
-                [7] => {
+                SetInverse => {
                     self.pen.set_inverse();
-                    ps = &ps[1..];
                 }
 
-                [9] => {
+                SetStrikethrough => {
                     self.pen.set_strikethrough();
-                    ps = &ps[1..];
                 }
 
-                [21] | [22] => {
+                ResetIntensity => {
                     self.pen.intensity = Intensity::Normal;
-                    ps = &ps[1..];
                 }
 
-                [23] => {
+                ResetItalic => {
                     self.pen.unset_italic();
-                    ps = &ps[1..];
                 }
 
-                [24] => {
+                ResetUnderline => {
                     self.pen.unset_underline();
-                    ps = &ps[1..];
                 }
 
-                [25] => {
+                ResetBlink => {
                     self.pen.unset_blink();
-                    ps = &ps[1..];
                 }
 
-                [27] => {
+                ResetInverse => {
                     self.pen.unset_inverse();
-                    ps = &ps[1..];
                 }
 
-                [param] if *param >= 30 && *param <= 37 => {
-                    self.pen.foreground = Some(Color::Indexed((param - 30) as u8));
-                    ps = &ps[1..];
+                SetForegroundColor(color) => {
+                    self.pen.foreground = Some(color);
                 }
 
-                [38, 2, r, g, b] => {
-                    self.pen.foreground = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
-                    ps = &ps[1..];
-                }
-
-                [38, 5, idx] => {
-                    self.pen.foreground = Some(Color::Indexed(*idx as u8));
-                    ps = &ps[1..];
-                }
-
-                [38] => match ps.get(1).map(|p| p.as_slice()) {
-                    None => {
-                        ps = &ps[1..];
-                    }
-
-                    Some([2]) => {
-                        if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap()[0];
-                            let g = ps.get(3).unwrap()[0];
-                            let b = b[0];
-
-                            self.pen.foreground =
-                                Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
-
-                            ps = &ps[5..];
-                        } else {
-                            ps = &ps[2..];
-                        }
-                    }
-
-                    Some([5]) => {
-                        if let Some(idx) = ps.get(2) {
-                            let idx = idx[0];
-                            self.pen.foreground = Some(Color::Indexed(idx as u8));
-                            ps = &ps[3..];
-                        } else {
-                            ps = &ps[2..];
-                        }
-                    }
-
-                    Some(_) => {
-                        ps = &ps[1..];
-                    }
-                },
-
-                [39] => {
+                ResetForegroundColor => {
                     self.pen.foreground = None;
-                    ps = &ps[1..];
                 }
 
-                [param] if *param >= 40 && *param <= 47 => {
-                    self.pen.background = Some(Color::Indexed((param - 40) as u8));
-                    ps = &ps[1..];
+                SetBackgroundColor(color) => {
+                    self.pen.background = Some(color);
                 }
 
-                [48, 2, r, g, b] => {
-                    self.pen.background = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
-                    ps = &ps[1..];
-                }
-
-                [48, 5, idx] => {
-                    self.pen.background = Some(Color::Indexed(*idx as u8));
-                    ps = &ps[1..];
-                }
-
-                [48] => match ps.get(1).map(|p| p.as_slice()) {
-                    None => {
-                        ps = &ps[1..];
-                    }
-
-                    Some([2]) => {
-                        if let Some(b) = ps.get(4) {
-                            let r = ps.get(2).unwrap()[0];
-                            let g = ps.get(3).unwrap()[0];
-                            let b = b[0];
-
-                            self.pen.background =
-                                Some(Color::RGB(RGB8::new(r as u8, g as u8, b as u8)));
-
-                            ps = &ps[5..];
-                        } else {
-                            ps = &ps[2..];
-                        }
-                    }
-
-                    Some([5]) => {
-                        if let Some(idx) = ps.get(2) {
-                            let idx = idx[0];
-                            self.pen.background = Some(Color::Indexed(idx as u8));
-                            ps = &ps[3..];
-                        } else {
-                            ps = &ps[2..];
-                        }
-                    }
-
-                    Some(_) => {
-                        ps = &ps[1..];
-                    }
-                },
-
-                [49] => {
+                ResetBackgroundColor => {
                     self.pen.background = None;
-                    ps = &ps[1..];
-                }
-
-                [param] if *param >= 90 && *param <= 97 => {
-                    self.pen.foreground = Some(Color::Indexed((param - 90 + 8) as u8));
-                    ps = &ps[1..];
-                }
-
-                [param] if *param >= 100 && *param <= 107 => {
-                    self.pen.background = Some(Color::Indexed((param - 100 + 8) as u8));
-                    ps = &ps[1..];
-                }
-
-                _ => {
-                    ps = &ps[1..];
                 }
             }
         }
@@ -1634,178 +1513,103 @@ impl Dump for Terminal {
 mod tests {
     use super::Terminal;
     use crate::color::Color;
-    use crate::parser::{DecMode, Function, XtwinopsOp};
+    use crate::parser::{DecMode, Function, SgrOp, XtwinopsOp};
     use crate::pen::Intensity;
-    use rgb::RGB8;
     use Function::*;
+    use SgrOp::*;
 
-    fn p(number: u16) -> Vec<u16> {
-        vec![number]
-    }
-
-    fn ps(numbers: &[u16]) -> Vec<Vec<u16>> {
-        numbers.iter().map(|n| p(*n)).collect()
-    }
-
-    fn mp(numbers: &[u16]) -> Vec<u16> {
-        numbers.to_vec()
-    }
-
-    fn sgr_multi<P: Into<Vec<u16>> + Clone, T: AsRef<[P]>>(values: T) -> Function {
-        let params: Vec<Vec<u16>> = values.as_ref().iter().map(|p| (p.clone()).into()).collect();
-
-        Sgr(params)
-    }
-
-    fn sgr(param: u16) -> Function {
-        Sgr(ps(&[param]))
+    fn sgr(op: SgrOp) -> Function {
+        Sgr(vec![op])
     }
 
     #[test]
     fn execute_sgr() {
         let mut term = Terminal::default();
 
-        term.execute(sgr(1));
+        term.execute(sgr(SetBoldIntensity));
 
         assert!(term.pen.intensity == Intensity::Bold);
 
-        term.execute(sgr(2));
+        term.execute(sgr(SetFaintIntensity));
 
         assert_eq!(term.pen.intensity, Intensity::Faint);
 
-        term.execute(sgr(3));
+        term.execute(sgr(SetItalic));
 
         assert!(term.pen.is_italic());
 
-        term.execute(sgr(4));
+        term.execute(sgr(SetUnderline));
 
         assert!(term.pen.is_underline());
 
-        term.execute(sgr(5));
+        term.execute(sgr(SetBlink));
 
         assert!(term.pen.is_blink());
 
-        term.execute(sgr(7));
+        term.execute(sgr(SetInverse));
 
         assert!(term.pen.is_inverse());
 
-        term.execute(sgr(9));
+        term.execute(sgr(SetStrikethrough));
 
         assert!(term.pen.is_strikethrough());
 
-        term.execute(sgr(32));
+        term.execute(sgr(SetForegroundColor(Color::Indexed(1))));
 
-        assert_eq!(term.pen.foreground, Some(Color::Indexed(2)));
+        assert_eq!(term.pen.foreground, Some(Color::Indexed(1)));
 
-        term.execute(sgr(43));
+        term.execute(sgr(SetBackgroundColor(Color::Indexed(2))));
 
-        assert_eq!(term.pen.background, Some(Color::Indexed(3)));
+        assert_eq!(term.pen.background, Some(Color::Indexed(2)));
 
-        term.execute(sgr(93));
-
-        assert_eq!(term.pen.foreground, Some(Color::Indexed(11)));
-
-        term.execute(sgr(104));
-
-        assert_eq!(term.pen.background, Some(Color::Indexed(12)));
-
-        term.execute(sgr(39));
+        term.execute(sgr(ResetForegroundColor));
 
         assert_eq!(term.pen.foreground, None);
 
-        term.execute(sgr(49));
+        term.execute(sgr(ResetBackgroundColor));
 
         assert_eq!(term.pen.background, None);
 
-        term.execute(sgr_multi(vec![
-            p(1),
-            mp(&[38, 5, 88]),
-            mp(&[48, 5, 99]),
-            p(5),
+        term.execute(Sgr(vec![
+            SetBoldIntensity,
+            SetForegroundColor(Color::Indexed(1)),
+            SetBackgroundColor(Color::Indexed(2)),
+            SetBlink,
+            ResetIntensity,
         ]));
 
-        assert_eq!(term.pen.intensity, Intensity::Bold);
+        assert_eq!(term.pen.intensity, Intensity::Normal);
         assert!(term.pen.is_blink());
-        assert_eq!(term.pen.foreground, Some(Color::Indexed(88)));
-        assert_eq!(term.pen.background, Some(Color::Indexed(99)));
-
-        term.execute(sgr_multi(vec![
-            mp(&[38, 2, 101, 102, 103]),
-            mp(&[48, 2, 201, 202, 203]),
-        ]));
-
-        assert_eq!(
-            term.pen.foreground,
-            Some(Color::RGB(RGB8::new(101, 102, 103)))
-        );
-
-        assert_eq!(
-            term.pen.background,
-            Some(Color::RGB(RGB8::new(201, 202, 203)))
-        );
-
-        term.execute(sgr_multi([p(23), p(24), p(25), p(27)]));
-
-        assert!(!term.pen.is_italic());
-        assert!(!term.pen.is_underline());
-        assert!(!term.pen.is_blink());
-        assert!(!term.pen.is_inverse());
-    }
-
-    #[test]
-    fn execute_sgr_semicolon_colors() {
-        let mut term = Terminal::default();
-
-        term.execute(sgr_multi([p(38), p(5), p(88), p(48), p(5), p(99)]));
-
-        assert_eq!(term.pen.foreground, Some(Color::Indexed(88)));
-        assert_eq!(term.pen.background, Some(Color::Indexed(99)));
-
-        term.execute(sgr_multi([
-            p(38),
-            p(2),
-            p(101),
-            p(102),
-            p(103),
-            p(48),
-            p(2),
-            p(201),
-            p(202),
-            p(203),
-        ]));
-
-        assert_eq!(
-            term.pen.foreground,
-            Some(Color::RGB(RGB8::new(101, 102, 103)))
-        );
-
-        assert_eq!(
-            term.pen.background,
-            Some(Color::RGB(RGB8::new(201, 202, 203)))
-        );
+        assert_eq!(term.pen.foreground, Some(Color::Indexed(1)));
+        assert_eq!(term.pen.background, Some(Color::Indexed(2)));
     }
 
     #[test]
     fn execute_xtwinops_vs_tabs() {
+        use XtwinopsOp::*;
+
         let mut term = Terminal::new((6, 2), None, true);
 
         assert_eq!(term.tabs, vec![]);
 
-        term.execute(Xtwinops(XtwinopsOp::Resize(10, 0)));
+        term.execute(Xtwinops(Resize(10, 0)));
 
         assert_eq!(term.tabs, vec![8]);
 
-        term.execute(Xtwinops(XtwinopsOp::Resize(30, 0)));
+        term.execute(Xtwinops(Resize(30, 0)));
 
         assert_eq!(term.tabs, vec![8, 16, 24]);
 
-        term.execute(Xtwinops(XtwinopsOp::Resize(20, 0)));
+        term.execute(Xtwinops(Resize(20, 0)));
 
         assert_eq!(term.tabs, vec![8, 16]);
     }
 
     #[test]
     fn execute_xtwinops_vs_saved_ctx() {
+        use DecMode::*;
+        use XtwinopsOp::*;
+
         let mut term = Terminal::new((20, 5), None, true);
 
         // move cursor forward by 15 cols
@@ -1819,7 +1623,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // switch to alternate buffer
-        term.execute(Decset(vec![DecMode::AltScreenBuffer]));
+        term.execute(Decset(vec![AltScreenBuffer]));
 
         // save cursor
         term.execute(Decsc);
@@ -1827,7 +1631,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // resize to 10x5
-        term.execute(Xtwinops(XtwinopsOp::Resize(10, 0)));
+        term.execute(Xtwinops(Resize(10, 0)));
 
         assert_eq!(term.saved_ctx.cursor_col, 9);
     }
