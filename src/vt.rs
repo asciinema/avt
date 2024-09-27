@@ -64,7 +64,7 @@ impl Vt {
     }
 
     pub fn cursor_key_app_mode(&self) -> bool {
-        self.terminal.cursor_key_app_mode()
+        self.terminal.cursor_keys_app_mode()
     }
 
     pub fn dump(&self) -> String {

@@ -32,7 +32,7 @@ pub(crate) struct Terminal {
     origin_mode: OriginMode,
     auto_wrap_mode: bool,
     new_line_mode: bool,
-    cursor_key_mode: CursorKeyMode,
+    cursor_keys_mode: CursorKeysMode,
     next_print_wraps: bool,
     top_margin: usize,
     bottom_margin: usize,
@@ -56,7 +56,7 @@ pub enum OriginMode {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum CursorKeyMode {
+pub enum CursorKeysMode {
     Normal,
     Application,
 }
@@ -108,7 +108,7 @@ impl Terminal {
             origin_mode: OriginMode::Absolute,
             auto_wrap_mode: true,
             new_line_mode: false,
-            cursor_key_mode: CursorKeyMode::Normal,
+            cursor_keys_mode: CursorKeysMode::Normal,
             next_print_wraps: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
@@ -612,8 +612,8 @@ impl Terminal {
         self.primary_buffer().text()
     }
 
-    pub fn cursor_key_app_mode(&self) -> bool {
-        self.cursor_key_mode == CursorKeyMode::Application
+    pub fn cursor_keys_app_mode(&self) -> bool {
+        self.cursor_keys_mode == CursorKeysMode::Application
     }
 
     #[cfg(test)]
@@ -640,7 +640,7 @@ impl Terminal {
         assert_eq!(self.origin_mode, other.origin_mode);
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
-        assert_eq!(self.cursor_key_mode, other.cursor_key_mode);
+        assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
         assert_eq!(self.next_print_wraps, other.next_print_wraps);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
@@ -1304,7 +1304,7 @@ impl Terminal {
         for mode in modes {
             match mode {
                 CursorKeys => {
-                    self.cursor_key_mode = CursorKeyMode::Application;
+                    self.cursor_keys_mode = CursorKeysMode::Application;
                 }
 
                 Origin => {
@@ -1344,7 +1344,7 @@ impl Terminal {
         for mode in modes {
             match mode {
                 CursorKeys => {
-                    self.cursor_key_mode = CursorKeyMode::Normal;
+                    self.cursor_keys_mode = CursorKeysMode::Normal;
                 }
 
                 Origin => {
@@ -1627,7 +1627,7 @@ impl Dump for Terminal {
 
         // 14. setup cursor key mode
 
-        if self.cursor_key_mode == CursorKeyMode::Application {
+        if self.cursor_keys_mode == CursorKeysMode::Application {
             // enable new line mode
             seq.push_str("\u{9b}?1h");
         }
