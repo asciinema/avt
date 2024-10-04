@@ -1210,6 +1210,11 @@ mod tests {
         );
 
         assert_eq!(
+            parse("\x1b[38:2::1:2:3m"),
+            [Sgr(vec![SetForegroundColor(Color::rgb(1, 2, 3))])]
+        );
+
+        assert_eq!(
             parse("\x1b[38:5:88m"),
             [Sgr(vec![SetForegroundColor(Color::Indexed(88))])]
         );
@@ -1223,6 +1228,11 @@ mod tests {
 
         assert_eq!(
             parse("\x1b[48:2:1:2:3m"),
+            [Sgr(vec![SetBackgroundColor(Color::rgb(1, 2, 3))])]
+        );
+
+        assert_eq!(
+            parse("\x1b[48:2::1:2:3m"),
             [Sgr(vec![SetBackgroundColor(Color::rgb(1, 2, 3))])]
         );
 
