@@ -917,7 +917,7 @@ impl Terminal {
                     ps = &ps[1..];
                 }
 
-                [38, 2, r, g, b] => {
+                [38, 2, r, g, b] | [38, 2, _, r, g, b] => {
                     self.pen.foreground = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
                     ps = &ps[1..];
                 }
@@ -972,7 +972,7 @@ impl Terminal {
                     ps = &ps[1..];
                 }
 
-                [48, 2, r, g, b] => {
+                [48, 2, r, g, b] | [48, 2, _, r, g, b] => {
                     self.pen.background = Some(Color::RGB(RGB8::new(*r as u8, *g as u8, *b as u8)));
                     ps = &ps[1..];
                 }
