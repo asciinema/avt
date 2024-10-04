@@ -771,7 +771,7 @@ impl<'a> Iterator for SgrOps<'a> {
                     return Some(SetForegroundColor(color));
                 }
 
-                [38, 2, r, g, b] => {
+                [38, 2, r, g, b] | [38, 2, _, r, g, b] => {
                     self.ps = &self.ps[1..];
 
                     return Some(SetForegroundColor(Color::rgb(*r as u8, *g as u8, *b as u8)));
@@ -833,7 +833,7 @@ impl<'a> Iterator for SgrOps<'a> {
                     return Some(SetBackgroundColor(color));
                 }
 
-                [48, 2, r, g, b] => {
+                [48, 2, r, g, b] | [48, 2, _, r, g, b] => {
                     let color = Color::rgb(*r as u8, *g as u8, *b as u8);
                     self.ps = &self.ps[1..];
 
