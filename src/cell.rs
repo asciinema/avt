@@ -2,7 +2,7 @@ use crate::pen::Pen;
 use unicode_width::UnicodeWidthChar;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Cell(pub char, pub Pen);
+pub struct Cell(char, Pen);
 
 impl Cell {
     pub(crate) fn new(ch: char, pen: Pen) -> Self {
@@ -17,7 +17,15 @@ impl Cell {
         self.0 == ' ' && self.1.is_default()
     }
 
-    pub(crate) fn char_width(&self) -> usize {
+    pub fn char(&self) -> char {
+        self.0
+    }
+
+    pub fn pen(&self) -> &Pen {
+        &self.1
+    }
+
+    pub fn width(&self) -> usize {
         UnicodeWidthChar::width(self.0).unwrap_or(0)
     }
 }

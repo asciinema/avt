@@ -1,7 +1,6 @@
 use crate::cell::Cell;
 use crate::dump::Dump;
 use crate::pen::Pen;
-use crate::segment::Segment;
 use std::ops::{Index, Range, RangeFull};
 
 #[derive(Debug, Clone, PartialEq)]
@@ -127,23 +126,19 @@ impl Line {
         self.len() == 0
     }
 
-    pub fn cells(&self) -> impl Iterator<Item = (char, Pen)> + '_ {
-        self.cells.iter().map(|cell| (cell.0, cell.1))
+    pub fn cells(&self) -> &[Cell] {
+        &self.cells
     }
 
-    pub fn segments(&self) -> impl Iterator<Item = Segment> + '_ {
-        self.group(|_c, _w| false)
-    }
-
-    pub fn group<'a>(
+    pub fn chunks<'a>(
         &'a self,
-        predicate: impl Fn(&char, usize) -> bool + 'a,
-    ) -> impl Iterator<Item = Segment> + '_ {
-        Segments::new(self.cells.iter(), predicate)
+        predicate: impl Fn(&Cell, &Cell) -> bool + 'a,
+    ) -> impl Iterator<Item = Vec<Cell>> + '_ {
+        Chunks::new(self.cells.iter(), predicate)
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        self.cells.iter().map(|cell| cell.0)
+        self.cells.iter().map(Cell::char)
     }
 
     pub fn text(&self) -> String {
@@ -165,91 +160,66 @@ impl Line {
             .take_while(|cell| cell.is_default())
             .count()
     }
+
+    pub fn dump(&self) -> String {
+        let mut s = String::new();
+
+        for cells in self.chunks(|c1, c2| c1.pen() != c2.pen()) {
+            s.push_str(&cells[0].pen().dump());
+
+            for cell in cells {
+                s.push(cell.char());
+            }
+        }
+
+        s
+    }
 }
 
-struct Segments<'a, I, F>
+struct Chunks<'a, I, F>
 where
     I: Iterator<Item = &'a Cell>,
-    F: Fn(&char, usize) -> bool,
+    F: Fn(&Cell, &Cell) -> bool,
 {
     iter: I,
-    current: Option<Segment>,
-    ready: Option<Segment>,
-    offset: usize,
     predicate: F,
+    cells: Vec<Cell>,
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char, usize) -> bool> Segments<'a, I, F> {
+impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Chunks<'a, I, F> {
     fn new(iter: I, predicate: F) -> Self {
         Self {
             iter,
-            current: None,
-            ready: None,
-            offset: 0,
             predicate,
+            cells: Vec::new(),
         }
     }
 }
 
-impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&char, usize) -> bool> Iterator
-    for Segments<'a, I, F>
-{
-    type Item = Segment;
+impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for Chunks<'a, I, F> {
+    type Item = Vec<Cell>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(segment) = self.ready.take() {
-            return Some(segment);
-        }
-
         for cell in self.iter.by_ref() {
-            let char_width = cell.char_width();
-            let offset = self.offset;
-            self.offset += char_width;
-
-            if (self.predicate)(&cell.0, char_width) {
-                let ready = Some(Segment {
-                    chars: vec![cell.0],
-                    pen: cell.1,
-                    offset,
-                    char_width,
-                });
-
-                if let Some(segment) = self.current.take() {
-                    self.ready = ready;
-                    return Some(segment);
-                }
-
-                return ready;
+            if self.cells.is_empty() {
+                self.cells.push(*cell);
+                continue;
             }
 
-            match self.current.as_mut() {
-                Some(segment) => {
-                    if cell.1 != segment.pen || char_width != segment.char_width {
-                        let ready = self.current.replace(Segment {
-                            chars: vec![cell.0],
-                            pen: cell.1,
-                            offset,
-                            char_width,
-                        });
-
-                        return ready;
-                    }
-
-                    segment.chars.push(cell.0);
-                }
-
-                None => {
-                    self.current = Some(Segment {
-                        chars: vec![cell.0],
-                        pen: cell.1,
-                        offset,
-                        char_width,
-                    });
-                }
+            if (self.predicate)(self.cells.last().unwrap(), cell) {
+                let cells = std::mem::take(&mut self.cells);
+                self.cells.push(*cell);
+                return Some(cells);
+            } else {
+                self.cells.push(*cell);
             }
         }
 
-        self.current.take()
+        if self.cells.is_empty() {
+            None
+        } else {
+            Some(std::mem::take(&mut self.cells))
+        }
     }
 }
 
@@ -277,92 +247,41 @@ impl Index<RangeFull> for Line {
     }
 }
 
-impl Dump for Line {
-    fn dump(&self) -> String {
-        self.segments().map(|s| s.dump()).collect()
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{Cell, Segment, Segments};
-    use crate::{Color, Pen};
+    use super::{Cell, Chunks};
 
-    #[test]
-    fn segments() {
-        let pen1 = Pen::default();
-
-        let pen2 = Pen {
-            foreground: Some(Color::Indexed(1)),
-            ..Pen::default()
-        };
-
-        let cells = [
-            Cell('a', pen1),
-            Cell('b', pen1),
-            Cell('c', pen2),
-            Cell('d', pen1),
-            Cell('e', pen1),
-            Cell('👩', pen1),
-            Cell('f', pen1),
-        ];
-
-        let segments: Vec<Segment> = Segments::new(cells.iter(), |_, _| false).collect();
-
-        assert_eq!(&segments[0].chars, &['a', 'b']);
-        assert_eq!(segments[0].pen, pen1);
-        assert_eq!(segments[0].offset, 0);
-
-        assert_eq!(&segments[1].chars, &['c']);
-        assert_eq!(segments[1].pen, pen2);
-        assert_eq!(segments[1].offset, 2);
-
-        assert_eq!(&segments[2].chars, &['d', 'e']);
-        assert_eq!(segments[2].pen, pen1);
-        assert_eq!(segments[2].offset, 3);
-
-        assert_eq!(&segments[3].chars, &['👩']);
-        assert_eq!(segments[3].pen, pen1);
-        assert_eq!(segments[3].offset, 5);
-
-        assert_eq!(&segments[4].chars, &['f']);
-        assert_eq!(segments[4].pen, pen1);
-        assert_eq!(segments[4].offset, 7);
+    fn chars(cells: &[Cell]) -> Vec<char> {
+        cells.iter().map(|c| c.char()).collect()
     }
 
     #[test]
-    fn segments_group() {
-        let pen1 = Pen::default();
-
-        let pen2 = Pen {
-            foreground: Some(Color::Indexed(1)),
-            ..Pen::default()
-        };
-
+    fn chunks() {
         let cells = [
-            Cell('a', pen1),
-            Cell('b', pen1),
-            Cell('c', pen1),
-            Cell('d', pen1),
-            Cell('e', pen2),
+            '0'.into(),
+            'a'.into(),
+            'b'.into(),
+            'C'.into(),
+            'D'.into(),
+            'E'.into(),
+            '1'.into(),
+            'F'.into(),
+            'g'.into(),
         ];
 
-        let segments: Vec<Segment> = Segments::new(cells.iter(), |c, _w| c == &'c').collect();
+        let chunks: Vec<Vec<Cell>> = Chunks::new(cells.iter(), |c1, c2| {
+            c1.char().is_ascii_digit()
+                || c2.char().is_ascii_digit()
+                || (c1.char().is_lowercase() && c2.char().is_uppercase())
+                || (c1.char().is_uppercase() && c2.char().is_lowercase())
+        })
+        .collect();
 
-        assert_eq!(&segments[0].chars, &['a', 'b']);
-        assert_eq!(segments[0].pen, pen1);
-        assert_eq!(segments[0].offset, 0);
-
-        assert_eq!(&segments[1].chars, &['c']);
-        assert_eq!(segments[1].pen, pen1);
-        assert_eq!(segments[1].offset, 2);
-
-        assert_eq!(&segments[2].chars, &['d']);
-        assert_eq!(segments[2].pen, pen1);
-        assert_eq!(segments[2].offset, 3);
-
-        assert_eq!(&segments[3].chars, &['e']);
-        assert_eq!(segments[3].pen, pen2);
-        assert_eq!(segments[3].offset, 4);
+        assert_eq!(&chars(&chunks[0]), &['0']);
+        assert_eq!(&chars(&chunks[1]), &['a', 'b']);
+        assert_eq!(&chars(&chunks[2]), &['C', 'D', 'E']);
+        assert_eq!(&chars(&chunks[3]), &['1']);
+        assert_eq!(&chars(&chunks[4]), &['F']);
+        assert_eq!(&chars(&chunks[5]), &['g']);
     }
 }

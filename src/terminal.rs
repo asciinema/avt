@@ -976,7 +976,7 @@ impl Terminal {
     fn rep(&mut self, n: u16) {
         if self.cursor.col > 0 {
             let n = as_usize(n, 1);
-            let char = self.buffer[(self.cursor.col - 1, self.cursor.row)].0;
+            let char = self.buffer[(self.cursor.col - 1, self.cursor.row)].char();
 
             for _n in 0..n {
                 self.print(char);
@@ -1449,7 +1449,7 @@ impl Dump for Terminal {
             // move cursor past right border by re-printing the character in
             // the last column
             let cell = self.buffer[(self.cols - 1, self.cursor.row)];
-            seq.push_str(&format!("{}{}", cell.1.dump(), cell.0));
+            seq.push_str(&format!("{}{}", cell.pen().dump(), cell.char()));
         }
 
         // configure pen
