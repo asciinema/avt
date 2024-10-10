@@ -83,7 +83,7 @@ impl TextCollector {
 #[cfg(test)]
 mod tests {
     use super::TextUnwrapper;
-    use crate::{cell::Cell, util::TextCollector, Line, Pen, Vt};
+    use crate::{util::TextCollector, Line, Pen, Vt};
 
     #[test]
     fn text_unwrapper() {
@@ -91,8 +91,8 @@ mod tests {
         let pen = Pen::default();
 
         let mut line = Line::blank(5, pen);
-        line.print(0, Cell('a', pen));
-        line.print(4, Cell('b', pen));
+        line.print(0, 'a'.into());
+        line.print(4, 'b'.into());
         line.wrapped = false;
 
         let text = tu.push(&line);
@@ -100,8 +100,8 @@ mod tests {
         assert!(matches!(text, Some(ref x) if x == "a   b"));
 
         let mut line = Line::blank(5, pen);
-        line.print(0, Cell('c', pen));
-        line.print(4, Cell('d', pen));
+        line.print(0, 'c'.into());
+        line.print(4, 'd'.into());
         line.wrapped = true;
 
         let text = tu.push(&line);
@@ -109,8 +109,8 @@ mod tests {
         assert!(text.is_none());
 
         let mut line = Line::blank(5, pen);
-        line.print(0, Cell('e', pen));
-        line.print(4, Cell('f', pen));
+        line.print(0, 'e'.into());
+        line.print(4, 'f'.into());
         line.wrapped = true;
 
         let text = tu.push(&line);
@@ -118,8 +118,8 @@ mod tests {
         assert!(text.is_none());
 
         let mut line = Line::blank(5, pen);
-        line.print(0, Cell('g', pen));
-        line.print(1, Cell('h', pen));
+        line.print(0, 'g'.into());
+        line.print(1, 'h'.into());
         line.wrapped = false;
 
         let text = tu.push(&line);
@@ -127,7 +127,7 @@ mod tests {
         assert!(matches!(text, Some(ref x) if x == "c   de   fgh"));
 
         let mut line = Line::blank(5, pen);
-        line.print(0, Cell('i', pen));
+        line.print(0, 'i'.into());
         line.wrapped = true;
 
         let text = tu.push(&line);

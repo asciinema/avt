@@ -652,7 +652,7 @@ impl Terminal {
 
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
-        let cell = Cell(ch, self.pen);
+        let cell = Cell::new(ch, self.pen);
 
         if self.auto_wrap_mode && self.next_print_wraps {
             self.do_move_cursor_to_col(0);
@@ -753,8 +753,7 @@ impl Terminal {
     fn decaln(&mut self) {
         for row in 0..self.rows {
             for col in 0..self.cols {
-                self.buffer
-                    .print((col, row), Cell('\u{45}', Pen::default()));
+                self.buffer.print((col, row), '\u{45}'.into());
             }
 
             self.dirty_lines.add(row);

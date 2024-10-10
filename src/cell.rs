@@ -5,7 +5,11 @@ use unicode_width::UnicodeWidthChar;
 pub struct Cell(pub char, pub Pen);
 
 impl Cell {
-    pub fn blank(pen: Pen) -> Self {
+    pub(crate) fn new(ch: char, pen: Pen) -> Self {
+        Cell(ch, pen)
+    }
+
+    pub(crate) fn blank(pen: Pen) -> Self {
         Cell(' ', pen)
     }
 
@@ -21,5 +25,11 @@ impl Cell {
 impl Default for Cell {
     fn default() -> Self {
         Self::blank(Pen::default())
+    }
+}
+
+impl From<char> for Cell {
+    fn from(value: char) -> Self {
+        Self::new(value, Pen::default())
     }
 }

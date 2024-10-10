@@ -374,7 +374,7 @@ impl Buffer {
         let mut line = Line::blank(self.cols, Pen::default());
 
         for col in 0..self.cols {
-            line.print(col, Cell('s', Pen::default()));
+            line.print(col, 's'.into());
         }
 
         for _ in 0..n {
@@ -516,7 +516,6 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
 #[cfg(test)]
 mod tests {
     use super::{Buffer, VisualPosition};
-    use crate::cell::Cell;
     use crate::line::Line;
     use crate::pen::Pen;
     use pretty_assertions::assert_eq;
@@ -525,7 +524,7 @@ mod tests {
     #[test]
     fn text() {
         let mut buffer = Buffer::new(10, 5, None, None);
-        let cell = Cell('x', Pen::default());
+        let cell = 'x'.into();
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
 
@@ -947,8 +946,7 @@ mod tests {
 
         for (row, (line, wrapped)) in content.iter().enumerate() {
             for (col, ch) in line.chars().enumerate() {
-                let cell = Cell(ch, Pen::default());
-                buffer.print((col, row), cell);
+                buffer.print((col, row), ch.into());
             }
 
             if *wrapped {
