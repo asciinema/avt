@@ -1,5 +1,4 @@
 use rgb::RGB8;
-use serde::ser::{Serialize, Serializer};
 use Color::*;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -20,17 +19,5 @@ impl Color {
 
     pub fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self::RGB(RGB8::new(r, g, b))
-    }
-}
-
-impl Serialize for Color {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        match self {
-            Indexed(c) => serializer.serialize_u8(*c),
-            RGB(c) => serializer.serialize_str(&format!("rgb({},{},{})", c.r, c.g, c.b)),
-        }
     }
 }

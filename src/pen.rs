@@ -1,6 +1,5 @@
 use crate::color::Color;
 use crate::dump::Dump;
-use serde::ser::{Serialize, SerializeMap, Serializer};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Pen {
@@ -170,84 +169,5 @@ impl Dump for Pen {
         s.push('m');
 
         s
-    }
-}
-
-impl Serialize for Pen {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut len = 0;
-
-        if self.foreground.is_some() {
-            len += 1;
-        }
-
-        if self.background.is_some() {
-            len += 1;
-        }
-
-        if let Intensity::Bold | Intensity::Faint = self.intensity {
-            len += 1;
-        }
-
-        if self.is_italic() {
-            len += 1;
-        }
-
-        if self.is_underline() {
-            len += 1;
-        }
-
-        if self.is_strikethrough() {
-            len += 1;
-        }
-
-        if self.is_blink() {
-            len += 1;
-        }
-
-        if self.is_inverse() {
-            len += 1;
-        }
-
-        let mut map = serializer.serialize_map(Some(len))?;
-
-        if let Some(c) = self.foreground {
-            map.serialize_entry("fg", &c)?;
-        }
-
-        if let Some(c) = self.background {
-            map.serialize_entry("bg", &c)?;
-        }
-
-        match self.intensity {
-            Intensity::Normal => (),
-            Intensity::Bold => map.serialize_entry("bold", &true)?,
-            Intensity::Faint => map.serialize_entry("faint", &true)?,
-        }
-
-        if self.is_italic() {
-            map.serialize_entry("italic", &true)?;
-        }
-
-        if self.is_underline() {
-            map.serialize_entry("underline", &true)?;
-        }
-
-        if self.is_strikethrough() {
-            map.serialize_entry("strikethrough", &true)?;
-        }
-
-        if self.is_blink() {
-            map.serialize_entry("blink", &true)?;
-        }
-
-        if self.is_inverse() {
-            map.serialize_entry("inverse", &true)?;
-        }
-
-        map.end()
     }
 }

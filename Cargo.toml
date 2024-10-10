@@ -11,7 +11,6 @@ license = "Apache-2.0"
 rust-version = "1.70.0"
 
 [dependencies]
-serde = { version = "1.0.130", features = ["derive"] }
 rgb = "0.8.33"
 unicode-width = "0.1.13"
 
