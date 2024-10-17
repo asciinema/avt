@@ -1,5 +1,4 @@
 use crate::cell::Cell;
-use crate::dump::Dump;
 use crate::line::Line;
 use crate::pen::Pen;
 use std::cmp::Ordering;
@@ -369,6 +368,25 @@ impl Buffer {
         None
     }
 
+    pub fn dump(&self) -> String {
+        let last = self.rows - 1;
+
+        self.view()
+            .iter()
+            .enumerate()
+            .map(|(i, line)| {
+                let mut dump = line.dump();
+
+                if i < last && !line.wrapped {
+                    dump.push('\r');
+                    dump.push('\n');
+                }
+
+                dump
+            })
+            .collect()
+    }
+
     #[cfg(test)]
     pub fn add_scrollback(&mut self, n: usize) {
         let mut line = Line::blank(self.cols, Pen::default());
@@ -416,27 +434,6 @@ impl IndexMut<usize> for Buffer {
 impl IndexMut<Range<usize>> for Buffer {
     fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
         &mut self.view_mut()[range]
-    }
-}
-
-impl Dump for Buffer {
-    fn dump(&self) -> String {
-        let last = self.rows - 1;
-
-        self.view()
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                let mut dump = line.dump();
-
-                if i < last && !line.wrapped {
-                    dump.push('\r');
-                    dump.push('\n');
-                }
-
-                dump
-            })
-            .collect()
     }
 }
 

@@ -1,5 +1,4 @@
 use crate::color::Color;
-use crate::dump::Dump;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Pen {
@@ -109,21 +108,8 @@ impl Pen {
             && !self.is_blink()
             && !self.is_inverse()
     }
-}
 
-impl Default for Pen {
-    fn default() -> Self {
-        Pen {
-            foreground: None,
-            background: None,
-            intensity: Intensity::Normal,
-            attrs: 0,
-        }
-    }
-}
-
-impl Dump for Pen {
-    fn dump(&self) -> String {
+    pub(crate) fn dump(&self) -> String {
         let mut s = "\x1b[0".to_owned();
 
         if let Some(c) = self.foreground {
@@ -169,5 +155,16 @@ impl Dump for Pen {
         s.push('m');
 
         s
+    }
+}
+
+impl Default for Pen {
+    fn default() -> Self {
+        Pen {
+            foreground: None,
+            background: None,
+            intensity: Intensity::Normal,
+            attrs: 0,
+        }
     }
 }

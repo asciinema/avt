@@ -2,7 +2,6 @@ mod buffer;
 mod cell;
 mod charset;
 mod color;
-mod dump;
 mod line;
 pub mod parser;
 mod pen;

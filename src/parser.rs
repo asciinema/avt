@@ -3,7 +3,6 @@
 
 use crate::charset::Charset;
 use crate::color::Color;
-use crate::dump::Dump;
 use std::fmt::Display;
 
 const PARAMS_LEN: usize = 32;
@@ -637,6 +636,96 @@ impl Parser {
 
     fn osc_put(&mut self, _input: char) {}
 
+    pub(crate) fn dump(&self) -> String {
+        use State::*;
+
+        let mut seq = String::new();
+
+        match self.state {
+            Ground => {}
+
+            Escape => {
+                seq.push('\u{1b}');
+            }
+
+            EscapeIntermediate => {
+                let intermediates = self.intermediate.iter().collect::<String>();
+                let s = format!("\u{1b}{intermediates}");
+                seq.push_str(&s);
+            }
+
+            CsiEntry => {
+                seq.push('\u{9b}');
+            }
+
+            CsiParam => {
+                let intermediates = self.intermediate.iter().collect::<String>();
+
+                let params = &self.params[..=self.cur_param]
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";");
+
+                let s = &format!("\u{9b}{intermediates}{params}");
+                seq.push_str(s);
+            }
+
+            CsiIntermediate => {
+                let intermediates = self.intermediate.iter().collect::<String>();
+                let s = &format!("\u{9b}{intermediates}");
+                seq.push_str(s);
+            }
+
+            CsiIgnore => {
+                seq.push_str("\u{9b}\u{3a}");
+            }
+
+            DcsEntry => {
+                seq.push('\u{90}');
+            }
+
+            DcsIntermediate => {
+                let intermediates = self.intermediate.iter().collect::<String>();
+                let s = &format!("\u{90}{intermediates}");
+                seq.push_str(s);
+            }
+
+            DcsParam => {
+                let intermediates = self.intermediate.iter().collect::<String>();
+
+                let params = &self.params[..=self.cur_param]
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";");
+
+                let s = &format!("\u{90}{intermediates}{params}");
+                seq.push_str(s);
+            }
+
+            DcsPassthrough => {
+                let intermediates = self.intermediate.iter().collect::<String>();
+                let s = &format!("\u{90}{intermediates}\u{40}");
+                seq.push_str(s);
+            }
+
+            DcsIgnore => {
+                seq.push_str("\u{90}\u{3a}");
+            }
+
+            OscString => {
+                seq.push('\u{9d}');
+            }
+
+            SosPmApcString => {
+                seq.push('\u{98}');
+            }
+        }
+
+        seq
+    }
+
     #[cfg(test)]
     pub fn assert_eq(&self, other: &Parser) {
         use State::*;
@@ -929,98 +1018,6 @@ fn dec_mode(param: &Param) -> Option<DecMode> {
     }
 }
 
-impl Dump for Parser {
-    fn dump(&self) -> String {
-        use State::*;
-
-        let mut seq = String::new();
-
-        match self.state {
-            Ground => {}
-
-            Escape => {
-                seq.push('\u{1b}');
-            }
-
-            EscapeIntermediate => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-                let s = format!("\u{1b}{intermediates}");
-                seq.push_str(&s);
-            }
-
-            CsiEntry => {
-                seq.push('\u{9b}');
-            }
-
-            CsiParam => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-
-                let params = &self.params[..=self.cur_param]
-                    .iter()
-                    .map(|param| param.to_string())
-                    .collect::<Vec<_>>()
-                    .join(";");
-
-                let s = &format!("\u{9b}{intermediates}{params}");
-                seq.push_str(s);
-            }
-
-            CsiIntermediate => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{9b}{intermediates}");
-                seq.push_str(s);
-            }
-
-            CsiIgnore => {
-                seq.push_str("\u{9b}\u{3a}");
-            }
-
-            DcsEntry => {
-                seq.push('\u{90}');
-            }
-
-            DcsIntermediate => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{90}{intermediates}");
-                seq.push_str(s);
-            }
-
-            DcsParam => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-
-                let params = &self.params[..=self.cur_param]
-                    .iter()
-                    .map(|param| param.to_string())
-                    .collect::<Vec<_>>()
-                    .join(";");
-
-                let s = &format!("\u{90}{intermediates}{params}");
-                seq.push_str(s);
-            }
-
-            DcsPassthrough => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{90}{intermediates}\u{40}");
-                seq.push_str(s);
-            }
-
-            DcsIgnore => {
-                seq.push_str("\u{90}\u{3a}");
-            }
-
-            OscString => {
-                seq.push('\u{9d}');
-            }
-
-            SosPmApcString => {
-                seq.push('\u{98}');
-            }
-        }
-
-        seq
-    }
-}
-
 const MAX_PARAM_LEN: usize = 6;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -1127,7 +1124,6 @@ mod tests {
     use super::Parser;
     use super::SgrOp::*;
     use crate::color::Color;
-    use crate::dump::Dump;
 
     fn parse(s: &str) -> Vec<Function> {
         let mut parser = Parser::new();

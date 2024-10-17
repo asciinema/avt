@@ -1,5 +1,4 @@
 use crate::cell::Cell;
-use crate::dump::Dump;
 use crate::pen::Pen;
 use std::ops::{Index, Range, RangeFull};
 

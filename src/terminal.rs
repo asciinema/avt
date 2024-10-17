@@ -5,7 +5,6 @@ use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::Cell;
 use crate::charset::Charset;
-use crate::dump::Dump;
 use crate::line::Line;
 use crate::parser::{
     AnsiMode, CtcOp, DecMode, EdScope, ElScope, Function, SgrOp, TbcScope, XtwinopsOp,
@@ -1253,24 +1252,8 @@ impl Terminal {
             }
         }
     }
-}
 
-fn as_usize(value: u16, default: usize) -> usize {
-    if value == 0 {
-        default
-    } else {
-        value as usize
-    }
-}
-
-impl Default for Terminal {
-    fn default() -> Self {
-        Self::new((80, 24), None, false)
-    }
-}
-
-impl Dump for Terminal {
-    fn dump(&self) -> String {
+    pub fn dump(&self) -> String {
         let (primary_ctx, alternate_ctx): (&SavedCtx, &SavedCtx) = match self.active_buffer_type {
             BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
             BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx),
@@ -1509,6 +1492,20 @@ impl Dump for Terminal {
         }
 
         seq
+    }
+}
+
+fn as_usize(value: u16, default: usize) -> usize {
+    if value == 0 {
+        default
+    } else {
+        value as usize
+    }
+}
+
+impl Default for Terminal {
+    fn default() -> Self {
+        Self::new((80, 24), None, false)
     }
 }
 

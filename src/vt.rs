@@ -1,4 +1,3 @@
-use crate::dump::Dump;
 use crate::line::Line;
 use crate::parser::Parser;
 use crate::terminal::{Cursor, Terminal};
