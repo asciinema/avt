@@ -26,7 +26,7 @@ impl Cell {
     }
 
     pub fn width(&self) -> usize {
-        UnicodeWidthChar::width(self.0).unwrap_or(0)
+        self.0.width().unwrap_or(0)
     }
 }
 
