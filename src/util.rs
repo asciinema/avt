@@ -55,7 +55,7 @@ impl TextCollector {
 
     pub fn resize(&mut self, cols: u16, rows: u16) -> impl Iterator<Item = String> + '_ {
         self.vt
-            .feed_str(&format!("\x1b[8;{rows};{cols}t"))
+            .resize(cols.into(), rows.into())
             .scrollback
             .filter_map(|l| self.unwrapper.push(&l))
     }

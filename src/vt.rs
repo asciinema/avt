@@ -22,14 +22,10 @@ impl Vt {
             .filter_map(|ch| self.parser.feed(ch))
             .for_each(|op| self.terminal.execute(op));
 
-        let (lines, resized) = self.terminal.changes();
+        let lines = self.terminal.changes();
         let scrollback = self.terminal.gc();
 
-        Changes {
-            lines,
-            resized,
-            scrollback,
-        }
+        Changes { lines, scrollback }
     }
 
     pub fn feed(&mut self, input: char) {
@@ -40,6 +36,15 @@ impl Vt {
 
     pub fn size(&self) -> (usize, usize) {
         (self.terminal.cols, self.terminal.rows)
+    }
+
+    pub fn resize(&mut self, cols: usize, rows: usize) -> Changes {
+        self.terminal.resize(cols, rows);
+
+        let lines = self.terminal.changes();
+        let scrollback = self.terminal.gc();
+
+        Changes { lines, scrollback }
     }
 
     pub fn view(&self) -> &[Line] {
@@ -77,7 +82,6 @@ impl Vt {
 pub struct Builder {
     size: (usize, usize),
     scrollback_limit: Option<usize>,
-    resizable: bool,
 }
 
 impl Builder {
@@ -93,16 +97,10 @@ impl Builder {
         self
     }
 
-    pub fn resizable(&mut self, resizable: bool) -> &mut Self {
-        self.resizable = resizable;
-
-        self
-    }
-
     pub fn build(&self) -> Vt {
         Vt {
             parser: Parser::new(),
-            terminal: Terminal::new(self.size, self.scrollback_limit, self.resizable),
+            terminal: Terminal::new(self.size, self.scrollback_limit),
         }
     }
 }
@@ -112,14 +110,12 @@ impl Default for Builder {
         Builder {
             size: (80, 24),
             scrollback_limit: None,
-            resizable: false,
         }
     }
 }
 
 pub struct Changes<'a> {
     pub lines: Vec<usize>,
-    pub resized: bool,
     pub scrollback: Box<dyn Iterator<Item = Line> + 'a>,
 }
 
@@ -829,18 +825,17 @@ mod tests {
     }
 
     #[test]
-    fn execute_xtwinops_wider() {
+    fn resize_wider() {
         let mut builder = Vt::builder();
-        builder.resizable(true);
 
         let mut vt = builder.size(6, 6).build();
 
-        vt.feed_str("\x1b[8;6;7t");
+        vt.resize(7, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.view().iter().any(|l| l.wrapped));
 
-        vt.feed_str("\x1b[8;6;15t");
+        vt.resize(15, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.view().iter().any(|l| l.wrapped));
@@ -852,12 +847,12 @@ mod tests {
         assert_eq!(text(&vt), "000000\n111111\n222222\n333333\n444444\n555|");
         assert_eq!(wrapped(&vt), vec![true, true, true, true, true, false]);
 
-        vt.feed_str("\x1b[8;6;7t");
+        vt.resize(7, 6);
 
         assert_eq!(text(&vt), "0000001\n1111122\n2222333\n3334444\n44555|\n");
         assert_eq!(wrapped(&vt), vec![true, true, true, true, false, false]);
 
-        vt.feed_str("\x1b[8;6;15t");
+        vt.resize(15, 6);
 
         assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
@@ -869,25 +864,24 @@ mod tests {
         assert_eq!(text(&vt), "0000\n11\n22|");
         assert_eq!(wrapped(&vt), vec![true, false, false]);
 
-        vt.feed_str("\x1b[8;3;8t");
+        vt.resize(8, 3);
 
         assert_eq!(text(&vt), "000011\n22|\n");
         assert_eq!(wrapped(&vt), vec![false, false, false]);
     }
 
     #[test]
-    fn execute_xtwinops_narrower() {
+    fn resize_narrower() {
         let mut builder = Vt::builder();
-        builder.resizable(true);
 
         let mut vt = builder.size(15, 6).build();
 
-        vt.feed_str("\x1b[8;6;7t");
+        vt.resize(7, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.view().iter().any(|l| l.wrapped));
 
-        vt.feed_str("\x1b[8;6;6t");
+        vt.resize(6, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
         assert!(!vt.view().iter().any(|l| l.wrapped));
@@ -898,7 +892,7 @@ mod tests {
 
         assert_eq!(wrapped(&vt), vec![false, false]);
 
-        vt.feed_str("\x1b[8;;4t");
+        vt.resize(4, 2);
 
         assert_eq!(text(&vt), "abcd\nef|");
         assert_eq!(wrapped(&vt), vec![true, false]);
@@ -910,39 +904,34 @@ mod tests {
         assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
-        vt.feed_str("\x1b[8;6;7t");
+        vt.resize(7, 6);
 
         assert_eq!(text(&vt), "2222333\n3334444\n44555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
 
-        vt.feed_str("\x1b[8;6;6t");
+        vt.resize(6, 6);
 
         assert_eq!(text(&vt), "333333\n444444\n555|\n\n\n");
         assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
     }
 
     #[test]
-    fn execute_xtwinops() {
-        let mut vt = Vt::builder().size(8, 4).resizable(true).build();
+    fn resize() {
+        let mut vt = Vt::builder().size(8, 4).build();
         vt.feed_str("abcdefgh\r\nijklmnop\r\nqrstuw");
         vt.feed_str("\x1b[4;1H");
+        vt.feed_str("AAA");
 
-        let resized = vt.feed_str("AAA").resized;
+        vt.resize(8, 5);
 
-        assert!(!resized);
-
-        let resized = vt.feed_str("\x1b[8;5;t").resized;
-
-        assert!(resized);
         assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuw\nAAA|\n");
 
         vt.feed_str("BBBBB");
 
         assert_eq!(vt.cursor(), (8, 3));
 
-        let resized = vt.feed_str("\x1b[8;;4t").resized;
+        vt.resize(4, 5);
 
-        assert!(resized);
         assert_eq!(text(&vt), "qrst\nuw\nAAAB\nBBB|B\n");
 
         vt.feed_str("\rCCC");
@@ -950,65 +939,52 @@ mod tests {
         assert_eq!(text(&vt), "qrst\nuw\nAAAB\nCCC|B\n");
         assert_eq!(wrapped(&vt), vec![true, false, true, false, false]);
 
-        vt.feed_str("\x1b[8;;3t");
+        vt.resize(3, 5);
 
         assert_eq!(text(&vt), "tuw\nAAA\nBCC\nC|B\n");
 
-        vt.feed_str("\x1b[8;;5t");
+        vt.resize(5, 5);
 
         assert_eq!(text(&vt), "qrstu\nw\nAAABC\nCC|B\n");
 
         vt.feed_str("DDD");
-        vt.feed_str("\x1b[8;;6t");
+        vt.resize(6, 5);
 
         assert_eq!(text(&vt), "op\nqrstuw\nAAABCC\nCDDD|\n");
     }
 
     #[test]
-    fn execute_xtwinops_noop() {
-        let mut vt = Vt::new(8, 4);
-
-        let resized = vt.feed_str("\x1b[8;;t").resized;
-
-        assert!(!resized);
-    }
-
-    #[test]
-    fn execute_xtwinops_taller() {
-        let mut vt = Vt::builder().size(6, 4).resizable(true).build();
-
+    fn resize_taller() {
+        let mut vt = Vt::builder().size(6, 4).build();
         vt.feed_str("AAA\n\rBBB\n\r");
-        let resized = vt.feed_str("\x1b[8;5;;t").resized;
 
-        assert!(resized);
+        vt.resize(6, 5);
+
         assert_eq!(text(&vt), "AAA\nBBB\n|\n\n");
     }
 
     #[test]
-    fn execute_xtwinops_shorter() {
-        let mut vt = Vt::builder().size(6, 6).resizable(true).build();
+    fn resize_shorter() {
+        let mut vt = Vt::builder().size(6, 6).build();
 
         vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
 
-        let resized = vt.feed_str("\x1b[8;5;;t").resized;
+        vt.resize(6, 5);
 
-        assert!(resized);
         assert_eq!(text(&vt), "AAA\nBBB\nCCC\n|\n");
 
-        let resized = vt.feed_str("\x1b[8;3;;t").resized;
+        vt.resize(6, 3);
 
-        assert!(resized);
         assert_eq!(text(&vt), "BBB\nCCC\n|");
 
-        let resized = vt.feed_str("\x1b[8;2;;t").resized;
+        vt.resize(6, 2);
 
-        assert!(resized);
         assert_eq!(text(&vt), "CCC\n|");
     }
 
     #[test]
-    fn execute_xtwinops_vs_buffer_switching() {
-        let mut vt = Vt::builder().size(4, 4).resizable(true).build();
+    fn resize_vs_buffer_switching() {
+        let mut vt = Vt::builder().size(4, 4).build();
 
         // fill primary buffer
         vt.feed_str("aaa\n\rbbb\n\rc\n\rddd");
@@ -1016,7 +992,7 @@ mod tests {
         assert_eq!(vt.cursor(), (3, 3));
 
         // resize to 4x5
-        vt.feed_str("\x1b[8;5;4;t");
+        vt.resize(4, 5);
 
         assert_eq!(text(&vt), "aaa\nbbb\nc\nddd|\n");
 
@@ -1026,15 +1002,15 @@ mod tests {
         assert_eq!(vt.cursor(), (3, 3));
 
         // resize to 4x2
-        vt.feed_str("\x1b[8;2;4t");
+        vt.resize(4, 2);
 
         assert_eq!(vt.cursor(), (3, 1));
 
         // resize to 2x3, we'll check later if primary buffer preserved more columns
-        vt.feed_str("\x1b[8;3;2t");
+        vt.resize(2, 3);
 
         // resize to 3x3
-        vt.feed_str("\x1b[8;3;3t");
+        vt.resize(3, 3);
 
         // switch back to primary buffer
         vt.feed_str("\x1b[?1049l");
@@ -1243,7 +1219,7 @@ mod tests {
     proptest! {
         #[test]
         fn prop_sanity_checks_infinite_scrollback(input in gen_input(25)) {
-            let mut vt = Vt::builder().size(10, 5).resizable(true).build();
+            let mut vt = Vt::builder().size(10, 5).build();
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
@@ -1253,7 +1229,7 @@ mod tests {
 
         #[test]
         fn prop_sanity_checks_no_scrollback(input in gen_input(25)) {
-            let mut vt = Vt::builder().size(10, 5).scrollback_limit(0).resizable(true).build();
+            let mut vt = Vt::builder().size(10, 5).scrollback_limit(0).build();
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
@@ -1264,7 +1240,7 @@ mod tests {
         #[test]
         fn prop_sanity_checks_fixed_scrollback(input in gen_input(25)) {
             let scrollback_limit = 3;
-            let mut vt = Vt::builder().size(10, 5).scrollback_limit(scrollback_limit).resizable(true).build();
+            let mut vt = Vt::builder().size(10, 5).scrollback_limit(scrollback_limit).build();
 
             vt.feed_str(&(input.into_iter().collect::<String>()));
             let (_, rows) = vt.size();
@@ -1275,10 +1251,10 @@ mod tests {
 
         #[test]
         fn prop_resizing(new_cols in 2..15usize, new_rows in 2..8usize, input1 in gen_input(25), input2 in gen_input(25)) {
-            let mut vt = Vt::builder().size(10, 5).resizable(true).build();
+            let mut vt = Vt::builder().size(10, 5).build();
 
             vt.feed_str(&(input1.into_iter().collect::<String>()));
-            vt.feed_str(&format!("\x1b[8;{};{}t", new_rows, new_cols));
+            vt.resize(new_cols, new_rows);
             vt.feed_str(&(input2.into_iter().collect::<String>()));
 
             vt.terminal.verify();

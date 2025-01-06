@@ -38,8 +38,7 @@ pub(crate) struct Terminal {
     saved_ctx: SavedCtx,
     alternate_saved_ctx: SavedCtx,
     dirty_lines: DirtyLines,
-    pub resizable: bool,
-    resized: bool,
+    xtwinops: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -76,11 +75,7 @@ impl Default for SavedCtx {
 }
 
 impl Terminal {
-    pub fn new(
-        (cols, rows): (usize, usize),
-        scrollback_limit: Option<usize>,
-        resizable: bool,
-    ) -> Self {
+    pub fn new((cols, rows): (usize, usize), scrollback_limit: Option<usize>) -> Self {
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
         let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
         let dirty_lines = DirtyLines::new(rows);
@@ -108,8 +103,7 @@ impl Terminal {
             saved_ctx: SavedCtx::default(),
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
-            resizable,
-            resized: false,
+            xtwinops: false,
         }
     }
 
@@ -336,10 +330,9 @@ impl Terminal {
         }
     }
 
-    pub fn changes(&mut self) -> (Vec<usize>, bool) {
-        let changes = (self.dirty_lines.to_vec(), self.resized);
+    pub fn changes(&mut self) -> Vec<usize> {
+        let changes = self.dirty_lines.to_vec();
         self.dirty_lines.clear();
-        self.resized = false;
 
         changes
     }
@@ -513,6 +506,46 @@ impl Terminal {
 
     // resizing
 
+    pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
+        let mut resized: bool = false;
+
+        match cols.cmp(&self.cols) {
+            std::cmp::Ordering::Less => {
+                self.tabs.contract(cols);
+                resized = true;
+            }
+
+            std::cmp::Ordering::Equal => {}
+
+            std::cmp::Ordering::Greater => {
+                self.tabs.expand(self.cols, cols);
+                resized = true;
+            }
+        }
+
+        match rows.cmp(&self.rows) {
+            std::cmp::Ordering::Less => {
+                self.top_margin = 0;
+                self.bottom_margin = rows - 1;
+                resized = true;
+            }
+
+            std::cmp::Ordering::Equal => {}
+
+            std::cmp::Ordering::Greater => {
+                self.top_margin = 0;
+                self.bottom_margin = rows - 1;
+                resized = true;
+            }
+        }
+
+        self.cols = cols;
+        self.rows = rows;
+        self.reflow();
+
+        resized
+    }
+
     fn reflow(&mut self) {
         if self.cols != self.buffer.cols {
             self.next_print_wraps = false;
@@ -570,7 +603,6 @@ impl Terminal {
         self.saved_ctx = SavedCtx::default();
         self.alternate_saved_ctx = SavedCtx::default();
         self.dirty_lines = DirtyLines::new(self.rows);
-        self.resized = false;
     }
 
     fn primary_buffer(&self) -> &Buffer {
@@ -1128,44 +1160,12 @@ impl Terminal {
     }
 
     fn xtwinops(&mut self, op: XtwinopsOp) {
-        if self.resizable {
+        if self.xtwinops {
             let XtwinopsOp::Resize(cols, rows) = op;
             let cols = as_usize(cols, self.cols);
             let rows = as_usize(rows, self.rows);
 
-            match cols.cmp(&self.cols) {
-                std::cmp::Ordering::Less => {
-                    self.tabs.contract(cols);
-                    self.resized = true;
-                }
-
-                std::cmp::Ordering::Equal => {}
-
-                std::cmp::Ordering::Greater => {
-                    self.tabs.expand(self.cols, cols);
-                    self.resized = true;
-                }
-            }
-
-            match rows.cmp(&self.rows) {
-                std::cmp::Ordering::Less => {
-                    self.top_margin = 0;
-                    self.bottom_margin = rows - 1;
-                    self.resized = true;
-                }
-
-                std::cmp::Ordering::Equal => {}
-
-                std::cmp::Ordering::Greater => {
-                    self.top_margin = 0;
-                    self.bottom_margin = rows - 1;
-                    self.resized = true;
-                }
-            }
-
-            self.cols = cols;
-            self.rows = rows;
-            self.reflow();
+            self.resize(cols, rows);
         }
     }
 
@@ -1505,7 +1505,7 @@ fn as_usize(value: u16, default: usize) -> usize {
 
 impl Default for Terminal {
     fn default() -> Self {
-        Self::new((80, 24), None, false)
+        Self::new((80, 24), None)
     }
 }
 
@@ -1513,7 +1513,7 @@ impl Default for Terminal {
 mod tests {
     use super::Terminal;
     use crate::color::Color;
-    use crate::parser::{DecMode, Function, SgrOp, XtwinopsOp};
+    use crate::parser::{DecMode, Function, SgrOp};
     use crate::pen::Intensity;
     use Function::*;
     use SgrOp::*;
@@ -1585,32 +1585,29 @@ mod tests {
     }
 
     #[test]
-    fn execute_xtwinops_vs_tabs() {
-        use XtwinopsOp::*;
-
-        let mut term = Terminal::new((6, 2), None, true);
+    fn resize_vs_tabs() {
+        let mut term = Terminal::new((6, 2), None);
 
         assert_eq!(term.tabs, vec![]);
 
-        term.execute(Xtwinops(Resize(10, 0)));
+        term.resize(10, 2);
 
         assert_eq!(term.tabs, vec![8]);
 
-        term.execute(Xtwinops(Resize(30, 0)));
+        term.resize(30, 2);
 
         assert_eq!(term.tabs, vec![8, 16, 24]);
 
-        term.execute(Xtwinops(Resize(20, 0)));
+        term.resize(20, 2);
 
         assert_eq!(term.tabs, vec![8, 16]);
     }
 
     #[test]
-    fn execute_xtwinops_vs_saved_ctx() {
+    fn resize_vs_saved_ctx() {
         use DecMode::*;
-        use XtwinopsOp::*;
 
-        let mut term = Terminal::new((20, 5), None, true);
+        let mut term = Terminal::new((20, 5), None);
 
         // move cursor forward by 15 cols
         term.execute(Cuf(15));
@@ -1631,7 +1628,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // resize to 10x5
-        term.execute(Xtwinops(Resize(10, 0)));
+        term.resize(10, 5);
 
         assert_eq!(term.saved_ctx.cursor_col, 9);
     }

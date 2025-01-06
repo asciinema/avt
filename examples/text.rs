@@ -2,12 +2,7 @@ use avt::util::TextCollector;
 use avt::Vt;
 
 fn main() {
-    let vt = Vt::builder()
-        .size(1000, 100)
-        .resizable(true)
-        .scrollback_limit(100)
-        .build();
-
+    let vt = Vt::builder().size(1000, 100).scrollback_limit(100).build();
     let input = std::io::stdin();
     let mut buf = String::new();
     let mut collector = TextCollector::new(vt);
