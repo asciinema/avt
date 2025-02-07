@@ -32,7 +32,7 @@ pub(crate) struct Terminal {
     auto_wrap_mode: bool,
     new_line_mode: bool,
     cursor_keys_mode: CursorKeysMode,
-    next_print_wraps: bool,
+    pending_wrap: bool,
     top_margin: usize,
     bottom_margin: usize,
     saved_ctx: SavedCtx,
@@ -97,7 +97,7 @@ impl Terminal {
             auto_wrap_mode: true,
             new_line_mode: false,
             cursor_keys_mode: CursorKeysMode::Normal,
-            next_print_wraps: false,
+            pending_wrap: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::default(),
@@ -353,7 +353,7 @@ impl Terminal {
         self.pen = self.saved_ctx.pen;
         self.origin_mode = self.saved_ctx.origin_mode;
         self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
-        self.next_print_wraps = false;
+        self.pending_wrap = false;
     }
 
     fn move_cursor_to_col(&mut self, col: usize) {
@@ -366,7 +366,7 @@ impl Terminal {
 
     fn do_move_cursor_to_col(&mut self, col: usize) {
         self.cursor.col = col;
-        self.next_print_wraps = false;
+        self.pending_wrap = false;
     }
 
     fn move_cursor_to_row(&mut self, mut row: usize) {
@@ -379,7 +379,7 @@ impl Terminal {
     fn do_move_cursor_to_row(&mut self, row: usize) {
         self.cursor.col = self.cursor.col.min(self.cols - 1);
         self.cursor.row = row;
-        self.next_print_wraps = false;
+        self.pending_wrap = false;
     }
 
     fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
@@ -548,7 +548,7 @@ impl Terminal {
 
     fn reflow(&mut self) {
         if self.cols != self.buffer.cols {
-            self.next_print_wraps = false;
+            self.pending_wrap = false;
         }
 
         (self.cursor.col, self.cursor.row) =
@@ -597,7 +597,7 @@ impl Terminal {
         self.origin_mode = false;
         self.auto_wrap_mode = true;
         self.new_line_mode = false;
-        self.next_print_wraps = false;
+        self.pending_wrap = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
@@ -648,8 +648,8 @@ impl Terminal {
         assert!(!self.lines().last().unwrap().wrapped);
 
         assert!(
-            !self.next_print_wraps && self.cursor.col < self.cols
-                || self.next_print_wraps && self.cursor.col == self.cols
+            !self.pending_wrap && self.cursor.col < self.cols
+                || self.pending_wrap && self.cursor.col == self.cols
         );
     }
 
@@ -666,7 +666,7 @@ impl Terminal {
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
         assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
-        assert_eq!(self.next_print_wraps, other.next_print_wraps);
+        assert_eq!(self.pending_wrap, other.pending_wrap);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
         assert_eq!(self.saved_ctx, other.saved_ctx);
@@ -685,7 +685,7 @@ impl Terminal {
         ch = self.charsets[self.active_charset].translate(ch);
         let cell = Cell::new(ch, self.pen);
 
-        if self.auto_wrap_mode && self.next_print_wraps {
+        if self.auto_wrap_mode && self.pending_wrap {
             self.do_move_cursor_to_col(0);
 
             if self.cursor.row == self.bottom_margin {
@@ -704,7 +704,7 @@ impl Terminal {
 
             if self.auto_wrap_mode {
                 self.do_move_cursor_to_col(self.cols);
-                self.next_print_wraps = true;
+                self.pending_wrap = true;
             }
         } else {
             if self.insert_mode {
@@ -721,7 +721,7 @@ impl Terminal {
     }
 
     fn bs(&mut self) {
-        if self.next_print_wraps {
+        if self.pending_wrap {
             self.move_cursor_to_rel_col(-2);
         } else {
             self.move_cursor_to_rel_col(-1);
@@ -824,7 +824,7 @@ impl Terminal {
     fn cub(&mut self, n: u16) {
         let mut rel_col = -(as_usize(n, 1) as isize);
 
-        if self.next_print_wraps {
+        if self.pending_wrap {
             rel_col -= 1;
         }
 
