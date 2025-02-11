@@ -2,7 +2,7 @@ use crate::cell::Cell;
 use crate::pen::Pen;
 use std::ops::{Index, Range, RangeFull};
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct Line {
     pub(crate) cells: Vec<Cell>,
     pub(crate) wrapped: bool,
@@ -172,6 +172,18 @@ impl Line {
         }
 
         s
+    }
+}
+
+impl std::fmt::Debug for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut s = self.dump();
+
+        if self.wrapped {
+            s.push('⏎');
+        }
+
+        write!(f, "{:?}", s)
     }
 }
 
