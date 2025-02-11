@@ -220,6 +220,15 @@ mod tests {
         vt.feed_str("\x1b[2S");
         assert_eq!(text(&vt), "cc\ndd\nee\nff\n\n  |");
 
+        // short lines, default margins, non-default pen
+
+        let mut vt = Vt::new(4, 6);
+        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        vt.feed_str("\x1b[1m");
+        vt.feed_str("\x1b[2S");
+        assert_eq!(text(&vt), "cc\ndd\nee\nff\n\n  |");
+        assert!(vt.view().last().unwrap()[0].pen().is_bold());
+
         // short lines, margins at 1 (top) and 4 (bottom)
 
         let mut vt = Vt::new(4, 6);

@@ -170,7 +170,7 @@ impl Buffer {
 
         if range.start == 0 {
             if range.end == self.rows {
-                self.extend(n, self.cols);
+                self.extend(n, self.cols, pen);
             } else {
                 let line = Line::blank(self.cols, *pen);
                 let index = self.lines.len() - self.rows + range.end;
@@ -217,7 +217,7 @@ impl Buffer {
             let line_count = self.lines.len();
 
             if line_count < old_rows {
-                self.extend(old_rows - line_count, new_cols);
+                self.extend(old_rows - line_count, new_cols, &Pen::default());
             }
 
             let cursor_rel_pos = self.relative_position(cursor_log_pos, new_cols, old_rows);
@@ -258,7 +258,7 @@ impl Buffer {
                 }
 
                 if height_delta > 0 {
-                    self.extend(height_delta, new_cols);
+                    self.extend(height_delta, new_cols, &Pen::default());
                 }
             }
 
@@ -348,8 +348,8 @@ impl Buffer {
         self.view_mut()[range].fill(line);
     }
 
-    fn extend(&mut self, n: usize, cols: usize) {
-        let line = Line::blank(cols, Pen::default());
+    fn extend(&mut self, n: usize, cols: usize, pen: &Pen) {
+        let line = Line::blank(cols, *pen);
         let filler = std::iter::repeat(line).take(n);
         self.lines.extend(filler);
     }
