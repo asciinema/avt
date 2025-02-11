@@ -74,6 +74,16 @@ impl Default for SavedCtx {
     }
 }
 
+impl SavedCtx {
+    fn is_default(&self) -> bool {
+        self.cursor_col == 0
+            && self.cursor_row == 0
+            && self.pen.is_default()
+            && !self.origin_mode
+            && self.auto_wrap_mode
+    }
+}
+
 impl Terminal {
     pub fn new((cols, rows): (usize, usize), scrollback_limit: Option<usize>) -> Self {
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
@@ -1261,61 +1271,66 @@ impl Terminal {
 
         // 1. dump primary screen buffer
 
-        // TODO don't include trailing empty lines
         let mut seq: String = self.primary_buffer().dump();
 
         // 2. setup tab stops
 
-        // clear all tab stops
-        seq.push_str("\u{9b}5W");
+        if self.tabs != Tabs::new(self.cols) {
+            // clear all tab stops
+            seq.push_str("\u{9b}5W");
 
-        // set each tab stop
-        for t in &self.tabs {
-            seq.push_str(&format!("\u{9b}{}`\u{1b}[W", t + 1));
+            // set each tab stop
+            for t in &self.tabs {
+                seq.push_str(&format!("\u{9b}{}`\u{1b}[W", t + 1));
+            }
         }
 
         // 3. configure saved context for primary screen
 
-        if !primary_ctx.auto_wrap_mode {
-            // disable auto-wrap mode
-            seq.push_str("\u{9b}?7l");
+        if !primary_ctx.is_default() {
+            if !primary_ctx.auto_wrap_mode {
+                // disable auto-wrap mode
+                seq.push_str("\u{9b}?7l");
+            }
+
+            if primary_ctx.origin_mode {
+                // enable origin mode
+                seq.push_str("\u{9b}?6h");
+            }
+
+            // fix cursor in target position
+            seq.push_str(&format!(
+                "\u{9b}{};{}H",
+                primary_ctx.cursor_row + 1,
+                primary_ctx.cursor_col + 1
+            ));
+
+            // configure pen
+            seq.push_str(&primary_ctx.pen.dump());
+
+            // save cursor
+            seq.push_str("\u{1b}7");
+
+            if !primary_ctx.auto_wrap_mode {
+                // re-enable auto-wrap mode
+                seq.push_str("\u{9b}?7h");
+            }
+
+            if primary_ctx.origin_mode {
+                // re-disable origin mode
+                seq.push_str("\u{9b}?6l");
+            }
         }
-
-        if primary_ctx.origin_mode {
-            // enable origin mode
-            seq.push_str("\u{9b}?6h");
-        }
-
-        // fix cursor in target position
-        seq.push_str(&format!(
-            "\u{9b}{};{}H",
-            primary_ctx.cursor_row + 1,
-            primary_ctx.cursor_col + 1
-        ));
-
-        // configure pen
-        seq.push_str(&primary_ctx.pen.dump());
-
-        // save cursor
-        seq.push_str("\u{1b}7");
 
         // prevent pen bleed into alt screen buffer
         seq.push_str("\u{1b}[m");
 
-        if !primary_ctx.auto_wrap_mode {
-            // re-enable auto-wrap mode
-            seq.push_str("\u{9b}?7h");
-        }
-
-        if primary_ctx.origin_mode {
-            // re-disable origin mode
-            seq.push_str("\u{9b}?6l");
-        }
-
         // 4. dump alternate screen buffer
 
         // switch to alternate screen
-        seq.push_str("\u{9b}?1047h");
+        if self.active_buffer_type == BufferType::Alternate || !alternate_ctx.is_default() {
+            seq.push_str("\u{9b}?1047h");
+        }
 
         if self.active_buffer_type == BufferType::Alternate {
             // move cursor home
@@ -1327,42 +1342,44 @@ impl Terminal {
 
         // 5. configure saved context for alternate screen
 
-        if !alternate_ctx.auto_wrap_mode {
-            // disable auto-wrap mode
-            seq.push_str("\u{9b}?7l");
-        }
+        if !alternate_ctx.is_default() {
+            if !alternate_ctx.auto_wrap_mode {
+                // disable auto-wrap mode
+                seq.push_str("\u{9b}?7l");
+            }
 
-        if alternate_ctx.origin_mode {
-            // enable origin mode
-            seq.push_str("\u{9b}?6h");
-        }
+            if alternate_ctx.origin_mode {
+                // enable origin mode
+                seq.push_str("\u{9b}?6h");
+            }
 
-        // fix cursor in target position
-        seq.push_str(&format!(
-            "\u{9b}{};{}H",
-            alternate_ctx.cursor_row + 1,
-            alternate_ctx.cursor_col + 1
-        ));
+            // fix cursor in target position
+            seq.push_str(&format!(
+                "\u{9b}{};{}H",
+                alternate_ctx.cursor_row + 1,
+                alternate_ctx.cursor_col + 1
+            ));
 
-        // configure pen
-        seq.push_str(&alternate_ctx.pen.dump());
+            // configure pen
+            seq.push_str(&alternate_ctx.pen.dump());
 
-        // save cursor
-        seq.push_str("\u{1b}7");
+            // save cursor
+            seq.push_str("\u{1b}7");
 
-        if !alternate_ctx.auto_wrap_mode {
-            // re-enable auto-wrap mode
-            seq.push_str("\u{9b}?7h");
-        }
+            if !alternate_ctx.auto_wrap_mode {
+                // re-enable auto-wrap mode
+                seq.push_str("\u{9b}?7h");
+            }
 
-        if alternate_ctx.origin_mode {
-            // re-disable origin mode
-            seq.push_str("\u{9b}?6l");
+            if alternate_ctx.origin_mode {
+                // re-disable origin mode
+                seq.push_str("\u{9b}?6l");
+            }
         }
 
         // 6. ensure the right buffer is active
 
-        if self.active_buffer_type == BufferType::Primary {
+        if self.active_buffer_type == BufferType::Primary && !alternate_ctx.is_default() {
             // switch back to primary screen
             seq.push_str("\u{9b}?1047l");
         }
@@ -1378,11 +1395,13 @@ impl Terminal {
         // 8. setup margins
 
         // note: this resets cursor position - must be done before fixing cursor
-        seq.push_str(&format!(
-            "\u{9b}{};{}r",
-            self.top_margin + 1,
-            self.bottom_margin + 1
-        ));
+        if self.top_margin > 0 || self.bottom_margin < self.rows - 1 {
+            seq.push_str(&format!(
+                "\u{9b}{};{}r",
+                self.top_margin + 1,
+                self.bottom_margin + 1
+            ));
+        }
 
         // 9. setup cursor
 
@@ -1432,7 +1451,7 @@ impl Terminal {
         }
 
         if self.cursor.col >= self.cols {
-            // move cursor past right border by re-printing the character in
+            // move cursor past the right border by re-printing the character in
             // the last column
             let cell = self.buffer[(self.cols - 1, self.cursor.row)];
             seq.push_str(&format!("{}{}", cell.pen().dump(), cell.char()));
@@ -1447,7 +1466,7 @@ impl Terminal {
         }
 
         // Following 3 steps must happen after ALL prints as they alter print behaviour,
-        // including the "move cursor past right border one" above.
+        // including the "move cursor past the right border one" above.
 
         // 10. setup charset
 

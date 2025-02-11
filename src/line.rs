@@ -160,7 +160,13 @@ impl Line {
             .count()
     }
 
-    pub fn dump(&self) -> String {
+    pub(crate) fn is_blank(&self) -> bool {
+        self.cells.iter().all(|c| c.is_default())
+    }
+}
+
+impl std::fmt::Debug for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let mut s = String::new();
 
         for cells in self.chunks(|c1, c2| c1.pen() != c2.pen()) {
@@ -170,14 +176,6 @@ impl Line {
                 s.push(cell.char());
             }
         }
-
-        s
-    }
-}
-
-impl std::fmt::Debug for Line {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = self.dump();
 
         if self.wrapped {
             s.push('⏎');

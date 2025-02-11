@@ -369,22 +369,68 @@ impl Buffer {
     }
 
     pub fn dump(&self) -> String {
+        let mut cutoff = 0;
+        let mut wrapped = false;
+
+        for (i, line) in self.view().iter().enumerate() {
+            if wrapped || line.wrapped || !line.is_blank() {
+                cutoff = i + 1;
+            }
+
+            wrapped = line.wrapped;
+        }
+
         let last = self.rows - 1;
+        let mut dump = String::new();
+        let mut pen = Pen::default();
 
-        self.view()
-            .iter()
-            .enumerate()
-            .map(|(i, line)| {
-                let mut dump = line.dump();
-
-                if i < last && !line.wrapped {
-                    dump.push('\r');
-                    dump.push('\n');
+        for (i, line) in self.view().iter().take(cutoff).enumerate() {
+            for cells in line.chunks(|c1, c2| c1.pen() != c2.pen()) {
+                if cells[0].pen() != &pen {
+                    dump.push_str(&cells[0].pen().dump());
+                    pen = *cells[0].pen();
                 }
 
-                dump
-            })
-            .collect()
+                self.rep_encode_cell_text(&cells, &mut dump);
+            }
+
+            if i < last && !line.wrapped {
+                dump.push('\r');
+                dump.push('\n');
+            }
+        }
+
+        dump
+    }
+
+    fn rep_encode_cell_text(&self, cells: &[Cell], dump: &mut String) {
+        let mut cells = cells.iter();
+        let mut prev = cells.next().unwrap().char();
+        let mut count = 1;
+
+        for cell in cells {
+            if cell.char() == prev {
+                count += 1;
+            } else if count > 5 {
+                dump.push_str(&format!("{}\x1b[{}b", prev, count - 1));
+                count = 1;
+                prev = cell.char();
+            } else {
+                for _ in 0..count {
+                    dump.push(prev);
+                }
+                count = 1;
+                prev = cell.char();
+            }
+        }
+
+        if count > 5 {
+            dump.push_str(&format!("{}\x1b[{}b", prev, count - 1));
+        } else {
+            for _ in 0..count {
+                dump.push(prev);
+            }
+        }
     }
 
     #[cfg(test)]
