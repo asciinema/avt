@@ -1299,6 +1299,9 @@ impl Terminal {
         // save cursor
         seq.push_str("\u{1b}7");
 
+        // prevent pen bleed into alt screen buffer
+        seq.push_str("\u{1b}[m");
+
         if !primary_ctx.auto_wrap_mode {
             // re-enable auto-wrap mode
             seq.push_str("\u{9b}?7h");
