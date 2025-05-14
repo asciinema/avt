@@ -86,17 +86,17 @@ impl Buffer {
         text
     }
 
-    pub fn print(&mut self, (col, row): VisualPosition, cell: Cell) {
-        self[row].print(col, cell);
+    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) {
+        self[row].print(col, ch, pen);
     }
 
     pub fn wrap(&mut self, row: usize) {
         self[row].wrapped = true;
     }
 
-    pub fn insert(&mut self, (col, row): VisualPosition, mut n: usize, cell: Cell) {
+    pub fn insert(&mut self, (col, row): VisualPosition, mut n: usize, ch: char, pen: Pen) {
         n = n.min(self.cols - col);
-        self[row].insert(col, n, cell);
+        self[row].insert(col, n, ch, pen);
     }
 
     pub fn delete(&mut self, (col, row): VisualPosition, mut n: usize, pen: &Pen) {
@@ -438,7 +438,7 @@ impl Buffer {
         let mut line = Line::blank(self.cols, Pen::default());
 
         for col in 0..self.cols {
-            line.print(col, 's'.into());
+            line.print(col, 's', Pen::default());
         }
 
         for _ in 0..n {
@@ -567,15 +567,14 @@ mod tests {
     #[test]
     fn text() {
         let mut buffer = Buffer::new(10, 5, None, None);
-        let cell = 'x'.into();
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
 
-        buffer.print((0, 0), cell);
-        buffer.print((1, 1), cell);
-        buffer.print((2, 2), cell);
-        buffer.print((3, 3), cell);
-        buffer.print((4, 4), cell);
+        buffer.print((0, 0), 'x', Pen::default());
+        buffer.print((1, 1), 'x', Pen::default());
+        buffer.print((2, 2), 'x', Pen::default());
+        buffer.print((3, 3), 'x', Pen::default());
+        buffer.print((4, 4), 'x', Pen::default());
         assert_eq!(buffer.text(), vec!["x", " x", "  x", "   x", "    x"]);
 
         buffer.wrap(0);
@@ -989,7 +988,7 @@ mod tests {
 
         for (row, (line, wrapped)) in content.iter().enumerate() {
             for (col, ch) in line.chars().enumerate() {
-                buffer.print((col, row), ch.into());
+                buffer.print((col, row), ch, Pen::default());
             }
 
             if *wrapped {

@@ -20,13 +20,16 @@ impl Line {
         self.cells[range].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn print(&mut self, col: usize, cell: Cell) {
-        self.cells[col] = cell;
+    pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) {
+        self.cells[col].set(ch, pen);
     }
 
-    pub(crate) fn insert(&mut self, col: usize, n: usize, cell: Cell) {
+    pub(crate) fn insert(&mut self, col: usize, n: usize, ch: char, pen: Pen) {
         self.cells[col..].rotate_right(n);
-        self.cells[col..col + n].fill(cell);
+
+        for cell in self.cells[col..col + n].as_mut() {
+            cell.set(ch, pen);
+        }
     }
 
     pub(crate) fn delete(&mut self, col: usize, n: usize, pen: &Pen) {

@@ -3,7 +3,6 @@ mod dirty_lines;
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
-use crate::cell::Cell;
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
@@ -693,7 +692,6 @@ impl Terminal {
 
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
-        let cell = Cell::new(ch, self.pen);
 
         if self.auto_wrap_mode && self.pending_wrap {
             self.do_move_cursor_to_col(0);
@@ -710,7 +708,8 @@ impl Terminal {
         let next_col = self.cursor.col + 1;
 
         if next_col >= self.cols {
-            self.buffer.print((self.cols - 1, self.cursor.row), cell);
+            self.buffer
+                .print((self.cols - 1, self.cursor.row), ch, self.pen);
 
             if self.auto_wrap_mode {
                 self.do_move_cursor_to_col(self.cols);
@@ -719,9 +718,10 @@ impl Terminal {
         } else {
             if self.insert_mode {
                 self.buffer
-                    .insert((self.cursor.col, self.cursor.row), 1, cell);
+                    .insert((self.cursor.col, self.cursor.row), 1, ch, self.pen);
             } else {
-                self.buffer.print((self.cursor.col, self.cursor.row), cell);
+                self.buffer
+                    .print((self.cursor.col, self.cursor.row), ch, self.pen);
             }
 
             self.do_move_cursor_to_col(next_col);
@@ -794,7 +794,7 @@ impl Terminal {
     fn decaln(&mut self) {
         for row in 0..self.rows {
             for col in 0..self.cols {
-                self.buffer.print((col, row), '\u{45}'.into());
+                self.buffer.print((col, row), '\u{45}', Pen::default());
             }
 
             self.dirty_lines.add(row);
@@ -813,7 +813,8 @@ impl Terminal {
         self.buffer.insert(
             (self.cursor.col, self.cursor.row),
             as_usize(n, 1),
-            Cell::blank(self.pen),
+            ' ',
+            self.pen,
         );
 
         self.dirty_lines.add(self.cursor.row);

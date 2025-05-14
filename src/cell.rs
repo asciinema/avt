@@ -28,6 +28,11 @@ impl Cell {
     pub fn width(&self) -> usize {
         self.0.width().unwrap_or(0)
     }
+
+    pub fn set(&mut self, ch: char, pen: Pen) {
+        self.0 = ch;
+        self.1 = pen;
+    }
 }
 
 impl Default for Cell {
