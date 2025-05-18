@@ -10,6 +10,7 @@ mod terminal;
 pub mod util;
 mod vt;
 pub use cell::Cell;
+pub use charset::Charset;
 pub use color::Color;
 pub use line::Line;
 pub use pen::Pen;

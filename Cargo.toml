@@ -27,3 +27,7 @@ harness = false
 [[bench]]
 name = "vt"
 harness = false
+
+[[bench]]
+name = "charset"
+harness = false
