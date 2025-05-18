@@ -9,18 +9,39 @@ const SPECIAL_GFX_CHARS: [char; 31] = [
     '⎽', '├', '┤', '┴', '┬', '│', '≤', '≥', 'π', '≠', '£', '⋅',
 ];
 
-impl Charset {
-    pub fn translate(&self, input: char) -> char {
-        match self {
-            Charset::Ascii => input,
+const fn build_lut() -> [char; 128] {
+    let mut lut = ['\0'; 128];
+    let mut i = 0;
 
-            Charset::Drawing => {
-                if ('\x60'..'\x7f').contains(&input) {
-                    SPECIAL_GFX_CHARS[(input as usize) - 0x60]
-                } else {
-                    input
-                }
-            }
+    while i < 128 {
+        lut[i] = if i >= 0x60 && i < 0x7f {
+            SPECIAL_GFX_CHARS[i - 0x60]
+        } else {
+            // `u8 as char` is always valid for 0x00‥=0x7f
+            (i as u8) as char
+        };
+
+        i += 1;
+    }
+
+    lut
+}
+
+const LUT_DRAWING: [char; 128] = build_lut();
+
+impl Charset {
+    #[inline(always)]
+    pub fn translate(self, c: char) -> char {
+        // bail out for non-ASCII
+        if c as u32 > 0x7f {
+            return c;
+        }
+
+        let idx = c as u8 as usize;
+
+        match self {
+            Charset::Ascii => c,
+            Charset::Drawing => LUT_DRAWING[idx],
         }
     }
 }
