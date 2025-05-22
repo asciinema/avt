@@ -86,17 +86,17 @@ impl Buffer {
         text
     }
 
-    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) {
-        self[row].print(col, ch, pen);
+    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> usize {
+        self[row].print(col, ch, pen)
     }
 
     pub fn wrap(&mut self, row: usize) {
         self[row].wrapped = true;
     }
 
-    pub fn insert(&mut self, (col, row): VisualPosition, mut n: usize, ch: char, pen: Pen) {
+    pub fn shift_right(&mut self, (col, row): VisualPosition, mut n: usize, pen: Pen) {
         n = n.min(self.cols - col);
-        self[row].insert(col, n, ch, pen);
+        self[row].shift_right(col, n, pen);
     }
 
     pub fn delete(&mut self, (col, row): VisualPosition, mut n: usize, pen: &Pen) {

@@ -1,3 +1,5 @@
+use unicode_width::UnicodeWidthChar;
+
 use crate::cell::Cell;
 use crate::pen::Pen;
 use std::ops::{Index, Range, RangeFull};
@@ -17,29 +19,157 @@ impl Line {
     }
 
     pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
+        if range.start == self.len() {
+            return;
+        }
+
+        let start_col = range.start;
+        let end_col = range.end;
+
+        if self.cells[start_col].width() == 0 {
+            self.cells[start_col - 1].set(' ', 1, *pen);
+        }
+
         self.cells[range].fill(Cell::blank(*pen));
+
+        if let Some(next_cell) = self.cells.get_mut(end_col) {
+            if next_cell.width() == 0 {
+                next_cell.set(' ', 1, *pen);
+            }
+        }
     }
 
-    pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) {
-        self.cells[col].set(ch, pen);
+    pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) -> usize {
+        let cell_width = self.cells[col].width();
+        let char_width = self.char_display_width(ch);
+        let remaining_cols = self.len() as isize - 1 - col as isize;
+
+        match (cell_width, char_width, remaining_cols) {
+            (1, 1, _) => {
+                self.cells[col].set(ch, 1, pen);
+            }
+
+            (1, 2, 0) => {
+                self.cells[col].set(' ', 1, pen);
+                return 0;
+            }
+
+            (1, 2, 1) => {
+                debug_assert!(self.cells[col + 1].width() < 2);
+
+                self.cells[col].set(ch, 2, pen);
+                self.cells[col + 1].set(' ', 0, pen);
+            }
+
+            (1, 2, _right) => {
+                self.cells[col].set(ch, 2, pen);
+
+                if self.cells[col + 1].width() == 2 {
+                    self.cells[col + 2].set(' ', 1, pen);
+                }
+
+                self.cells[col + 1].set(' ', 0, pen);
+            }
+
+            (2, 1, right) => {
+                debug_assert!(right >= 1);
+                debug_assert!(self.cells[col + 1].width() == 0);
+
+                self.cells[col].set(ch, 1, pen);
+                self.cells[col + 1].set(' ', 1, pen);
+            }
+
+            (2, 2, right) => {
+                debug_assert!(right >= 1);
+                debug_assert!(self.cells[col + 1].width() == 0);
+
+                self.cells[col].set(ch, 2, pen);
+                self.cells[col + 1].set(' ', 0, pen);
+            }
+
+            (0, 1, _right) => {
+                debug_assert!(col > 0);
+                debug_assert!(self.cells[col - 1].width() == 2);
+
+                self.cells[col - 1].set(' ', 1, pen);
+                self.cells[col].set(ch, 1, pen);
+            }
+
+            (0, 2, 0) => {
+                debug_assert!(col > 0);
+                debug_assert!(self.cells[col - 1].width() == 2);
+
+                return 0;
+            }
+
+            (0, 2, 1) => {
+                debug_assert!(col > 0);
+                debug_assert!(self.cells[col - 1].width() == 2);
+
+                self.cells[col + 1].set(' ', 1, pen);
+                return 0;
+            }
+
+            (0, 2, _right) => {
+                debug_assert!(col > 0);
+                debug_assert!(self.cells[col - 1].width() == 2);
+
+                self.cells[col - 1].set(' ', 1, pen);
+                self.cells[col].set(ch, 2, pen);
+
+                if self.cells[col + 1].width() == 2 {
+                    self.cells[col + 2].set(' ', 1, pen);
+                }
+
+                self.cells[col + 1].set(' ', 0, pen);
+            }
+
+            _ => {
+                unreachable!();
+            }
+        }
+
+        char_width
     }
 
-    pub(crate) fn insert(&mut self, col: usize, n: usize, ch: char, pen: Pen) {
+    pub(crate) fn shift_right(&mut self, col: usize, n: usize, pen: Pen) {
+        let col = col.min(self.len() - 1);
+        let cur_cell = &mut self.cells[col];
+
+        if cur_cell.width() == 0 {
+            cur_cell.set(' ', 1, pen);
+            self.cells[col - 1].set(' ', 1, pen);
+        }
+
         self.cells[col..].rotate_right(n);
 
-        for cell in self.cells[col..col + n].as_mut() {
-            cell.set(ch, pen);
+        let cur_cell = &mut self.cells[col];
+
+        if cur_cell.width() == 0 {
+            cur_cell.set(' ', 1, pen);
+            self.cells.last_mut().unwrap().set(' ', 1, pen);
         }
     }
 
     pub(crate) fn delete(&mut self, col: usize, n: usize, pen: &Pen) {
+        if self.cells[col].width() == 0 {
+            self.cells[col - 1].set(' ', 1, *pen);
+        }
+
         self.cells[col..].rotate_left(n);
-        let start = self.cells.len() - n;
-        self.cells[start..].fill(Cell::blank(*pen));
+
+        let cur_cell = &mut self.cells[col];
+
+        if cur_cell.width() == 0 {
+            cur_cell.set(' ', 1, *pen);
+        }
+
+        let fill_start = self.cells.len() - n;
+        self.cells[fill_start..].fill(Cell::blank(*pen));
     }
 
     pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> (bool, Option<Line>) {
-        let needed = len - self.len();
+        let mut needed = len - self.len();
 
         if needed == 0 {
             return (true, Some(other));
@@ -56,6 +186,12 @@ impl Line {
         }
 
         if needed < other.len() {
+            if other[needed].width() == 0 {
+                needed -= 1;
+                let pen = self.cells[self.len() - 1].pen();
+                self.cells.push(Cell::new(' ', 1, *pen));
+            }
+
             self.cells.extend(&other[0..needed]);
             let mut cells = other.cells;
             cells.rotate_left(needed);
@@ -91,17 +227,28 @@ impl Line {
         self.cells.extend(filler);
     }
 
-    pub(crate) fn contract(&mut self, len: usize) -> Option<Line> {
+    pub(crate) fn contract(&mut self, mut len: usize) -> Option<Line> {
         if !self.wrapped {
             let trimmed_len = self.len() - self.trailers();
             self.cells.truncate(len.max(trimmed_len));
         }
 
         if self.len() > len {
+            let wide_char_boundary = self.cells[len].width() == 0;
+
+            if wide_char_boundary {
+                len -= 1;
+            }
+
             let mut rest = Line {
                 cells: self.cells.split_off(len),
                 wrapped: self.wrapped,
             };
+
+            if wide_char_boundary {
+                let pen = self.cells[self.cells.len() - 1].pen();
+                self.cells.push(Cell::new(' ', 1, *pen));
+            }
 
             if !self.wrapped {
                 rest.trim();
@@ -136,7 +283,8 @@ impl Line {
         &'a self,
         predicate: impl Fn(&Cell, &Cell) -> bool + 'a,
     ) -> impl Iterator<Item = Vec<Cell>> + '_ {
-        Chunks::new(self.cells.iter(), predicate)
+        let i = self.cells.iter().filter(|c| c.width() > 0);
+        Chunks::new(i, predicate)
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
@@ -166,6 +314,14 @@ impl Line {
     pub(crate) fn is_blank(&self) -> bool {
         self.cells.iter().all(|c| c.is_default())
     }
+
+    fn char_display_width(&self, ch: char) -> usize {
+        if ch.width().unwrap_or(1) == 2 {
+            2
+        } else {
+            1
+        }
+    }
 }
 
 impl std::fmt::Debug for Line {
@@ -176,7 +332,9 @@ impl std::fmt::Debug for Line {
             s.push_str(&cells[0].pen().dump());
 
             for cell in cells {
-                s.push(cell.char());
+                if cell.width() > 0 {
+                    s.push(cell.char());
+                }
             }
         }
 
@@ -261,7 +419,7 @@ impl Index<RangeFull> for Line {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cell, Chunks};
+    use super::{Cell, Chunks, Pen};
 
     fn chars(cells: &[Cell]) -> Vec<char> {
         cells.iter().map(|c| c.char()).collect()
@@ -269,16 +427,18 @@ mod tests {
 
     #[test]
     fn chunks() {
+        let pen = Pen::default();
+
         let cells = [
-            '0'.into(),
-            'a'.into(),
-            'b'.into(),
-            'C'.into(),
-            'D'.into(),
-            'E'.into(),
-            '1'.into(),
-            'F'.into(),
-            'g'.into(),
+            Cell::new('0', 1, pen),
+            Cell::new('a', 1, pen),
+            Cell::new('b', 1, pen),
+            Cell::new('C', 1, pen),
+            Cell::new('D', 1, pen),
+            Cell::new('E', 1, pen),
+            Cell::new('1', 1, pen),
+            Cell::new('F', 1, pen),
+            Cell::new('g', 1, pen),
         ];
 
         let chunks: Vec<Vec<Cell>> = Chunks::new(cells.iter(), |c1, c2| {

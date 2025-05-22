@@ -1,5 +1,6 @@
 mod cursor;
 mod dirty_lines;
+
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
@@ -642,6 +643,19 @@ impl Terminal {
         assert!(self.cursor.col <= self.cols);
         assert!(self.lines().iter().all(|line| line.len() == self.cols));
         assert!(!self.lines().last().unwrap().wrapped);
+
+        for line in self.lines() {
+            for i in 0..self.cols {
+                let width = line[i].width();
+
+                if width == 0 {
+                    assert!(i > 0);
+                    assert!(line[i - 1].width() == 2);
+                } else if width == 2 {
+                    assert!(line[i + 1].width() == 0, "{:?}", line);
+                }
+            }
+        }
     }
 
     #[cfg(test)]
@@ -674,37 +688,45 @@ impl Terminal {
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
 
-        if self.auto_wrap_mode && self.cursor.col == self.cols {
-            self.cursor.col = 0;
+        let n = if self.cursor.col < self.cols {
+            if self.insert_mode {
+                self.buffer
+                    .shift_right((self.cursor.col, self.cursor.row), 1, self.pen);
+            }
 
+            self.buffer
+                .print((self.cursor.col, self.cursor.row), ch, self.pen)
+        } else {
+            0
+        };
+
+        if n > 0 {
+            self.cursor.col += n;
+
+            if self.cursor.col == self.cols && !self.auto_wrap_mode {
+                self.cursor.col = self.cols - 1;
+            }
+        } else if self.auto_wrap_mode {
             if self.cursor.row == self.bottom_margin {
                 self.buffer.wrap(self.cursor.row);
                 self.scroll_up_in_region(1);
             } else if self.cursor.row < self.rows - 1 {
                 self.buffer.wrap(self.cursor.row);
-                self.do_move_cursor_to_row(self.cursor.row + 1);
+                self.cursor.row += 1;
             }
-        }
 
-        let next_col = self.cursor.col + 1;
-
-        if next_col >= self.cols {
-            self.buffer
-                .print((self.cols - 1, self.cursor.row), ch, self.pen);
-
-            if self.auto_wrap_mode {
-                self.cursor.col = self.cols;
-            }
+            self.cursor.col = self.buffer.print((0, self.cursor.row), ch, self.pen);
         } else {
-            if self.insert_mode {
+            let n = self
+                .buffer
+                .print((self.cursor.col - 1, self.cursor.row), ch, self.pen);
+
+            if n == 0 {
                 self.buffer
-                    .insert((self.cursor.col, self.cursor.row), 1, ch, self.pen);
-            } else {
-                self.buffer
-                    .print((self.cursor.col, self.cursor.row), ch, self.pen);
+                    .print((self.cursor.col - 2, self.cursor.row), ch, self.pen);
             }
 
-            self.cursor.col = next_col;
+            self.cursor.col = self.cols - 1;
         }
 
         self.dirty_lines.add(self.cursor.row);
@@ -790,12 +812,18 @@ impl Terminal {
     }
 
     fn ich(&mut self, n: u16) {
-        self.buffer.insert(
-            (self.cursor.col, self.cursor.row),
-            as_usize(n, 1),
-            ' ',
-            self.pen,
-        );
+        if self.cursor.col == self.cols {
+            self.cursor.col = self.cols - 1;
+        }
+
+        let n = as_usize(n, 1).min(self.cols - self.cursor.col);
+
+        self.buffer
+            .shift_right((self.cursor.col, self.cursor.row), n, self.pen);
+
+        for col in self.cursor.col..self.cursor.col + n {
+            self.buffer.print((col, self.cursor.row), ' ', self.pen);
+        }
 
         self.dirty_lines.add(self.cursor.row);
     }
@@ -1435,7 +1463,17 @@ impl Terminal {
             // move cursor past the right border by re-printing the character in
             // the last column
             let cell = self.buffer[(self.cols - 1, self.cursor.row)];
-            seq.push_str(&format!("{}{}", cell.pen().dump(), cell.char()));
+            let width = cell.width();
+
+            if width == 1 {
+                seq.push_str(&format!("{}{}", cell.pen().dump(), cell.char()));
+            } else if width == 0 {
+                let cell = self.buffer[(self.cols - 2, self.cursor.row)];
+
+                if cell.width() == 2 {
+                    seq.push_str(&format!("\u{9b}D{}{}", cell.pen().dump(), cell.char()));
+                }
+            }
         }
 
         // configure pen

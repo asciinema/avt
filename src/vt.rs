@@ -150,6 +150,22 @@ mod tests {
     }
 
     #[test]
+    fn insert_mode() {
+        let mut vt = Vt::new(4, 4);
+
+        vt.feed_str("abcd");
+        vt.feed_str("\x1b[2D");
+        vt.feed_str("\x1b[4h");
+        vt.feed_str("ef");
+
+        assert_eq!(text(&vt), "aef|b\n\n\n");
+
+        vt.feed_str("ghij");
+
+        assert_eq!(text(&vt), "aefg\nhij|\n\n");
+    }
+
+    #[test]
     fn print_at_the_end_of_the_screen() {
         // default margins, print at the bottom
 
@@ -1042,7 +1058,7 @@ mod tests {
         let mut vt1 = Vt::new(10, 4);
         let mut vt2 = Vt::new(10, 4);
 
-        vt1.feed_str("hello\n\rworld\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h");
+        vt1.feed_str("hello\n\rworld 日\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h");
         vt1.feed_str("\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{9b}4h");
         vt1.feed_str("\u{9b}?7l\u{9b}20h\u{9b}\u{3a}\x1b(0\x1b)0\u{0e}");
 
