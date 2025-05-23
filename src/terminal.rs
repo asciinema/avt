@@ -31,7 +31,6 @@ pub(crate) struct Terminal {
     auto_wrap_mode: bool,
     new_line_mode: bool,
     cursor_keys_mode: CursorKeysMode,
-    pending_wrap: bool,
     top_margin: usize,
     bottom_margin: usize,
     saved_ctx: SavedCtx,
@@ -106,7 +105,6 @@ impl Terminal {
             auto_wrap_mode: true,
             new_line_mode: false,
             cursor_keys_mode: CursorKeysMode::Normal,
-            pending_wrap: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
             saved_ctx: SavedCtx::default(),
@@ -362,20 +360,14 @@ impl Terminal {
         self.pen = self.saved_ctx.pen;
         self.origin_mode = self.saved_ctx.origin_mode;
         self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
-        self.pending_wrap = false;
     }
 
     fn move_cursor_to_col(&mut self, col: usize) {
         if col >= self.cols {
-            self.do_move_cursor_to_col(self.cols - 1);
+            self.cursor.col = self.cols - 1;
         } else {
-            self.do_move_cursor_to_col(col);
+            self.cursor.col = col;
         }
-    }
-
-    fn do_move_cursor_to_col(&mut self, col: usize) {
-        self.cursor.col = col;
-        self.pending_wrap = false;
     }
 
     fn move_cursor_to_row(&mut self, mut row: usize) {
@@ -388,23 +380,22 @@ impl Terminal {
     fn do_move_cursor_to_row(&mut self, row: usize) {
         self.cursor.col = self.cursor.col.min(self.cols - 1);
         self.cursor.row = row;
-        self.pending_wrap = false;
     }
 
     fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
         let new_col = self.cursor.col as isize + rel_col;
 
         if new_col < 0 {
-            self.do_move_cursor_to_col(0);
+            self.cursor.col = 0;
         } else if new_col as usize >= self.cols {
-            self.do_move_cursor_to_col(self.cols - 1);
+            self.cursor.col = self.cols - 1;
         } else {
-            self.do_move_cursor_to_col(new_col as usize);
+            self.cursor.col = new_col as usize;
         }
     }
 
     fn move_cursor_home(&mut self) {
-        self.do_move_cursor_to_col(0);
+        self.cursor.col = 0;
         self.do_move_cursor_to_row(self.actual_top_margin());
     }
 
@@ -556,10 +547,6 @@ impl Terminal {
     }
 
     fn reflow(&mut self) {
-        if self.cols != self.buffer.cols {
-            self.pending_wrap = false;
-        }
-
         (self.cursor.col, self.cursor.row) =
             self.buffer
                 .resize(self.cols, self.rows, (self.cursor.col, self.cursor.row));
@@ -606,7 +593,6 @@ impl Terminal {
         self.origin_mode = false;
         self.auto_wrap_mode = true;
         self.new_line_mode = false;
-        self.pending_wrap = false;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
@@ -653,13 +639,9 @@ impl Terminal {
     #[cfg(test)]
     pub fn verify(&self) {
         assert!(self.cursor.row < self.rows);
+        assert!(self.cursor.col <= self.cols);
         assert!(self.lines().iter().all(|line| line.len() == self.cols));
         assert!(!self.lines().last().unwrap().wrapped);
-
-        assert!(
-            !self.pending_wrap && self.cursor.col < self.cols
-                || self.pending_wrap && self.cursor.col == self.cols
-        );
     }
 
     #[cfg(test)]
@@ -675,7 +657,6 @@ impl Terminal {
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
         assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
-        assert_eq!(self.pending_wrap, other.pending_wrap);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
         assert_eq!(self.saved_ctx, other.saved_ctx);
@@ -693,8 +674,8 @@ impl Terminal {
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
 
-        if self.auto_wrap_mode && self.pending_wrap {
-            self.do_move_cursor_to_col(0);
+        if self.auto_wrap_mode && self.cursor.col == self.cols {
+            self.cursor.col = 0;
 
             if self.cursor.row == self.bottom_margin {
                 self.buffer.wrap(self.cursor.row);
@@ -712,8 +693,7 @@ impl Terminal {
                 .print((self.cols - 1, self.cursor.row), ch, self.pen);
 
             if self.auto_wrap_mode {
-                self.do_move_cursor_to_col(self.cols);
-                self.pending_wrap = true;
+                self.cursor.col = self.cols;
             }
         } else {
             if self.insert_mode {
@@ -724,14 +704,14 @@ impl Terminal {
                     .print((self.cursor.col, self.cursor.row), ch, self.pen);
             }
 
-            self.do_move_cursor_to_col(next_col);
+            self.cursor.col = next_col;
         }
 
         self.dirty_lines.add(self.cursor.row);
     }
 
     fn bs(&mut self) {
-        if self.pending_wrap {
+        if self.cursor.col == self.cols {
             self.move_cursor_to_rel_col(-2);
         } else {
             self.move_cursor_to_rel_col(-1);
@@ -746,12 +726,12 @@ impl Terminal {
         self.move_cursor_down_with_scroll();
 
         if self.new_line_mode {
-            self.do_move_cursor_to_col(0);
+            self.cursor.col = 0;
         }
     }
 
     fn cr(&mut self) {
-        self.do_move_cursor_to_col(0);
+        self.cursor.col = 0;
     }
 
     fn so(&mut self) {
@@ -764,7 +744,7 @@ impl Terminal {
 
     fn nel(&mut self) {
         self.move_cursor_down_with_scroll();
-        self.do_move_cursor_to_col(0);
+        self.cursor.col = 0;
     }
 
     fn hts(&mut self) {
@@ -835,7 +815,7 @@ impl Terminal {
     fn cub(&mut self, n: u16) {
         let mut rel_col = -(as_usize(n, 1) as isize);
 
-        if self.pending_wrap {
+        if self.cursor.col == self.cols {
             rel_col -= 1;
         }
 
@@ -844,12 +824,12 @@ impl Terminal {
 
     fn cnl(&mut self, n: u16) {
         self.cursor_down(as_usize(n, 1));
-        self.do_move_cursor_to_col(0);
+        self.cursor.col = 0;
     }
 
     fn cpl(&mut self, n: u16) {
         self.cursor_up(as_usize(n, 1));
-        self.do_move_cursor_to_col(0);
+        self.cursor.col = 0;
     }
 
     fn cha(&mut self, n: u16) {
