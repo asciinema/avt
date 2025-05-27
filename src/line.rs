@@ -288,7 +288,9 @@ impl Line {
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        self.cells.iter().map(Cell::char)
+        self.cells
+            .iter()
+            .filter_map(|c| if c.width() > 0 { Some(c.char()) } else { None })
     }
 
     pub fn text(&self) -> String {
