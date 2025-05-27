@@ -1335,11 +1335,27 @@ mod tests {
         let mut lines = Vec::new();
         lines.extend(view[0..cursor_row].iter().map(|l| l.text()));
         let cursor_line = &view[cursor_row];
-        let left = cursor_line.chars().take(cursor_col);
-        let right = cursor_line.chars().skip(cursor_col);
-        let mut line = String::from_iter(left);
-        line.push('|');
-        line.extend(right);
+        let mut offset = 0;
+        let mut line = String::new();
+        let mut cells = cursor_line.cells().iter().filter(|c| c.width() > 0);
+
+        for cell in cells.by_ref() {
+            if offset + cell.width() <= cursor_col {
+                line.push(cell.char());
+                offset += cell.width();
+            } else {
+                line.push('|');
+                line.push(cell.char());
+                offset += cell.width();
+                break;
+            }
+        }
+
+        if offset == cursor_col {
+            line.push('|');
+        }
+
+        line.extend(cells.map(|c| c.char()));
         lines.push(line);
         lines.extend(view[cursor_row + 1..].iter().map(|l| l.text()));
 
