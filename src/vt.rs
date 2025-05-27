@@ -1303,6 +1303,7 @@ mod tests {
         let input = fs::read_to_string(path).unwrap();
         let w: usize = env::var("W").unwrap().parse::<usize>().unwrap();
         let h: usize = env::var("H").unwrap().parse::<usize>().unwrap();
+
         let step: usize = env::var("S")
             .unwrap_or("1".to_owned())
             .parse::<usize>()
