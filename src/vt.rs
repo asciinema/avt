@@ -198,6 +198,18 @@ mod tests {
     }
 
     #[test]
+    fn wide_chars() {
+        let mut vt = Vt::new(20, 2);
+
+        vt.feed_str("ハローワールド");
+        assert_eq!(text(&vt), "ハローワールド|\n");
+
+        vt.feed_str("\x1b[5D");
+        assert_eq!(vt.cursor().col, 9);
+        assert_eq!(text(&vt), "ハローワ|ールド\n");
+    }
+
+    #[test]
     fn execute_lf() {
         let mut vt = build_vt(8, 2, 3, 0, "abc");
 
