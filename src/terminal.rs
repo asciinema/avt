@@ -1462,17 +1462,19 @@ impl Terminal {
         if self.cursor.col >= self.cols {
             // move cursor past the right border by re-printing the character in
             // the last column
-            let cell = self.buffer[(self.cols - 1, self.cursor.row)];
-            let width = cell.width();
+            let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
+            let width = last_cell.width();
 
             if width == 1 {
-                seq.push_str(&format!("{}{}", cell.pen().dump(), cell.char()));
+                seq.push_str(&format!("{}{}", last_cell.pen().dump(), last_cell.char()));
             } else if width == 0 {
-                let cell = self.buffer[(self.cols - 2, self.cursor.row)];
+                let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
 
-                if cell.width() == 2 {
-                    seq.push_str(&format!("\u{9b}D{}{}", cell.pen().dump(), cell.char()));
-                }
+                seq.push_str(&format!(
+                    "\u{9b}D{}{}", // move cursor back
+                    prev_cell.pen().dump(),
+                    prev_cell.char()
+                ));
             }
         }
 
