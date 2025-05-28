@@ -26,7 +26,7 @@ built on top of it.
 
 avt doesn't try to 100% replicate any specific terminal variant like VT102 or VT520,
 instead it implements most control sequences supported by modern terminal emulators
-like xterm, Gnome Terminal, WezTerm, Alacritty, iTerm, mosh etc.
+like xterm, Gnome Terminal, WezTerm, Alacritty, iTerm, Ghostty, mosh etc.
 
 ## License
 
