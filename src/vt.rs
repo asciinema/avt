@@ -47,11 +47,11 @@ impl Vt {
         Changes { lines, scrollback }
     }
 
-    pub fn view(&self) -> &[Line] {
+    pub fn view(&self) -> impl Iterator<Item = &Line> {
         self.terminal.view()
     }
 
-    pub fn lines(&self) -> &[Line] {
+    pub fn lines(&self) -> impl Iterator<Item = &Line> {
         self.terminal.lines()
     }
 
@@ -870,12 +870,12 @@ mod tests {
         vt.resize(7, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().iter().any(|l| l.wrapped));
+        assert!(!vt.view().any(|l| l.wrapped));
 
         vt.resize(15, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().iter().any(|l| l.wrapped));
+        assert!(!vt.view().any(|l| l.wrapped));
 
         let mut vt = builder.size(6, 6).build();
 
@@ -916,12 +916,12 @@ mod tests {
         vt.resize(7, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().iter().any(|l| l.wrapped));
+        assert!(!vt.view().any(|l| l.wrapped));
 
         vt.resize(6, 6);
 
         assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().iter().any(|l| l.wrapped));
+        assert!(!vt.view().any(|l| l.wrapped));
 
         let mut vt = builder.size(8, 2).build();
 
@@ -1261,7 +1261,7 @@ mod tests {
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
             vt.terminal.verify();
-            assert!(vt.lines().len() >= vt.size().1);
+            assert!(vt.lines().count() >= vt.size().1);
         }
 
         #[test]
@@ -1271,7 +1271,7 @@ mod tests {
             vt.feed_str(&(input.into_iter().collect::<String>()));
 
             vt.terminal.verify();
-            assert!(vt.lines().len() == vt.size().1);
+            assert!(vt.lines().count() == vt.size().1);
         }
 
         #[test]
@@ -1283,7 +1283,7 @@ mod tests {
             let (_, rows) = vt.size();
 
             vt.terminal.verify();
-            assert!(vt.lines().len() >= rows && vt.lines().len() <= rows + scrollback_limit);
+            assert!(vt.lines().count() >= rows && vt.lines().count() <= rows + scrollback_limit);
         }
 
         #[test]
@@ -1295,7 +1295,7 @@ mod tests {
             vt.feed_str(&(input2.into_iter().collect::<String>()));
 
             vt.terminal.verify();
-            assert!(vt.lines().len() >= vt.size().1);
+            assert!(vt.lines().count() >= vt.size().1);
         }
 
         #[test]
@@ -1343,10 +1343,14 @@ mod tests {
         buffer_text(vt.terminal.view(), cursor.col, cursor.row)
     }
 
-    fn buffer_text(view: &[Line], cursor_col: usize, cursor_row: usize) -> String {
+    fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(
+        mut view: I,
+        cursor_col: usize,
+        cursor_row: usize,
+    ) -> String {
         let mut lines = Vec::new();
-        lines.extend(view[0..cursor_row].iter().map(|l| l.text()));
-        let cursor_line = &view[cursor_row];
+        lines.extend(view.by_ref().take(cursor_row).map(|l| l.text()));
+        let cursor_line = view.next().unwrap();
         let mut offset = 0;
         let mut line = String::new();
         let mut cells = cursor_line.cells().iter().filter(|c| c.width() > 0);
@@ -1369,7 +1373,7 @@ mod tests {
 
         line.extend(cells.map(|c| c.char()));
         lines.push(line);
-        lines.extend(view[cursor_row + 1..].iter().map(|l| l.text()));
+        lines.extend(view.map(|l| l.text()));
 
         lines
             .into_iter()
@@ -1379,6 +1383,6 @@ mod tests {
     }
 
     fn wrapped(vt: &Vt) -> Vec<bool> {
-        vt.terminal.view().iter().map(|l| l.wrapped).collect()
+        vt.terminal.view().map(|l| l.wrapped).collect()
     }
 }

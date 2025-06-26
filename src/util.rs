@@ -62,14 +62,7 @@ impl TextCollector {
 
     pub fn flush(self) -> Vec<String> {
         let mut unwrapper = self.unwrapper;
-
-        let mut lines: Vec<String> = self
-            .vt
-            .lines()
-            .iter()
-            .filter_map(|l| unwrapper.push(l))
-            .collect();
-
+        let mut lines: Vec<String> = self.vt.lines().filter_map(|l| unwrapper.push(l)).collect();
         lines.extend(unwrapper.flush());
 
         while !lines.is_empty() && lines[lines.len() - 1].is_empty() {

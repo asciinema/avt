@@ -617,11 +617,11 @@ impl Terminal {
         }
     }
 
-    pub fn view(&self) -> &[Line] {
+    pub fn view(&self) -> impl Iterator<Item = &Line> {
         self.buffer.view()
     }
 
-    pub fn lines(&self) -> &[Line] {
+    pub fn lines(&self) -> impl Iterator<Item = &Line> {
         self.buffer.lines()
     }
 
@@ -641,7 +641,7 @@ impl Terminal {
     pub fn verify(&self) {
         assert!(self.cursor.row < self.rows);
         assert!(self.cursor.col <= self.cols);
-        assert!(self.lines().iter().all(|line| line.len() == self.cols));
+        assert!(self.lines().all(|line| line.len() == self.cols));
         assert!(!self.lines().last().unwrap().wrapped);
 
         for line in self.lines() {
@@ -675,12 +675,16 @@ impl Terminal {
         assert_eq!(self.bottom_margin, other.bottom_margin);
         assert_eq!(self.saved_ctx, other.saved_ctx);
         assert_eq!(self.alternate_saved_ctx, other.alternate_saved_ctx);
-        assert_eq!(self.primary_buffer().view(), other.primary_buffer().view());
+
+        assert_eq!(
+            self.primary_buffer().view().collect::<Vec<_>>(),
+            other.primary_buffer().view().collect::<Vec<_>>()
+        );
 
         if self.active_buffer_type == BufferType::Alternate {
             assert_eq!(
-                self.alternate_buffer().view(),
-                other.alternate_buffer().view()
+                self.alternate_buffer().view().collect::<Vec<_>>(),
+                other.alternate_buffer().view().collect::<Vec<_>>()
             );
         }
     }

@@ -1,22 +1,18 @@
+use std::cmp::Ordering;
+use std::collections::VecDeque;
+use std::ops::{Index, IndexMut, Range};
+
 use crate::cell::Cell;
 use crate::line::Line;
 use crate::pen::Pen;
-use std::cmp::Ordering;
-use std::ops::{Index, IndexMut, Range};
 
 #[derive(Debug)]
 pub(crate) struct Buffer {
-    lines: Vec<Line>,
+    lines: VecDeque<Line>,
     pub cols: usize,
     pub rows: usize,
-    scrollback_limit: Option<ScrollbackLimit>,
+    scrollback_limit: Option<usize>,
     trim_needed: bool,
-}
-
-#[derive(Debug)]
-struct ScrollbackLimit {
-    soft: usize,
-    hard: usize,
 }
 
 pub(crate) enum EraseMode {
@@ -42,7 +38,11 @@ impl Buffer {
     ) -> Self {
         let default_pen = Pen::default();
         let pen = pen.unwrap_or(&default_pen);
-        let mut lines = vec![Line::blank(cols, *pen); rows];
+        let mut lines = VecDeque::with_capacity(rows);
+
+        for _ in 0..rows {
+            lines.push_back(Line::blank(cols, *pen));
+        }
 
         if let Some(limit) = scrollback_limit {
             if limit > 0 {
@@ -51,11 +51,6 @@ impl Buffer {
         } else {
             lines.reserve(1000);
         }
-
-        let scrollback_limit = scrollback_limit.map(|l| ScrollbackLimit {
-            soft: l,
-            hard: l + l / 10, // 10% bigger than soft
-        });
 
         Buffer {
             lines,
@@ -241,7 +236,7 @@ impl Buffer {
 
                 if excess > 0 {
                     self.lines.truncate(line_count - excess);
-                    self.lines.last_mut().unwrap().wrapped = false;
+                    self.lines.back_mut().unwrap().wrapped = false;
                 }
 
                 cursor.1 -= height_delta - excess;
@@ -321,12 +316,16 @@ impl Buffer {
         (rel_col, (rel_row as isize - rel_row_offset as isize))
     }
 
-    pub fn view(&self) -> &[Line] {
-        &self.lines[self.lines.len() - self.rows..]
+    pub fn view(&self) -> impl Iterator<Item = &Line> {
+        self.lines.iter().skip(self.view_offset())
     }
 
-    pub fn lines(&self) -> &[Line] {
-        &self.lines[..]
+    pub fn lines(&self) -> impl Iterator<Item = &Line> {
+        self.lines.iter()
+    }
+
+    fn view_offset(&self) -> usize {
+        self.lines.len() - self.rows
     }
 
     pub fn gc(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
@@ -338,14 +337,16 @@ impl Buffer {
         }
     }
 
-    fn view_mut(&mut self) -> &mut [Line] {
-        let len = self.lines.len();
-        &mut self.lines[len - self.rows..]
-    }
-
     fn clear(&mut self, range: Range<usize>, pen: &Pen) {
-        let line = Line::blank(self.cols, *pen);
-        self.view_mut()[range].fill(line);
+        let template = Line::blank(self.cols, *pen);
+        let offset = self.view_offset();
+
+        for line in self
+            .lines
+            .range_mut(offset + range.start..offset + range.end)
+        {
+            *line = template.clone();
+        }
     }
 
     fn extend(&mut self, n: usize, cols: usize, pen: &Pen) {
@@ -359,8 +360,8 @@ impl Buffer {
             let line_count = self.lines.len();
             let scrollback_size = line_count - self.rows;
 
-            if scrollback_size > limit.hard {
-                let excess = scrollback_size - limit.soft;
+            if scrollback_size > *limit {
+                let excess = scrollback_size - limit;
                 return Some(self.lines.drain(..excess));
             }
         }
@@ -372,7 +373,7 @@ impl Buffer {
         let mut cutoff = 0;
         let mut wrapped = false;
 
-        for (i, line) in self.view().iter().enumerate() {
+        for (i, line) in self.view().enumerate() {
             if wrapped || line.wrapped || !line.is_blank() {
                 cutoff = i + 1;
             }
@@ -384,14 +385,14 @@ impl Buffer {
         let mut dump = String::new();
         let mut pen = Pen::default();
 
-        for (i, line) in self.view().iter().take(cutoff).enumerate() {
+        for (i, line) in self.view().take(cutoff).enumerate() {
             for cells in line.chunks(|c1, c2| c1.pen() != c2.pen()) {
                 if cells[0].pen() != &pen {
                     dump.push_str(&cells[0].pen().dump());
                     pen = *cells[0].pen();
                 }
 
-                self.rep_encode_cell_text(&cells, &mut dump);
+                Self::rep_encode_cell_text(&cells, &mut dump);
             }
 
             if i < last && !line.wrapped {
@@ -403,7 +404,7 @@ impl Buffer {
         dump
     }
 
-    fn rep_encode_cell_text(&self, cells: &[Cell], dump: &mut String) {
+    fn rep_encode_cell_text(cells: &[Cell], dump: &mut String) {
         let mut cells = cells.iter();
         let mut prev = cells.next().unwrap().char();
         let mut count = 1;
@@ -451,15 +452,15 @@ impl Index<usize> for Buffer {
     type Output = Line;
 
     fn index(&self, index: usize) -> &Self::Output {
-        &self.view()[index]
+        &self.lines[self.view_offset() + index]
     }
 }
 
 impl Index<Range<usize>> for Buffer {
     type Output = [Line];
 
-    fn index(&self, range: Range<usize>) -> &Self::Output {
-        &self.view()[range]
+    fn index(&self, _range: Range<usize>) -> &Self::Output {
+        panic!("impossible");
     }
 }
 
@@ -467,19 +468,21 @@ impl Index<VisualPosition> for Buffer {
     type Output = Cell;
 
     fn index(&self, (col, row): VisualPosition) -> &Self::Output {
-        &self.view()[row][col]
+        &self.lines[self.view_offset() + row][col]
     }
 }
 
 impl IndexMut<usize> for Buffer {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
-        &mut self.view_mut()[index]
+        let idx = self.view_offset() + index;
+        &mut self.lines[idx]
     }
 }
 
 impl IndexMut<Range<usize>> for Buffer {
     fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
-        &mut self.view_mut()[range]
+        let offset = self.view_offset();
+        &mut self.lines.make_contiguous()[offset + range.start..offset + range.end]
     }
 }
 
@@ -492,8 +495,8 @@ where
     pub rest: Option<Line>,
 }
 
-pub(crate) fn reflow<I: Iterator<Item = Line>>(iter: I, cols: usize) -> Vec<Line> {
-    let lines: Vec<Line> = Reflow {
+pub(crate) fn reflow<I: Iterator<Item = Line>>(iter: I, cols: usize) -> VecDeque<Line> {
+    let lines: VecDeque<Line> = Reflow {
         iter,
         cols,
         rest: None,
@@ -964,11 +967,7 @@ mod tests {
         let mut buffer = buffer(&content, None, scrollback_size);
         cursor = buffer.resize(new_cols, new_rows, cursor);
 
-        let view = buffer
-            .view()
-            .iter()
-            .map(|line| line.text())
-            .collect::<Vec<_>>();
+        let view = buffer.view().map(|line| line.text()).collect::<Vec<_>>();
 
         (view, cursor)
     }
