@@ -1,6 +1,6 @@
 use avt::Vt;
 use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
-use std::fs;
+use std::{fs, iter};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("vt: feed mixed in bulk", |b| {
@@ -55,6 +55,18 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
+    c.bench_function("vt: feed newlines - scrollback limit = 0", |b| {
+        b.iter_batched(gen_newlines(0), run_feed, BatchSize::SmallInput)
+    });
+
+    c.bench_function("vt: feed newlines - scrollback limit = 100", |b| {
+        b.iter_batched(gen_newlines(100), run_feed, BatchSize::SmallInput)
+    });
+
+    c.bench_function("vt: feed newlines - scrollback limit = 1000", |b| {
+        b.iter_batched(gen_newlines(1000), run_feed, BatchSize::SmallInput)
+    });
+
     c.bench_function("vt: dump", |b| {
         b.iter_batched(setup_dump, run_dump, BatchSize::SmallInput)
     });
@@ -91,6 +103,21 @@ fn chunk(f: impl Fn() -> (Vt, Vec<String>)) -> impl Fn() -> (Vt, Vec<String>) {
             .chunks(32)
             .map(String::from_iter)
             .collect();
+
+        (vt, chunks)
+    }
+}
+
+fn gen_newlines(scrollback_limit: usize) -> impl Fn() -> (Vt, Vec<String>) {
+    move || {
+        let vt = Vt::builder()
+            .size(100, 24)
+            .scrollback_limit(scrollback_limit)
+            .build();
+
+        let chunks = iter::repeat(".\n".to_owned())
+            .take(100_000)
+            .collect::<Vec<_>>();
 
         (vt, chunks)
     }
