@@ -35,7 +35,7 @@ impl Vt {
     }
 
     pub fn size(&self) -> (usize, usize) {
-        (self.terminal.cols, self.terminal.rows)
+        self.terminal.size()
     }
 
     pub fn resize(&mut self, cols: usize, rows: usize) -> Changes<'_> {

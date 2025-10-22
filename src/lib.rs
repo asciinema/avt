@@ -6,7 +6,7 @@ mod line;
 pub mod parser;
 mod pen;
 mod tabs;
-mod terminal;
+pub mod terminal;
 pub mod util;
 mod vt;
 pub use cell::Cell;

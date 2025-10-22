@@ -15,9 +15,9 @@ use std::cmp::Ordering;
 use std::mem;
 
 #[derive(Debug)]
-pub(crate) struct Terminal {
-    pub cols: usize,
-    pub rows: usize,
+pub struct Terminal {
+    cols: usize,
+    rows: usize,
     buffer: Buffer,
     other_buffer: Buffer,
     active_buffer_type: BufferType,
@@ -40,20 +40,20 @@ pub(crate) struct Terminal {
     xtwinops: bool,
 }
 
-#[derive(Debug, PartialEq)]
-enum BufferType {
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum BufferType {
     Primary,
     Alternate,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
-pub enum CursorKeysMode {
+pub(crate) enum CursorKeysMode {
     Normal,
     Application,
 }
 
 #[derive(Debug, PartialEq)]
-pub struct SavedCtx {
+pub(crate) struct SavedCtx {
     pub cursor_col: usize,
     pub cursor_row: usize,
     pub pen: Pen,
@@ -113,6 +113,14 @@ impl Terminal {
             dirty_lines,
             xtwinops: false,
         }
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        (self.cols, self.rows)
+    }
+
+    pub fn active_buffer_type(&self) -> BufferType {
+        self.active_buffer_type
     }
 
     pub fn execute(&mut self, fun: Function) {
