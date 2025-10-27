@@ -350,7 +350,7 @@ impl Buffer {
 
     fn extend(&mut self, n: usize, cols: usize, pen: &Pen) {
         let line = Line::blank(cols, *pen);
-        let filler = std::iter::repeat(line).take(n);
+        let filler = std::iter::repeat_n(line, n);
         self.lines.extend(filler);
     }
 

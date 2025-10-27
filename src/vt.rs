@@ -17,7 +17,7 @@ impl Vt {
         Self::builder().size(cols, rows).build()
     }
 
-    pub fn feed_str(&mut self, s: &str) -> Changes {
+    pub fn feed_str(&mut self, s: &str) -> Changes<'_> {
         s.chars()
             .filter_map(|ch| self.parser.feed(ch))
             .for_each(|op| self.terminal.execute(op));
@@ -38,7 +38,7 @@ impl Vt {
         (self.terminal.cols, self.terminal.rows)
     }
 
-    pub fn resize(&mut self, cols: usize, rows: usize) -> Changes {
+    pub fn resize(&mut self, cols: usize, rows: usize) -> Changes<'_> {
         self.terminal.resize(cols, rows);
 
         let lines = self.terminal.changes();

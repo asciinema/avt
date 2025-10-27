@@ -223,7 +223,7 @@ impl Line {
 
     pub(crate) fn expand(&mut self, len: usize, pen: &Pen) {
         let tpl = Cell::blank(*pen);
-        let filler = std::iter::repeat(tpl).take(len - self.len());
+        let filler = std::iter::repeat_n(tpl, len - self.len());
         self.cells.extend(filler);
     }
 
@@ -282,7 +282,7 @@ impl Line {
     pub fn chunks<'a>(
         &'a self,
         predicate: impl Fn(&Cell, &Cell) -> bool + 'a,
-    ) -> impl Iterator<Item = Vec<Cell>> + '_ {
+    ) -> impl Iterator<Item = Vec<Cell>> + 'a {
         let i = self.cells.iter().filter(|c| c.width() > 0);
         Chunks::new(i, predicate)
     }
