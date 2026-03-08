@@ -2,7 +2,10 @@ use unicode_width::UnicodeWidthChar;
 
 use crate::cell::Cell;
 use crate::pen::Pen;
-use std::ops::{Index, Range, RangeFull};
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ops::{Index, Range, RangeFull};
 
 #[derive(Clone, PartialEq)]
 pub struct Line {
@@ -223,7 +226,7 @@ impl Line {
 
     pub(crate) fn expand(&mut self, len: usize, pen: &Pen) {
         let tpl = Cell::blank(*pen);
-        let filler = std::iter::repeat_n(tpl, len - self.len());
+        let filler = core::iter::repeat_n(tpl, len - self.len());
         self.cells.extend(filler);
     }
 
@@ -326,8 +329,8 @@ impl Line {
     }
 }
 
-impl std::fmt::Debug for Line {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Line {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut s = String::new();
 
         for cells in self.chunks(|c1, c2| c1.pen() != c2.pen()) {
@@ -379,7 +382,7 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for
             }
 
             if (self.predicate)(self.cells.last().unwrap(), cell) {
-                let cells = std::mem::take(&mut self.cells);
+                let cells = core::mem::take(&mut self.cells);
                 self.cells.push(*cell);
                 return Some(cells);
             } else {
@@ -390,7 +393,7 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for
         if self.cells.is_empty() {
             None
         } else {
-            Some(std::mem::take(&mut self.cells))
+            Some(core::mem::take(&mut self.cells))
         }
     }
 }
@@ -422,6 +425,7 @@ impl Index<RangeFull> for Line {
 #[cfg(test)]
 mod tests {
     use super::{Cell, Chunks, Pen};
+    use alloc::vec::Vec;
 
     fn chars(cells: &[Cell]) -> Vec<char> {
         cells.iter().map(|c| c.char()).collect()

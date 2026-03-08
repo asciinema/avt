@@ -1,6 +1,9 @@
 use crate::line::Line;
 use crate::parser::Parser;
 use crate::terminal::{Cursor, Terminal};
+use alloc::boxed::Box;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 #[derive(Debug)]
 pub struct Vt {
@@ -123,6 +126,11 @@ pub struct Changes<'a> {
 mod tests {
     use super::Vt;
     use crate::line::Line;
+    use alloc::borrow::ToOwned as _;
+    use alloc::format;
+    use alloc::string::{String, ToString as _};
+    use alloc::vec;
+    use alloc::vec::Vec;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::env;

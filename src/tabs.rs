@@ -1,3 +1,6 @@
+use alloc::vec;
+use alloc::vec::Vec;
+
 #[derive(Debug, Clone)]
 pub(crate) struct Tabs(Vec<usize>);
 
@@ -57,7 +60,7 @@ impl Tabs {
 
 impl<'a> IntoIterator for &'a Tabs {
     type Item = &'a usize;
-    type IntoIter = std::slice::Iter<'a, usize>;
+    type IntoIter = core::slice::Iter<'a, usize>;
 
     fn into_iter(self) -> Self::IntoIter {
         self.0.iter()
@@ -79,6 +82,7 @@ impl PartialEq<Vec<usize>> for Tabs {
 #[cfg(test)]
 mod tests {
     use super::Tabs;
+    use alloc::vec;
 
     #[test]
     fn new() {

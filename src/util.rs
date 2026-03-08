@@ -1,6 +1,8 @@
 use crate::line::Line;
 use crate::vt::Vt;
-use std::mem;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::mem;
 
 #[derive(Default)]
 pub struct TextUnwrapper {
@@ -77,6 +79,9 @@ impl TextCollector {
 mod tests {
     use super::TextUnwrapper;
     use crate::{util::TextCollector, Line, Pen, Vt};
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     #[test]
     fn text_unwrapper() {

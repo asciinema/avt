@@ -1,6 +1,10 @@
-use std::cmp::Ordering;
-use std::collections::VecDeque;
-use std::ops::{Index, IndexMut, Range};
+use alloc::borrow::ToOwned as _;
+use alloc::collections::VecDeque;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::ops::{Index, IndexMut, Range};
 
 use crate::cell::Cell;
 use crate::line::Line;
@@ -351,7 +355,7 @@ impl Buffer {
 
     fn extend(&mut self, n: usize, cols: usize, pen: &Pen) {
         let line = Line::blank(cols, *pen);
-        let filler = std::iter::repeat_n(line, n);
+        let filler = core::iter::repeat_n(line, n);
         self.lines.extend(filler);
     }
 
@@ -512,7 +516,7 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
     type Item = Line;
 
     fn next(&mut self) -> Option<Self::Item> {
-        use std::cmp::Ordering::*;
+        use core::cmp::Ordering::*;
 
         while let Some(mut line) = self.rest.take().or_else(|| self.iter.next()) {
             match self.cols.cmp(&line.len()) {
@@ -564,6 +568,9 @@ mod tests {
     use super::{Buffer, VisualPosition};
     use crate::line::Line;
     use crate::pen::Pen;
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
     use pretty_assertions::assert_eq;
     use proptest::prelude::*;
 

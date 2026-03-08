@@ -1,4 +1,7 @@
 use crate::color::Color;
+use alloc::borrow::ToOwned as _;
+use alloc::format;
+use alloc::string::String;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct Pen {
