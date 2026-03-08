@@ -1,3 +1,5 @@
+use alloc::format;
+use alloc::string::{String, ToString as _};
 use rgb::RGB8;
 use Color::*;
 

@@ -1,4 +1,6 @@
-use std::ops::Range;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ops::Range;
 
 #[derive(Debug)]
 pub struct DirtyLines(Vec<bool>);

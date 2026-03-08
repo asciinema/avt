@@ -11,8 +11,12 @@ use crate::parser::{
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
-use std::cmp::Ordering;
-use std::mem;
+use alloc::boxed::Box;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::mem;
 
 #[derive(Debug)]
 pub struct Terminal {
@@ -337,12 +341,12 @@ impl Terminal {
         let lines = self.buffer.gc();
 
         if self.active_buffer_type == BufferType::Alternate {
-            return Box::new(std::iter::empty());
+            return Box::new(core::iter::empty());
         }
 
         match lines {
             Some(iter) => Box::new(iter),
-            None => Box::new(std::iter::empty()),
+            None => Box::new(core::iter::empty()),
         }
     }
 
@@ -519,29 +523,29 @@ impl Terminal {
         let mut resized: bool = false;
 
         match cols.cmp(&self.cols) {
-            std::cmp::Ordering::Less => {
+            core::cmp::Ordering::Less => {
                 self.tabs.contract(cols);
                 resized = true;
             }
 
-            std::cmp::Ordering::Equal => {}
+            core::cmp::Ordering::Equal => {}
 
-            std::cmp::Ordering::Greater => {
+            core::cmp::Ordering::Greater => {
                 self.tabs.expand(self.cols, cols);
                 resized = true;
             }
         }
 
         match rows.cmp(&self.rows) {
-            std::cmp::Ordering::Less => {
+            core::cmp::Ordering::Less => {
                 self.top_margin = 0;
                 self.bottom_margin = rows - 1;
                 resized = true;
             }
 
-            std::cmp::Ordering::Equal => {}
+            core::cmp::Ordering::Equal => {}
 
-            std::cmp::Ordering::Greater => {
+            core::cmp::Ordering::Greater => {
                 self.top_margin = 0;
                 self.bottom_margin = rows - 1;
                 resized = true;
@@ -1570,6 +1574,7 @@ mod tests {
     use crate::color::Color;
     use crate::parser::{DecMode, Function, SgrOp};
     use crate::pen::Intensity;
+    use alloc::vec;
     use Function::*;
     use SgrOp::*;
 
