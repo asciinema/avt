@@ -1730,6 +1730,32 @@ mod tests {
     }
 
     #[test]
+    fn execute_cr() {
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "abc");
+        term.execute(Cr);
+        term.execute(Print('d'));
+
+        assert_eq!(term.cursor(), (1, 0));
+        assert_eq!(text(&term), "d|bc\n");
+    }
+
+    #[test]
+    fn execute_nel() {
+        let mut term = build_term(8, 2, 3, 0, "abc");
+
+        term.execute(Nel);
+
+        assert_eq!(term.cursor(), (0, 1));
+        assert_eq!(text(&term), "abc\n|");
+
+        term.execute(Print('d'));
+
+        assert_eq!(text(&term), "abc\nd|");
+    }
+
+    #[test]
     fn execute_bs() {
         let mut term = Terminal::new((4, 2), None);
 
@@ -1875,6 +1901,24 @@ mod tests {
     }
 
     #[test]
+    fn execute_cha() {
+        let mut term = Terminal::new((8, 2), None);
+
+        feed(&mut term, "abc");
+        term.execute(Cha(0));
+
+        assert_eq!(term.cursor(), (0, 0));
+
+        term.execute(Cha(3));
+
+        assert_eq!(term.cursor(), (2, 0));
+
+        term.execute(Cha(20));
+
+        assert_eq!(term.cursor(), (7, 0));
+    }
+
+    #[test]
     fn execute_cub() {
         let mut term = Terminal::new((8, 2), None);
 
@@ -1898,6 +1942,35 @@ mod tests {
         term.execute(Cub(0));
 
         assert_eq!(text(&term), "ab|cd\n");
+    }
+
+    #[test]
+    fn execute_ht() {
+        let mut term = Terminal::new((20, 1), None);
+
+        term.execute(Ht);
+        assert_eq!(term.cursor(), (8, 0));
+
+        term.execute(Ht);
+        assert_eq!(term.cursor(), (16, 0));
+
+        term.execute(Ht);
+        assert_eq!(term.cursor(), (19, 0));
+    }
+
+    #[test]
+    fn execute_hts() {
+        let mut term = Terminal::new((20, 1), None);
+
+        term.execute(Cuf(5));
+        term.execute(Hts);
+
+        assert_eq!(term.tabs, vec![5, 8, 16]);
+
+        term.execute(Cup(1, 1));
+        term.execute(Ht);
+
+        assert_eq!(term.cursor(), (5, 0));
     }
 
     #[test]
@@ -1955,6 +2028,22 @@ mod tests {
         term.execute(Rep(0));
 
         assert_eq!(text(&term), "AAAAA      |\n");
+    }
+
+    #[test]
+    fn execute_vpr() {
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "ab");
+        term.execute(Vpr(0));
+
+        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(text(&term), "ab\n  |\n\n");
+
+        term.execute(Vpr(10));
+
+        assert_eq!(term.cursor(), (2, 3));
+        assert_eq!(text(&term), "ab\n\n\n  |");
     }
 
     #[test]
@@ -2220,6 +2309,34 @@ mod tests {
     }
 
     #[test]
+    fn execute_sc_rc_restores_pen_and_modes() {
+        fn assert_save_restore(save: Function, restore: Function) {
+            let mut term = Terminal::new((4, 4), None);
+
+            term.execute(Decrst(vec![DecMode::AutoWrap]));
+            term.execute(Decstbm(2, 4));
+            term.execute(Decset(vec![DecMode::Origin]));
+            term.execute(Cup(2, 3));
+            term.execute(sgr(SetBoldIntensity));
+            term.execute(save);
+
+            term.execute(Decset(vec![DecMode::AutoWrap]));
+            term.execute(Decrst(vec![DecMode::Origin]));
+            term.execute(Cup(4, 4));
+            term.execute(sgr(Reset));
+            term.execute(restore);
+
+            assert_eq!(term.cursor(), (2, 2));
+            assert_eq!(term.pen.intensity, Intensity::Bold);
+            assert!(term.origin_mode);
+            assert!(!term.auto_wrap_mode);
+        }
+
+        assert_save_restore(Decsc, Decrc);
+        assert_save_restore(Scosc, Scorc);
+    }
+
+    #[test]
     fn auto_wrap_mode() {
         let mut term = Terminal::new((4, 4), None);
 
@@ -2404,6 +2521,18 @@ mod tests {
         feed(&mut term, "alpty");
 
         assert_eq!(text(&term), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
+    }
+
+    #[test]
+    fn execute_decaln() {
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "ab\r\nc");
+        term.execute(Cup(2, 3));
+        term.execute(Decaln);
+
+        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(text(&term), "EEEE\nEE|EE");
     }
 
     #[test]
@@ -2618,6 +2747,19 @@ mod tests {
     }
 
     #[test]
+    fn execute_text_cursor_visibility_mode() {
+        let mut term = Terminal::new((4, 2), None);
+
+        assert!(term.cursor.visible);
+
+        term.execute(Decrst(vec![DecMode::TextCursorEnable]));
+        assert!(!term.cursor.visible);
+
+        term.execute(Decset(vec![DecMode::TextCursorEnable]));
+        assert!(term.cursor.visible);
+    }
+
+    #[test]
     fn execute_origin_mode() {
         let mut term = Terminal::new((4, 4), None);
 
@@ -2631,6 +2773,109 @@ mod tests {
 
         term.execute(Decrst(vec![DecMode::Origin]));
         assert_eq!(term.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn execute_alt_screen_buffer_mode() {
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "ab\r\ncd");
+
+        assert_eq!(term.active_buffer_type(), BufferType::Primary);
+        assert_eq!(text(&term), "ab\ncd|\n");
+
+        term.execute(Decset(vec![DecMode::AltScreenBuffer]));
+
+        assert_eq!(term.active_buffer_type(), BufferType::Alternate);
+        assert_eq!(text(&term), "\n  |\n");
+
+        feed(&mut term, "xy");
+        assert_eq!(text(&term), "\n  xy|\n");
+
+        term.execute(Decrst(vec![DecMode::AltScreenBuffer]));
+
+        assert_eq!(term.active_buffer_type(), BufferType::Primary);
+        assert_eq!(text(&term), "ab\ncd  |\n");
+    }
+
+    #[test]
+    fn execute_save_cursor_mode() {
+        let mut term = Terminal::new((4, 4), None);
+
+        term.execute(Decrst(vec![DecMode::AutoWrap]));
+        term.execute(Decstbm(2, 4));
+        term.execute(Decset(vec![DecMode::Origin]));
+        term.execute(Cup(2, 3));
+        term.execute(sgr(SetBoldIntensity));
+
+        term.execute(Decset(vec![DecMode::SaveCursor]));
+
+        term.execute(Decset(vec![DecMode::AutoWrap]));
+        term.execute(Decrst(vec![DecMode::Origin]));
+        term.execute(Cup(4, 4));
+        term.execute(sgr(Reset));
+
+        term.execute(Decrst(vec![DecMode::SaveCursor]));
+
+        assert_eq!(term.cursor(), (2, 2));
+        assert_eq!(term.pen.intensity, Intensity::Bold);
+        assert!(term.origin_mode);
+        assert!(!term.auto_wrap_mode);
+    }
+
+    #[test]
+    fn execute_decstr() {
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "ab");
+        term.execute(Decset(vec![DecMode::AltScreenBuffer]));
+        feed(&mut term, "xy");
+        term.execute(Decrst(vec![DecMode::TextCursorEnable]));
+        term.execute(Sm(vec![AnsiMode::Insert, AnsiMode::NewLine]));
+        term.execute(Decrst(vec![DecMode::AutoWrap]));
+        term.execute(Decset(vec![DecMode::CursorKeys]));
+        term.execute(Decstbm(2, 3));
+        term.execute(Decset(vec![DecMode::Origin]));
+        term.execute(Cup(2, 3));
+        term.execute(sgr(SetBoldIntensity));
+        term.execute(G1d4(Charset::Drawing));
+        term.execute(So);
+        term.execute(Decsc);
+
+        assert_eq!(term.active_buffer_type(), BufferType::Alternate);
+        assert_eq!(term.cursor(), (2, 2));
+        assert_eq!(text(&term), "  xy\n\n  |");
+        assert!(!term.cursor.visible);
+        assert!(term.insert_mode);
+        assert!(term.origin_mode);
+        assert!(!term.auto_wrap_mode);
+        assert!(term.new_line_mode);
+        assert!(term.cursor_keys_app_mode());
+        assert_eq!(term.top_margin, 1);
+        assert_eq!(term.bottom_margin, 2);
+        assert_eq!(term.charsets, [Charset::Ascii, Charset::Drawing]);
+        assert_eq!(term.active_charset, 1);
+        assert_eq!(term.saved_ctx.cursor_col, 2);
+        assert_eq!(term.saved_ctx.cursor_row, 2);
+        assert_eq!(term.pen.intensity, Intensity::Bold);
+
+        term.execute(Decstr);
+
+        assert_eq!(term.active_buffer_type(), BufferType::Alternate);
+        assert_eq!(term.cursor(), (2, 2));
+        assert_eq!(text(&term), "  xy\n\n  |");
+        assert!(term.cursor.visible);
+        assert!(!term.insert_mode);
+        assert!(!term.origin_mode);
+        assert!(!term.auto_wrap_mode);
+        assert!(term.new_line_mode);
+        assert!(term.cursor_keys_app_mode());
+        assert_eq!(term.top_margin, 0);
+        assert_eq!(term.bottom_margin, 2);
+        assert_eq!(term.charsets, [Charset::Ascii, Charset::Ascii]);
+        assert_eq!(term.active_charset, 0);
+        assert_eq!(term.saved_ctx, super::SavedCtx::default());
+        assert_eq!(term.pen, crate::pen::Pen::default());
     }
 
     #[test]
