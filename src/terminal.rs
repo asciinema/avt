@@ -602,6 +602,7 @@ impl Terminal {
         self.origin_mode = false;
         self.auto_wrap_mode = true;
         self.new_line_mode = false;
+        self.cursor_keys_mode = CursorKeysMode::Normal;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
         self.saved_ctx = SavedCtx::default();
@@ -1566,12 +1567,85 @@ impl Default for Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::Terminal;
+    use super::{BufferType, Terminal};
+    use crate::charset::Charset;
     use crate::color::Color;
-    use crate::parser::{DecMode, Function, SgrOp};
+    use crate::line::Line;
+    use crate::parser::{AnsiMode, DecMode, EdScope, ElScope, Function, SgrOp};
     use crate::pen::Intensity;
     use Function::*;
     use SgrOp::*;
+
+    fn feed(term: &mut Terminal, input: &str) {
+        for ch in input.chars() {
+            let fun = match ch {
+                '\n' => Lf,
+                '\r' => Cr,
+                _ => Print(ch),
+            };
+
+            term.execute(fun);
+        }
+    }
+
+    fn build_term(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Terminal {
+        let mut term = Terminal::new((cols, rows), None);
+        feed(&mut term, init);
+        term.execute(Cup((cy + 1) as u16, (cx + 1) as u16));
+
+        term
+    }
+
+    fn text(term: &Terminal) -> String {
+        let cursor = term.cursor();
+
+        buffer_text(term.view(), cursor.col, cursor.row)
+    }
+
+    fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(
+        mut view: I,
+        cursor_col: usize,
+        cursor_row: usize,
+    ) -> String {
+        let mut lines = Vec::new();
+        lines.extend(view.by_ref().take(cursor_row).map(|l| l.text()));
+        let cursor_line = view.next().unwrap();
+        let mut offset = 0;
+        let mut line = String::new();
+        let mut cells = cursor_line.cells().iter().filter(|c| c.width() > 0);
+
+        for cell in cells.by_ref() {
+            let width = cell.width() as usize;
+
+            if offset + width <= cursor_col {
+                line.push(cell.char());
+                offset += width;
+            } else {
+                line.push('|');
+                line.push(cell.char());
+                offset += width;
+                break;
+            }
+        }
+
+        if offset == cursor_col {
+            line.push('|');
+        }
+
+        line.extend(cells.map(|c| c.char()));
+        lines.push(line);
+        lines.extend(view.map(|l| l.text()));
+
+        lines
+            .into_iter()
+            .map(|line| line.trim_end().to_owned())
+            .collect::<Vec<_>>()
+            .join("\n")
+    }
+
+    fn wrapped(term: &Terminal) -> Vec<bool> {
+        term.view().map(|l| l.wrapped).collect()
+    }
 
     fn sgr(op: SgrOp) -> Function {
         Sgr(vec![op])
@@ -1637,6 +1711,949 @@ mod tests {
         assert!(term.pen.is_blink());
         assert_eq!(term.pen.foreground, Some(Color::Indexed(1)));
         assert_eq!(term.pen.background, Some(Color::Indexed(2)));
+    }
+
+    #[test]
+    fn execute_lf() {
+        let mut term = build_term(8, 2, 3, 0, "abc");
+
+        term.execute(Lf);
+
+        assert_eq!(term.cursor(), (3, 1));
+        assert_eq!(text(&term), "abc\n   |");
+
+        term.execute(Print('d'));
+        term.execute(Lf);
+
+        assert_eq!(term.cursor(), (4, 1));
+        assert_eq!(text(&term), "   d\n    |");
+    }
+
+    #[test]
+    fn execute_bs() {
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "a");
+        term.execute(Bs);
+
+        assert_eq!(text(&term), "|a\n");
+
+        term.execute(Bs);
+
+        assert_eq!(text(&term), "|a\n");
+
+        feed(&mut term, "abcd");
+        term.execute(Bs);
+
+        assert_eq!(text(&term), "ab|cd\n");
+
+        feed(&mut term, "cdef");
+        term.execute(Bs);
+
+        assert_eq!(text(&term), "abcd\ne|f");
+
+        term.execute(Bs);
+
+        assert_eq!(text(&term), "abcd\n|ef");
+
+        term.execute(Bs);
+
+        assert_eq!(text(&term), "abcd\n|ef");
+    }
+
+    #[test]
+    fn execute_cup() {
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "abc\r\ndef");
+        term.execute(Cup(1, 1));
+
+        assert_eq!(term.cursor(), (0, 0));
+
+        term.execute(Cup(10, 10));
+
+        assert_eq!(term.cursor(), (3, 1));
+    }
+
+    #[test]
+    fn execute_cuu() {
+        let mut term = Terminal::new((8, 4), None);
+
+        feed(&mut term, "abcd\n\n\n");
+        term.execute(Cuu(0));
+
+        assert_eq!(term.cursor(), (4, 2));
+
+        term.execute(Cuu(2));
+
+        assert_eq!(term.cursor(), (4, 0));
+    }
+
+    #[test]
+    fn execute_cpl() {
+        let mut term = Terminal::new((8, 4), None);
+
+        feed(&mut term, "abcd\r\n\r\n\r\nef");
+
+        assert_eq!(term.cursor(), (2, 3));
+
+        term.execute(Cpl(0));
+
+        assert_eq!(term.cursor(), (0, 2));
+
+        term.execute(Cpl(2));
+
+        assert_eq!(term.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn execute_cnl() {
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "ab");
+        term.execute(Cnl(0));
+
+        assert_eq!(term.cursor(), (0, 1));
+
+        term.execute(Cnl(3));
+
+        assert_eq!(term.cursor(), (0, 3));
+    }
+
+    #[test]
+    fn execute_vpa() {
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "\r\n\r\naaa\r\nbbb");
+        term.execute(Vpa(0));
+
+        assert_eq!(term.cursor(), (3, 0));
+
+        term.execute(Vpa(10));
+
+        assert_eq!(term.cursor(), (3, 3));
+    }
+
+    #[test]
+    fn execute_cud() {
+        let mut term = Terminal::new((8, 4), None);
+
+        feed(&mut term, "abcd");
+        term.execute(Cud(0));
+
+        assert_eq!(text(&term), "abcd\n    |\n\n");
+
+        term.execute(Cud(2));
+
+        assert_eq!(text(&term), "abcd\n\n\n    |");
+    }
+
+    #[test]
+    fn execute_cuf() {
+        let mut term = Terminal::new((4, 1), None);
+
+        term.execute(Cuf(2));
+
+        assert_eq!(text(&term), "  |");
+
+        term.execute(Cuf(2));
+
+        assert_eq!(text(&term), "   |");
+
+        term.execute(Print('a'));
+
+        assert_eq!(text(&term), "   a|");
+
+        term.execute(Cuf(5));
+
+        assert_eq!(text(&term), "   |a");
+
+        feed(&mut term, "ab");
+        term.execute(Cuf(10));
+
+        assert_eq!(text(&term), "b  |");
+    }
+
+    #[test]
+    fn execute_cub() {
+        let mut term = Terminal::new((8, 2), None);
+
+        feed(&mut term, "abcd");
+        term.execute(Cub(2));
+
+        assert_eq!(text(&term), "ab|cd\n");
+
+        feed(&mut term, "cdef");
+        term.execute(Cub(2));
+
+        assert_eq!(text(&term), "abcd|ef\n");
+
+        term.execute(Cub(10));
+
+        assert_eq!(text(&term), "|abcdef\n");
+
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "abcd");
+        term.execute(Cub(0));
+
+        assert_eq!(text(&term), "ab|cd\n");
+    }
+
+    #[test]
+    fn execute_cht() {
+        let mut term = build_term(28, 1, 3, 0, "abcdefghijklmnopqrstuwxyzabc");
+
+        term.execute(Cht(0));
+
+        assert_eq!(term.cursor(), (8, 0));
+
+        term.execute(Cht(2));
+
+        assert_eq!(term.cursor(), (24, 0));
+
+        term.execute(Cht(0));
+
+        assert_eq!(term.cursor(), (27, 0));
+    }
+
+    #[test]
+    fn execute_cbt() {
+        let mut term = build_term(28, 1, 26, 0, "abcdefghijklmnopqrstuwxyzabc");
+
+        term.execute(Cbt(0));
+
+        assert_eq!(term.cursor(), (24, 0));
+
+        term.execute(Cbt(2));
+
+        assert_eq!(term.cursor(), (8, 0));
+
+        term.execute(Cbt(0));
+
+        assert_eq!(term.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn execute_rep() {
+        let mut term = build_term(20, 2, 0, 0, "");
+
+        term.execute(Rep(0));
+
+        assert_eq!(text(&term), "|\n");
+
+        term.execute(Print('A'));
+        term.execute(Rep(0));
+
+        assert_eq!(text(&term), "AA|\n");
+
+        term.execute(Rep(3));
+
+        assert_eq!(text(&term), "AAAAA|\n");
+
+        term.execute(Cuf(5));
+        term.execute(Rep(0));
+
+        assert_eq!(text(&term), "AAAAA      |\n");
+    }
+
+    #[test]
+    fn execute_ich() {
+        let mut term = build_term(8, 2, 3, 0, "abcdefghijklmn");
+
+        term.execute(Ich(0));
+
+        assert_eq!(text(&term), "abc| defg\nijklmn");
+        assert_eq!(wrapped(&term), vec![true, false]);
+
+        term.execute(Ich(2));
+
+        assert_eq!(text(&term), "abc|   de\nijklmn");
+
+        term.execute(Ich(10));
+
+        assert_eq!(text(&term), "abc|\nijklmn");
+
+        let mut term = build_term(8, 2, 7, 0, "abcdefghijklmn");
+
+        term.execute(Ich(10));
+        assert_eq!(text(&term), "abcdefg|\nijklmn");
+    }
+
+    #[test]
+    fn execute_il() {
+        let mut term = build_term(4, 4, 2, 1, "abcdefghij");
+
+        term.execute(Il(0));
+
+        assert_eq!(text(&term), "abcd\n  |\nefgh\nij");
+        assert_eq!(wrapped(&term), vec![false, false, true, false]);
+
+        term.execute(Cuu(1));
+        term.execute(Il(0));
+
+        assert_eq!(text(&term), "  |\nabcd\n\nefgh");
+        assert_eq!(wrapped(&term), vec![false, false, false, false]);
+
+        term.execute(Cud(3));
+        term.execute(Il(100));
+
+        assert_eq!(text(&term), "\nabcd\n\n  |");
+    }
+
+    #[test]
+    fn execute_dl() {
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "abcdefghijklmn");
+        term.execute(Cuu(2));
+        term.execute(Dl(0));
+
+        assert_eq!(text(&term), "abcd\nij|kl\nmn\n");
+        assert_eq!(wrapped(&term), vec![false, true, false, false]);
+
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "abcdefghijklmn");
+        term.execute(Decstbm(1, 3));
+        term.execute(Cup(2, 1));
+        term.execute(Dl(0));
+
+        assert_eq!(text(&term), "abcd\n|ijkl\n\nmn");
+        assert_eq!(wrapped(&term), vec![false, false, false, false]);
+
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "abcdefghijklmn");
+        term.execute(Decstbm(1, 2));
+        term.execute(Cup(4, 1));
+        term.execute(Dl(0));
+
+        assert_eq!(text(&term), "abcd\nefgh\nijkl\n|");
+        assert_eq!(wrapped(&term), vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn execute_el() {
+        let mut term = build_term(4, 2, 2, 0, "abcd");
+
+        term.execute(El(ElScope::ToRight));
+
+        assert_eq!(text(&term), "ab|\n");
+
+        let mut term = build_term(4, 2, 2, 0, "a");
+
+        term.execute(El(ElScope::ToRight));
+
+        assert_eq!(text(&term), "a |\n");
+
+        let mut term = build_term(4, 2, 2, 0, "abcd");
+
+        term.execute(El(ElScope::ToLeft));
+
+        assert_eq!(text(&term), "  | d\n");
+
+        let mut term = build_term(4, 2, 2, 0, "abcd");
+
+        term.execute(El(ElScope::All));
+
+        assert_eq!(text(&term), "  |\n");
+
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "abcdefghij");
+        term.execute(Cuu(1));
+        term.execute(El(ElScope::ToRight));
+
+        assert_eq!(text(&term), "abcd\nef|\nij");
+        assert_eq!(wrapped(&term), vec![true, false, false]);
+
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "abcdefghij");
+        term.execute(Cuu(1));
+        term.execute(El(ElScope::ToLeft));
+
+        assert_eq!(text(&term), "abcd\n  | h\nij");
+        assert_eq!(wrapped(&term), vec![true, true, false]);
+
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "abcdefghij");
+        term.execute(Cuu(1));
+        term.execute(El(ElScope::All));
+
+        assert_eq!(text(&term), "abcd\n  |\nij");
+        assert_eq!(wrapped(&term), vec![true, false, false]);
+    }
+
+    #[test]
+    fn execute_ed() {
+        let mut term = build_term(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+
+        term.execute(Ed(EdScope::Below));
+
+        assert_eq!(text(&term), "abc\nd|\n");
+
+        let mut term = build_term(4, 3, 1, 1, "abc\r\n\r\nghi");
+
+        term.execute(Ed(EdScope::Below));
+
+        assert_eq!(text(&term), "abc\n |\n");
+
+        let mut term = build_term(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+
+        term.execute(Ed(EdScope::Above));
+
+        assert_eq!(text(&term), "\n | f\nghi");
+
+        let mut term = build_term(4, 3, 1, 1, "abc\r\ndef\r\nghi");
+
+        term.execute(Ed(EdScope::All));
+
+        assert_eq!(text(&term), "\n |\n");
+
+        let mut term = build_term(4, 3, 1, 1, "abcdefghij");
+
+        term.execute(Ed(EdScope::Below));
+
+        assert_eq!(text(&term), "abcd\ne|\n");
+        assert_eq!(wrapped(&term), vec![true, false, false]);
+
+        let mut term = build_term(4, 3, 1, 1, "abcdefghij");
+
+        term.execute(Ed(EdScope::Above));
+
+        assert_eq!(text(&term), "\n | gh\nij");
+        assert_eq!(wrapped(&term), vec![false, true, false]);
+
+        let mut term = build_term(4, 3, 1, 1, "abcdefghij");
+
+        term.execute(Ed(EdScope::All));
+
+        assert_eq!(text(&term), "\n |\n");
+        assert_eq!(wrapped(&term), vec![false, false, false]);
+    }
+
+    #[test]
+    fn execute_dch() {
+        let mut term = build_term(8, 2, 3, 0, "abcdefghijkl");
+
+        term.execute(Dch(0));
+
+        assert_eq!(text(&term), "abc|efgh\nijkl");
+        assert_eq!(wrapped(&term), vec![false, false]);
+
+        term.execute(Dch(2));
+
+        assert_eq!(text(&term), "abc|gh\nijkl");
+
+        term.execute(Dch(10));
+
+        assert_eq!(text(&term), "abc|\nijkl");
+
+        term.execute(Cuf(10));
+        term.execute(Dch(10));
+
+        assert_eq!(text(&term), "abc    |\nijkl");
+    }
+
+    #[test]
+    fn execute_ech() {
+        let mut term = build_term(8, 2, 3, 0, "abcdefghijkl");
+
+        term.execute(Ech(0));
+
+        assert_eq!(text(&term), "abc| efgh\nijkl");
+        assert_eq!(wrapped(&term), vec![true, false]);
+
+        term.execute(Ech(2));
+
+        assert_eq!(text(&term), "abc|  fgh\nijkl");
+        assert_eq!(wrapped(&term), vec![true, false]);
+
+        term.execute(Ech(10));
+
+        assert_eq!(text(&term), "abc|\nijkl");
+        assert_eq!(wrapped(&term), vec![false, false]);
+
+        term.execute(Cuf(3));
+        term.execute(Ech(0));
+
+        assert_eq!(text(&term), "abc   |\nijkl");
+    }
+
+    #[test]
+    fn execute_ri() {
+        let mut term = build_term(8, 5, 0, 0, "abcd\r\nefgh\r\nijkl\r\nmnop\r\nqrst");
+
+        term.execute(Ri);
+
+        assert_eq!(text(&term), "|\nabcd\nefgh\nijkl\nmnop");
+
+        term.execute(Decstbm(3, 4));
+        term.execute(Cup(3, 1));
+        term.execute(Ri);
+
+        assert_eq!(text(&term), "\nabcd\n|\nefgh\nmnop");
+    }
+
+    #[test]
+    fn execute_sc_rc() {
+        let mut term = build_term(4, 3, 0, 0, "");
+
+        feed(&mut term, "  \n");
+        term.execute(Decsc);
+        feed(&mut term, " \n");
+        term.execute(Decrc);
+
+        assert_eq!(term.cursor(), (2, 1));
+
+        let mut term = build_term(4, 3, 0, 0, "");
+
+        feed(&mut term, "  \n");
+        term.execute(Scosc);
+        feed(&mut term, " \n");
+        term.execute(Scorc);
+
+        assert_eq!(term.cursor(), (2, 1));
+    }
+
+    #[test]
+    fn auto_wrap_mode() {
+        let mut term = Terminal::new((4, 4), None);
+
+        term.execute(Decset(vec![DecMode::AutoWrap]));
+        feed(&mut term, "abcdef");
+
+        assert_eq!(text(&term), "abcd\nef|\n\n");
+
+        let mut term = Terminal::new((4, 4), None);
+
+        term.execute(Decrst(vec![DecMode::AutoWrap]));
+        feed(&mut term, "abcdef");
+
+        assert_eq!(text(&term), "abc|f\n\n\n");
+    }
+
+    #[test]
+    fn insert_mode() {
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "abcd");
+        term.execute(Cub(2));
+        term.execute(Sm(vec![AnsiMode::Insert]));
+        feed(&mut term, "ef");
+
+        assert_eq!(text(&term), "aef|b\n\n\n");
+
+        feed(&mut term, "ghij");
+
+        assert_eq!(text(&term), "aefg\nhij|\n\n");
+    }
+
+    #[test]
+    fn print_at_the_end_of_the_screen() {
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "xxxxxxxxxx");
+        term.execute(Cup(50, 1));
+        feed(&mut term, "yyy");
+        term.execute(Cuf(50));
+        feed(&mut term, "zzz");
+
+        assert_eq!(text(&term), "xxxx\nxx\n\n\nyyyz\nzz|");
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "\nxxxxxxxxxx");
+        term.execute(Decstbm(2, 4));
+        term.execute(Cup(1, 1));
+        feed(&mut term, "yyy");
+        term.execute(Cuf(50));
+        feed(&mut term, "zzz");
+
+        assert_eq!(text(&term), "yyyz\nzz|xx\nxxxx\nxx\n\n");
+
+        let mut term = Terminal::new((4, 6), None);
+
+        term.execute(Decstbm(0, 3));
+        feed(&mut term, "xxxxxxxxxx");
+        term.execute(Cup(50, 1));
+        feed(&mut term, "yyy");
+        term.execute(Cuf(50));
+        feed(&mut term, "zzz");
+
+        assert_eq!(text(&term), "xxxx\nxxxx\nxx\n\n\nzz|yz");
+    }
+
+    #[test]
+    fn wide_chars() {
+        let mut term = Terminal::new((20, 2), None);
+
+        feed(&mut term, "ハローワールド");
+        assert_eq!(text(&term), "ハローワールド|\n");
+
+        term.execute(Cub(5));
+        assert_eq!(term.cursor().col, 9);
+        assert_eq!(text(&term), "ハローワ|ールド\n");
+    }
+
+    #[test]
+    fn execute_su() {
+        let mut term = Terminal::new((4, 6), None);
+        feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        term.execute(Su(2));
+        assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
+
+        let mut term = Terminal::new((4, 6), None);
+        feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        term.execute(sgr(SetBoldIntensity));
+        term.execute(Su(2));
+        assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
+        assert!(term.view().last().unwrap()[0].pen().is_bold());
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        term.execute(Decstbm(2, 5));
+        term.execute(Cup(1, 1));
+        term.execute(Su(2));
+
+        assert_eq!(text(&term), "|aa\ndd\nee\n\n\nff");
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
+        term.execute(Su(2));
+
+        assert_eq!(text(&term), "bbbb\nbb\ncccc\ncc\n\n  |");
+        assert_eq!(wrapped(&term), vec![true, false, true, false, false, false]);
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
+        term.execute(Decstbm(2, 5));
+        term.execute(Cup(1, 1));
+        term.execute(Su(2));
+
+        assert_eq!(text(&term), "|aaaa\nbb\ncccc\n\n\ncc");
+
+        assert_eq!(
+            wrapped(&term),
+            vec![false, false, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn execute_sd() {
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        term.execute(Sd(2));
+
+        assert_eq!(text(&term), "\n\naa\nbb\ncc\ndd|");
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
+        term.execute(Decstbm(2, 5));
+        term.execute(Cup(1, 1));
+        term.execute(Sd(2));
+
+        assert_eq!(text(&term), "|aa\n\n\nbb\ncc\nff");
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
+        term.execute(Sd(2));
+
+        assert_eq!(text(&term), "\n\naaaa\naa\nbbbb\nbb|");
+        assert_eq!(wrapped(&term), vec![false, false, true, false, true, false]);
+
+        let mut term = Terminal::new((4, 6), None);
+
+        feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
+        term.execute(Decstbm(2, 5));
+        term.execute(Cup(1, 1));
+        term.execute(Sd(2));
+
+        assert_eq!(text(&term), "|aaaa\n\n\naa\nbbbb\ncc");
+
+        assert_eq!(
+            wrapped(&term),
+            vec![false, false, false, false, false, false]
+        );
+    }
+
+    #[test]
+    fn charsets() {
+        let mut term = build_term(6, 7, 0, 0, "");
+
+        feed(&mut term, "alpty\r\n");
+        term.execute(Gzd4(Charset::Drawing));
+        feed(&mut term, "alpty\r\n");
+        term.execute(So);
+        feed(&mut term, "alpty\r\n");
+        term.execute(G1d4(Charset::Drawing));
+        feed(&mut term, "alpty\r\n");
+        term.execute(G1d4(Charset::Ascii));
+        feed(&mut term, "alpty\r\n");
+        term.execute(Gzd4(Charset::Ascii));
+        term.execute(Si);
+        feed(&mut term, "alpty");
+
+        assert_eq!(text(&term), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
+    }
+
+    #[test]
+    fn resize_wider() {
+        let mut term = Terminal::new((6, 6), None);
+
+        term.resize(7, 6);
+
+        assert_eq!(text(&term), "|\n\n\n\n\n");
+        assert!(!term.view().any(|l| l.wrapped));
+
+        term.resize(15, 6);
+
+        assert_eq!(text(&term), "|\n\n\n\n\n");
+        assert!(!term.view().any(|l| l.wrapped));
+
+        let mut term = Terminal::new((6, 6), None);
+
+        feed(&mut term, "000000111111222222333333444444555");
+
+        assert_eq!(text(&term), "000000\n111111\n222222\n333333\n444444\n555|");
+        assert_eq!(wrapped(&term), vec![true, true, true, true, true, false]);
+
+        term.resize(7, 6);
+
+        assert_eq!(text(&term), "0000001\n1111122\n2222333\n3334444\n44555|\n");
+        assert_eq!(wrapped(&term), vec![true, true, true, true, false, false]);
+
+        term.resize(15, 6);
+
+        assert_eq!(text(&term), "000000111111222\n222333333444444\n555|\n\n\n");
+        assert_eq!(wrapped(&term), vec![true, true, false, false, false, false]);
+
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "000011\r\n22");
+
+        assert_eq!(text(&term), "0000\n11\n22|");
+        assert_eq!(wrapped(&term), vec![true, false, false]);
+
+        term.resize(8, 3);
+
+        assert_eq!(text(&term), "000011\n22|\n");
+        assert_eq!(wrapped(&term), vec![false, false, false]);
+    }
+
+    #[test]
+    fn resize_narrower() {
+        let mut term = Terminal::new((15, 6), None);
+
+        term.resize(7, 6);
+
+        assert_eq!(text(&term), "|\n\n\n\n\n");
+        assert!(!term.view().any(|l| l.wrapped));
+
+        term.resize(6, 6);
+
+        assert_eq!(text(&term), "|\n\n\n\n\n");
+        assert!(!term.view().any(|l| l.wrapped));
+
+        let mut term = Terminal::new((8, 2), None);
+
+        feed(&mut term, "\nabcdef");
+
+        assert_eq!(wrapped(&term), vec![false, false]);
+
+        term.resize(4, 2);
+
+        assert_eq!(text(&term), "abcd\nef|");
+        assert_eq!(wrapped(&term), vec![true, false]);
+
+        let mut term = Terminal::new((15, 6), None);
+
+        feed(&mut term, "000000111111222222333333444444555");
+
+        assert_eq!(text(&term), "000000111111222\n222333333444444\n555|\n\n\n");
+        assert_eq!(wrapped(&term), vec![true, true, false, false, false, false]);
+
+        term.resize(7, 6);
+
+        assert_eq!(text(&term), "2222333\n3334444\n44555|\n\n\n");
+        assert_eq!(wrapped(&term), vec![true, true, false, false, false, false]);
+
+        term.resize(6, 6);
+
+        assert_eq!(text(&term), "333333\n444444\n555|\n\n\n");
+        assert_eq!(wrapped(&term), vec![true, true, false, false, false, false]);
+    }
+
+    #[test]
+    fn resize() {
+        let mut term = Terminal::new((8, 4), None);
+        feed(&mut term, "abcdefgh\r\nijklmnop\r\nqrstuw");
+        term.execute(Cup(4, 1));
+        feed(&mut term, "AAA");
+
+        term.resize(8, 5);
+
+        assert_eq!(text(&term), "abcdefgh\nijklmnop\nqrstuw\nAAA|\n");
+
+        feed(&mut term, "BBBBB");
+
+        assert_eq!(term.cursor(), (8, 3));
+
+        term.resize(4, 5);
+
+        assert_eq!(text(&term), "qrst\nuw\nAAAB\nBBB|B\n");
+
+        feed(&mut term, "\rCCC");
+
+        assert_eq!(text(&term), "qrst\nuw\nAAAB\nCCC|B\n");
+        assert_eq!(wrapped(&term), vec![true, false, true, false, false]);
+
+        term.resize(3, 5);
+
+        assert_eq!(text(&term), "tuw\nAAA\nBCC\nC|B\n");
+
+        term.resize(5, 5);
+
+        assert_eq!(text(&term), "qrstu\nw\nAAABC\nCC|B\n");
+
+        feed(&mut term, "DDD");
+        term.resize(6, 5);
+
+        assert_eq!(text(&term), "op\nqrstuw\nAAABCC\nCDDD|\n");
+    }
+
+    #[test]
+    fn resize_taller() {
+        let mut term = Terminal::new((6, 4), None);
+        feed(&mut term, "AAA\n\rBBB\n\r");
+
+        term.resize(6, 5);
+
+        assert_eq!(text(&term), "AAA\nBBB\n|\n\n");
+    }
+
+    #[test]
+    fn resize_shorter() {
+        let mut term = Terminal::new((6, 6), None);
+
+        feed(&mut term, "AAA\n\rBBB\n\rCCC\n\r");
+
+        term.resize(6, 5);
+
+        assert_eq!(text(&term), "AAA\nBBB\nCCC\n|\n");
+
+        term.resize(6, 3);
+
+        assert_eq!(text(&term), "BBB\nCCC\n|");
+
+        term.resize(6, 2);
+
+        assert_eq!(text(&term), "CCC\n|");
+    }
+
+    #[test]
+    fn resize_vs_buffer_switching() {
+        let mut term = Terminal::new((4, 4), None);
+
+        feed(&mut term, "aaa\n\rbbb\n\rc\n\rddd");
+
+        assert_eq!(term.cursor(), (3, 3));
+
+        term.resize(4, 5);
+
+        assert_eq!(text(&term), "aaa\nbbb\nc\nddd|\n");
+
+        term.execute(Decset(vec![DecMode::SaveCursorAltScreenBuffer]));
+
+        assert_eq!(term.cursor(), (3, 3));
+
+        term.resize(4, 2);
+
+        assert_eq!(term.cursor(), (3, 1));
+
+        term.resize(2, 3);
+        term.resize(3, 3);
+
+        term.execute(Decrst(vec![DecMode::SaveCursorAltScreenBuffer]));
+
+        assert_eq!(text(&term), "bbb\nc\ndd|d");
+    }
+
+    #[test]
+    fn execute_new_line_mode() {
+        let mut term = build_term(8, 2, 3, 0, "abc");
+
+        term.execute(Sm(vec![AnsiMode::NewLine]));
+        term.execute(Lf);
+
+        assert_eq!(term.cursor(), (0, 1));
+
+        term.execute(Rm(vec![AnsiMode::NewLine]));
+        term.execute(Cup(1, 4));
+        term.execute(Lf);
+
+        assert_eq!(term.cursor(), (3, 1));
+    }
+
+    #[test]
+    fn execute_cursor_keys_mode() {
+        let mut term = Terminal::new((4, 2), None);
+
+        assert!(!term.cursor_keys_app_mode());
+
+        term.execute(Decset(vec![DecMode::CursorKeys]));
+        assert!(term.cursor_keys_app_mode());
+
+        term.execute(Decrst(vec![DecMode::CursorKeys]));
+        assert!(!term.cursor_keys_app_mode());
+    }
+
+    #[test]
+    fn execute_origin_mode() {
+        let mut term = Terminal::new((4, 4), None);
+
+        term.execute(Decstbm(2, 4));
+        term.execute(Decset(vec![DecMode::Origin]));
+
+        assert_eq!(term.cursor(), (0, 1));
+
+        term.execute(Cup(2, 1));
+        assert_eq!(term.cursor(), (0, 2));
+
+        term.execute(Decrst(vec![DecMode::Origin]));
+        assert_eq!(term.cursor(), (0, 0));
+    }
+
+    #[test]
+    fn execute_ris() {
+        let mut term = Terminal::new((4, 3), None);
+
+        feed(&mut term, "ab\r\ncd");
+        term.execute(sgr(SetBoldIntensity));
+
+        term.execute(Decset(vec![
+            DecMode::CursorKeys,
+            DecMode::SaveCursorAltScreenBuffer,
+        ]));
+
+        feed(&mut term, "zz");
+
+        term.execute(Ris);
+
+        assert_eq!(term.active_buffer_type(), BufferType::Primary);
+        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(text(&term), "|\n\n");
+        assert_eq!(term.pen, crate::pen::Pen::default());
+        assert!(!term.cursor_keys_app_mode());
     }
 
     #[test]

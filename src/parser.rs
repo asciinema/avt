@@ -1118,11 +1118,17 @@ impl PartialEq<Vec<u16>> for Param {
 #[cfg(test)]
 mod tests {
     use super::AnsiMode;
+    use super::CtcOp;
     use super::DecMode;
+    use super::EdScope;
+    use super::ElScope;
     use super::Function;
     use super::Function::*;
     use super::Parser;
     use super::SgrOp::*;
+    use super::TbcScope;
+    use super::XtwinopsOp;
+    use crate::charset::Charset;
     use crate::color::Color;
 
     fn parse(s: &str) -> Vec<Function> {
@@ -1153,12 +1159,50 @@ mod tests {
         assert_eq!(parse("\x1b7"), [Decsc]);
         assert_eq!(parse("\x1bc"), [Ris]);
         assert_eq!(parse("\x1bM"), [Ri]);
+        assert_eq!(parse("\x1b(0"), [Gzd4(Charset::Drawing)]);
+        assert_eq!(parse("\x1b(B"), [Gzd4(Charset::Ascii)]);
+        assert_eq!(parse("\x1b)0"), [G1d4(Charset::Drawing)]);
+        assert_eq!(parse("\x1b)B"), [G1d4(Charset::Ascii)]);
     }
 
     #[test]
     fn parse_csi_seq() {
         assert_eq!(parse("\x1b[@"), [Ich(0)]);
+        assert_eq!(parse("\x1b[A"), [Cuu(0)]);
+        assert_eq!(parse("\x1b[2B"), [Cud(2)]);
+        assert_eq!(parse("\x1b[3C"), [Cuf(3)]);
+        assert_eq!(parse("\x1b[4D"), [Cub(4)]);
+        assert_eq!(parse("\x1b[5E"), [Cnl(5)]);
+        assert_eq!(parse("\x1b[6F"), [Cpl(6)]);
+        assert_eq!(parse("\x1b[7G"), [Cha(7)]);
         assert_eq!(parse("\x1b[3;4H"), [Cup(3, 4)]);
+        assert_eq!(parse("\x1b[8I"), [Cht(8)]);
+        assert_eq!(parse("\x1b[0J"), [Ed(EdScope::Below)]);
+        assert_eq!(parse("\x1b[1J"), [Ed(EdScope::Above)]);
+        assert_eq!(parse("\x1b[2J"), [Ed(EdScope::All)]);
+        assert_eq!(parse("\x1b[3J"), [Ed(EdScope::SavedLines)]);
+        assert_eq!(parse("\x1b[0K"), [El(ElScope::ToRight)]);
+        assert_eq!(parse("\x1b[1K"), [El(ElScope::ToLeft)]);
+        assert_eq!(parse("\x1b[2K"), [El(ElScope::All)]);
+        assert_eq!(parse("\x1b[16L"), [Il(16)]);
+        assert_eq!(parse("\x1b[17M"), [Dl(17)]);
+        assert_eq!(parse("\x1b[18P"), [Dch(18)]);
+        assert_eq!(parse("\x1b[19S"), [Su(19)]);
+        assert_eq!(parse("\x1b[20T"), [Sd(20)]);
+        assert_eq!(parse("\x1b[W"), [Ctc(CtcOp::Set)]);
+        assert_eq!(parse("\x1b[2W"), [Ctc(CtcOp::ClearCurrentColumn)]);
+        assert_eq!(parse("\x1b[5W"), [Ctc(CtcOp::ClearAll)]);
+        assert_eq!(parse("\x1b[21X"), [Ech(21)]);
+        assert_eq!(parse("\x1b[2Z"), [Cbt(2)]);
+        assert_eq!(parse("\x1b[9`"), [Cha(9)]);
+        assert_eq!(parse("\x1b[10a"), [Cuf(10)]);
+        assert_eq!(parse("\x1b[11b"), [Rep(11)]);
+        assert_eq!(parse("\x1b[12d"), [Vpa(12)]);
+        assert_eq!(parse("\x1b[13e"), [Vpr(13)]);
+        assert_eq!(parse("\x1b[14;15f"), [Cup(14, 15)]);
+        assert_eq!(parse("\x1b[g"), [Tbc(TbcScope::CurrentColumn)]);
+        assert_eq!(parse("\x1b[3g"), [Tbc(TbcScope::All)]);
+        assert_eq!(parse("\x1b[s"), [Scosc]);
 
         assert_eq!(
             parse("\x1b[4;20h"),
@@ -1166,11 +1210,58 @@ mod tests {
         );
 
         assert_eq!(
+            parse("\x1b[4;20l"),
+            [Rm(vec![AnsiMode::Insert, AnsiMode::NewLine])]
+        );
+
+        assert_eq!(parse("\x1b[m"), [Sgr(vec![Reset])]);
+        assert_eq!(parse("\x1b[2;5r"), [Decstbm(2, 5)]);
+
+        assert_eq!(
+            parse("\x1b[8;24;80t"),
+            [Xtwinops(XtwinopsOp::Resize(80, 24))]
+        );
+
+        assert_eq!(parse("\x1b[u"), [Scorc]);
+        assert_eq!(parse("\x1b[!p"), [Decstr]);
+
+        assert_eq!(
             parse("\x1b[?6;1047h"),
             [Decset(vec![DecMode::Origin, DecMode::AltScreenBuffer])]
         );
 
-        assert_eq!(parse("\x1b[m"), [Sgr(vec![Reset])]);
+        assert_eq!(
+            parse("\x1b[?6;1049l"),
+            [Decrst(vec![
+                DecMode::Origin,
+                DecMode::SaveCursorAltScreenBuffer,
+            ])]
+        );
+    }
+
+    #[test]
+    fn parse_partial_and_interrupted_seq() {
+        let mut parser = Parser::new();
+
+        assert_eq!(parser.feed('\x1b'), None);
+        assert_eq!(parser.feed('['), None);
+        assert_eq!(parser.feed('3'), None);
+        assert_eq!(parser.feed(';'), None);
+        assert_eq!(parser.feed('4'), None);
+        assert_eq!(parser.feed('H'), Some(Cup(3, 4)));
+
+        assert_eq!(parser.feed('\x1b'), None);
+        assert_eq!(parser.feed('['), None);
+        assert_eq!(parser.feed('3'), None);
+        assert_eq!(parser.feed('\x1b'), None);
+        assert_eq!(parser.feed('M'), Some(Ri));
+    }
+
+    #[test]
+    fn ignore_unsupported_seq() {
+        assert_eq!(parse("\x1b[4q"), []);
+        assert_eq!(parse("\x1b[9W"), []);
+        assert_eq!(parse("\x1b[?9999h"), [Decset(vec![])]);
     }
 
     #[test]

@@ -122,937 +122,93 @@ pub struct Changes<'a> {
 #[cfg(test)]
 mod tests {
     use super::Vt;
-    use crate::line::Line;
-    use pretty_assertions::assert_eq;
     use proptest::prelude::*;
     use std::env;
     use std::fs;
 
     #[test]
-    fn auto_wrap_mode() {
-        // auto wrap
+    fn feed_str_returns_changed_lines() {
+        let mut vt = Vt::builder().size(2, 2).build();
 
-        let mut vt = Vt::new(4, 4);
+        vt.feed_str("");
 
-        vt.feed_str("\x1b[?7h");
-        vt.feed_str("abcdef");
+        let (lines, scrollback) = {
+            let changes = vt.feed_str("aa\r\nbb\r\ncc");
 
-        assert_eq!(text(&vt), "abcd\nef|\n\n");
+            let scrollback = changes
+                .scrollback
+                .map(|line| line.text())
+                .collect::<Vec<_>>();
 
-        // no auto wrap
+            (changes.lines, scrollback)
+        };
 
-        let mut vt = Vt::new(4, 4);
-
-        vt.feed_str("\x1b[?7l");
-        vt.feed_str("abcdef");
-
-        assert_eq!(text(&vt), "abc|f\n\n\n");
+        assert_eq!(lines, vec![0, 1]);
+        assert_eq!(scrollback, Vec::<String>::new());
     }
 
     #[test]
-    fn insert_mode() {
-        let mut vt = Vt::new(4, 4);
+    fn feed_str_updates_accessors() {
+        let mut vt = Vt::builder().size(2, 2).build();
 
-        vt.feed_str("abcd");
-        vt.feed_str("\x1b[2D");
-        vt.feed_str("\x1b[4h");
-        vt.feed_str("ef");
+        vt.feed_str("");
+        vt.feed_str("aa\r\nbb\r\ncc");
 
-        assert_eq!(text(&vt), "aef|b\n\n\n");
-
-        vt.feed_str("ghij");
-
-        assert_eq!(text(&vt), "aefg\nhij|\n\n");
-    }
-
-    #[test]
-    fn print_at_the_end_of_the_screen() {
-        // default margins, print at the bottom
-
-        let mut vt = Vt::new(4, 6);
-
-        let input = "xxxxxxxxxx\x1b[50;1Hyyy\x1b[50Czzz";
-        vt.feed_str(input);
-
-        assert_eq!(text(&vt), "xxxx\nxx\n\n\nyyyz\nzz|");
-
-        // custom top margin, print above it
-
-        let mut vt = Vt::new(4, 6);
-
-        let input = "\nxxxxxxxxxx\x1b[2;4r\x1b[1;1Hyyy\x1b[50Czzz";
-
-        vt.feed_str(input);
-
-        assert_eq!(text(&vt), "yyyz\nzz|xx\nxxxx\nxx\n\n");
-
-        // custom bottom margin, print below it
-
-        let mut vt = Vt::new(4, 6);
-
-        let input = "\x1b[;3rxxxxxxxxxx\x1b[50;1Hyyy\x1b[50Czzz";
-
-        vt.feed_str(input);
-
-        assert_eq!(text(&vt), "xxxx\nxxxx\nxx\n\n\nzz|yz");
-    }
-
-    #[test]
-    fn wide_chars() {
-        let mut vt = Vt::new(20, 2);
-
-        vt.feed_str("ハローワールド");
-        assert_eq!(text(&vt), "ハローワールド|\n");
-
-        vt.feed_str("\x1b[5D");
-        assert_eq!(vt.cursor().col, 9);
-        assert_eq!(text(&vt), "ハローワ|ールド\n");
-    }
-
-    #[test]
-    fn execute_lf() {
-        let mut vt = build_vt(8, 2, 3, 0, "abc");
-
-        vt.feed_str("\n");
-
-        assert_eq!(vt.cursor(), (3, 1));
-        assert_eq!(text(&vt), "abc\n   |");
-
-        vt.feed_str("d\n");
-
-        assert_eq!(vt.cursor(), (4, 1));
-        assert_eq!(text(&vt), "   d\n    |");
-    }
-
-    #[test]
-    fn execute_ri() {
-        let mut vt = build_vt(8, 5, 0, 0, "abcd\r\nefgh\r\nijkl\r\nmnop\r\nqrst");
-
-        vt.feed_str("\x1bM"); // RI
-
-        assert_eq!(text(&vt), "|\nabcd\nefgh\nijkl\nmnop");
-
-        vt.feed_str("\x1b[3;4r"); // use smaller scroll region
-        vt.feed_str("\x1b[3;1H"); // place cursor on top margin
-        vt.feed_str("\x1bM"); // RI
-
-        assert_eq!(text(&vt), "\nabcd\n|\nefgh\nmnop");
-    }
-
-    #[test]
-    fn execute_su() {
-        // short lines, default margins
-
-        let mut vt = Vt::new(4, 6);
-        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        vt.feed_str("\x1b[2S");
-        assert_eq!(text(&vt), "cc\ndd\nee\nff\n\n  |");
-
-        // short lines, default margins, non-default pen
-
-        let mut vt = Vt::new(4, 6);
-        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        vt.feed_str("\x1b[1m");
-        vt.feed_str("\x1b[2S");
-        assert_eq!(text(&vt), "cc\ndd\nee\nff\n\n  |");
-        assert!(vt.view().last().unwrap()[0].pen().is_bold());
-
-        // short lines, margins at 1 (top) and 4 (bottom)
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        vt.feed_str("\x1b[2;5r");
-        vt.feed_str("\x1b[1;1H");
-        vt.feed_str("\x1b[2S");
-
-        assert_eq!(text(&vt), "|aa\ndd\nee\n\n\nff");
-
-        // wrapped lines, default margins
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
-        vt.feed_str("\x1b[2S");
-
-        assert_eq!(text(&vt), "bbbb\nbb\ncccc\ncc\n\n  |");
-        assert_eq!(wrapped(&vt), vec![true, false, true, false, false, false]);
-
-        // wrapped lines, margins at 1 (top) and 4 (bottom)
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
-        vt.feed_str("\x1b[2;5r");
-        vt.feed_str("\x1b[1;1H");
-        vt.feed_str("\x1b[2S");
-
-        assert_eq!(text(&vt), "|aaaa\nbb\ncccc\n\n\ncc");
-        assert_eq!(wrapped(&vt), vec![false, false, false, false, false, false]);
-    }
-
-    #[test]
-    fn execute_sd() {
-        // short lines, default margins
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        vt.feed_str("\x1b[2T");
-
-        assert_eq!(text(&vt), "\n\naa\nbb\ncc\ndd|");
-
-        // short lines, margins at 1 (top) and 4 (bottom)
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        vt.feed_str("\x1b[2;5r");
-        vt.feed_str("\x1b[1;1H");
-        vt.feed_str("\x1b[2T");
-
-        assert_eq!(text(&vt), "|aa\n\n\nbb\ncc\nff");
-
-        // wrapped lines, default margins
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
-        vt.feed_str("\x1b[2T");
-
-        assert_eq!(text(&vt), "\n\naaaa\naa\nbbbb\nbb|");
-        assert_eq!(wrapped(&vt), vec![false, false, true, false, true, false]);
-
-        // wrapped lines, margins at 1 (top) and 4 (bottom)
-
-        let mut vt = Vt::new(4, 6);
-
-        vt.feed_str("aaaaaa\r\nbbbbbb\r\ncccccc");
-        vt.feed_str("\x1b[2;5r");
-        vt.feed_str("\x1b[1;1H");
-        vt.feed_str("\x1b[2T");
-
-        assert_eq!(text(&vt), "|aaaa\n\n\naa\nbbbb\ncc");
-        assert_eq!(wrapped(&vt), vec![false, false, false, false, false, false]);
-    }
-
-    #[test]
-    fn execute_bs() {
-        let mut vt = Vt::new(4, 2);
-
-        vt.feed_str("a");
-        vt.feed_str("\x08");
-
-        assert_eq!(text(&vt), "|a\n");
-
-        vt.feed_str("\x08");
-
-        assert_eq!(text(&vt), "|a\n");
-
-        vt.feed_str("abcd");
-        vt.feed_str("\x08");
-
-        assert_eq!(text(&vt), "ab|cd\n");
-
-        vt.feed_str("cdef");
-        vt.feed_str("\x08");
-
-        assert_eq!(text(&vt), "abcd\ne|f");
-
-        vt.feed_str("\x08");
-
-        assert_eq!(text(&vt), "abcd\n|ef");
-
-        vt.feed_str("\x08");
-
-        assert_eq!(text(&vt), "abcd\n|ef");
-    }
-
-    #[test]
-    fn execute_cup() {
-        let mut vt = Vt::new(4, 2);
-
-        vt.feed_str("abc\r\ndef");
-        vt.feed_str("\x1b[1;1;H");
-
-        assert_eq!(vt.cursor(), (0, 0));
-
-        vt.feed_str("\x1b[10;10;H");
-
-        assert_eq!(vt.cursor(), (3, 1));
-    }
-
-    #[test]
-    fn execute_cuu() {
-        let mut vt = Vt::new(8, 4);
-
-        vt.feed_str("abcd\n\n\n");
-        vt.feed_str("\x1b[A");
-
-        assert_eq!(vt.cursor(), (4, 2));
-
-        vt.feed_str("\x1b[2A");
-
-        assert_eq!(vt.cursor(), (4, 0));
-    }
-
-    #[test]
-    fn execute_cpl() {
-        let mut vt = Vt::new(8, 4);
-
-        vt.feed_str("abcd\r\n\r\n\r\nef");
-
-        assert_eq!(vt.cursor(), (2, 3));
-
-        vt.feed_str("\x1b[F");
-
-        assert_eq!(vt.cursor(), (0, 2));
-
-        vt.feed_str("\x1b[2F");
-
-        assert_eq!(vt.cursor(), (0, 0));
-    }
-
-    #[test]
-    fn execute_cnl() {
-        let mut vt = Vt::new(4, 4);
-
-        vt.feed_str("ab");
-        vt.feed_str("\x1b[E");
-
-        assert_eq!(vt.cursor(), (0, 1));
-
-        vt.feed_str("\x1b[3E");
-
-        assert_eq!(vt.cursor(), (0, 3));
-    }
-
-    #[test]
-    fn execute_vpa() {
-        let mut vt = Vt::new(4, 4);
-
-        vt.feed_str("\r\n\r\naaa\r\nbbb");
-        vt.feed_str("\x1b[d");
-
-        assert_eq!(vt.cursor(), (3, 0));
-
-        vt.feed_str("\x1b[10d");
-
-        assert_eq!(vt.cursor(), (3, 3));
-    }
-
-    #[test]
-    fn execute_cud() {
-        let mut vt = Vt::new(8, 4);
-
-        vt.feed_str("abcd");
-        vt.feed_str("\x1b[B");
-
-        assert_eq!(text(&vt), "abcd\n    |\n\n");
-
-        vt.feed_str("\x1b[2B");
-
-        assert_eq!(text(&vt), "abcd\n\n\n    |");
-    }
-
-    #[test]
-    fn execute_cuf() {
-        let mut vt = Vt::new(4, 1);
-
-        vt.feed_str("\x1b[2C");
-
-        assert_eq!(text(&vt), "  |");
-
-        vt.feed_str("\x1b[2C");
-
-        assert_eq!(text(&vt), "   |");
-
-        vt.feed_str("a");
-
-        assert_eq!(text(&vt), "   a|");
-
-        vt.feed_str("\x1b[5C");
-
-        assert_eq!(text(&vt), "   |a");
-
-        vt.feed_str("ab");
-        vt.feed_str("\x1b[10C");
-
-        assert_eq!(text(&vt), "b  |");
-    }
-
-    #[test]
-    fn execute_cub() {
-        let mut vt = Vt::new(8, 2);
-
-        vt.feed_str("abcd");
-        vt.feed_str("\x1b[2D");
-
-        assert_eq!(text(&vt), "ab|cd\n");
-
-        vt.feed_str("cdef");
-        vt.feed_str("\x1b[2D");
-
-        assert_eq!(text(&vt), "abcd|ef\n");
-
-        vt.feed_str("\x1b[10D");
-
-        assert_eq!(text(&vt), "|abcdef\n");
-
-        let mut vt = Vt::new(4, 2);
-
-        vt.feed_str("abcd");
-        vt.feed_str("\x1b[D");
-
-        assert_eq!(text(&vt), "ab|cd\n");
-    }
-
-    #[test]
-    fn execute_ich() {
-        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijklmn");
-
-        vt.feed_str("\x1b[@");
-
-        assert_eq!(text(&vt), "abc| defg\nijklmn");
-        assert_eq!(wrapped(&vt), vec![true, false]);
-
-        vt.feed_str("\x1b[2@");
-
-        assert_eq!(text(&vt), "abc|   de\nijklmn");
-
-        vt.feed_str("\x1b[10@");
-
-        assert_eq!(text(&vt), "abc|\nijklmn");
-
-        let mut vt = build_vt(8, 2, 7, 0, "abcdefghijklmn");
-
-        vt.feed_str("\x1b[10@");
-        assert_eq!(text(&vt), "abcdefg|\nijklmn");
-    }
-
-    #[test]
-    fn execute_il() {
-        let mut vt = build_vt(4, 4, 2, 1, "abcdefghij");
-
-        vt.feed_str("\x1b[L");
-
-        assert_eq!(text(&vt), "abcd\n  |\nefgh\nij");
-        assert_eq!(wrapped(&vt), vec![false, false, true, false]);
-
-        vt.feed_str("\x1b[A");
-        vt.feed_str("\x1b[L");
-
-        assert_eq!(text(&vt), "  |\nabcd\n\nefgh");
-        assert_eq!(wrapped(&vt), vec![false, false, false, false]);
-
-        vt.feed_str("\x1b[3B");
-        vt.feed_str("\x1b[100L");
-
-        assert_eq!(text(&vt), "\nabcd\n\n  |");
-    }
-
-    #[test]
-    fn execute_dl() {
-        let mut vt = Vt::new(4, 4);
-
-        vt.feed_str("abcdefghijklmn");
-        vt.feed_str("\x1b[2A");
-        vt.feed_str("\x1b[M");
-
-        assert_eq!(text(&vt), "abcd\nij|kl\nmn\n");
-        assert_eq!(wrapped(&vt), vec![false, true, false, false]);
-
-        // cursor above bottom margin
-
-        let mut vt = Vt::new(4, 4);
-
-        vt.feed_str("abcdefghijklmn");
-        vt.feed_str("\x1b[1;3r");
-        vt.feed_str("\x1b[2;1H");
-        vt.feed_str("\x1b[M");
-
-        assert_eq!(text(&vt), "abcd\n|ijkl\n\nmn");
-        assert_eq!(wrapped(&vt), vec![false, false, false, false]);
-
-        // cursor below bottom margin
-
-        let mut vt = Vt::new(4, 4);
-
-        vt.feed_str("abcdefghijklmn");
-        vt.feed_str("\x1b[1;2r");
-        vt.feed_str("\x1b[4;1H");
-        vt.feed_str("\x1b[M");
-
-        assert_eq!(text(&vt), "abcd\nefgh\nijkl\n|");
-        assert_eq!(wrapped(&vt), vec![true, true, false, false]);
-    }
-
-    #[test]
-    fn execute_el() {
-        // short lines
-
-        // a) clear to the end of the line
-
-        let mut vt = build_vt(4, 2, 2, 0, "abcd");
-
-        vt.feed_str("\x1b[0K");
-
-        assert_eq!(text(&vt), "ab|\n");
-
-        let mut vt = build_vt(4, 2, 2, 0, "a");
-
-        vt.feed_str("\x1b[0K");
-
-        assert_eq!(text(&vt), "a |\n");
-
-        // b) clear to the beginning of the line
-
-        let mut vt = build_vt(4, 2, 2, 0, "abcd");
-
-        vt.feed_str("\x1b[1K");
-
-        assert_eq!(text(&vt), "  | d\n");
-
-        // c) clear the whole line
-
-        let mut vt = build_vt(4, 2, 2, 0, "abcd");
-
-        vt.feed_str("\x1b[2K");
-
-        assert_eq!(text(&vt), "  |\n");
-
-        // wrapped lines
-
-        // a) clear to the end of the line
-
-        let mut vt = Vt::new(4, 3);
-
-        vt.feed_str("abcdefghij\x1b[A");
-        vt.feed_str("\x1b[0K");
-
-        assert_eq!(text(&vt), "abcd\nef|\nij");
-        assert_eq!(wrapped(&vt), vec![true, false, false]);
-
-        // b) clear to the beginning of the line
-
-        let mut vt = Vt::new(4, 3);
-
-        vt.feed_str("abcdefghij\x1b[A");
-        vt.feed_str("\x1b[1K");
-
-        assert_eq!(text(&vt), "abcd\n  | h\nij");
-        assert_eq!(wrapped(&vt), vec![true, true, false]);
-
-        // c) clear the whole line
-
-        let mut vt = Vt::new(4, 3);
-
-        vt.feed_str("abcdefghij\x1b[A");
-        vt.feed_str("\x1b[2K");
-
-        assert_eq!(text(&vt), "abcd\n  |\nij");
-        assert_eq!(wrapped(&vt), vec![true, false, false]);
-    }
-
-    #[test]
-    fn execute_ed() {
-        // short lines
-
-        // a) clear to the end of the screen
-
-        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
-
-        vt.feed_str("\x1b[0J");
-
-        assert_eq!(text(&vt), "abc\nd|\n");
-
-        let mut vt = build_vt(4, 3, 1, 1, "abc\r\n\r\nghi");
-
-        vt.feed_str("\x1b[0J");
-
-        assert_eq!(text(&vt), "abc\n |\n");
-
-        // b) clear to the beginning of the screen
-
-        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
-
-        vt.feed_str("\x1b[1J");
-
-        assert_eq!(text(&vt), "\n | f\nghi");
-
-        // c) clear the whole screen
-
-        let mut vt = build_vt(4, 3, 1, 1, "abc\r\ndef\r\nghi");
-
-        vt.feed_str("\x1b[2J");
-
-        assert_eq!(text(&vt), "\n |\n");
-
-        // wrapped lines
-
-        // a) clear to the end of the screen
-
-        let mut vt = build_vt(4, 3, 1, 1, "abcdefghij");
-
-        vt.feed_str("\x1b[0J");
-
-        assert_eq!(text(&vt), "abcd\ne|\n");
-        assert_eq!(wrapped(&vt), vec![true, false, false]);
-
-        // b) clear to the beginning of the screen
-
-        let mut vt = build_vt(4, 3, 1, 1, "abcdefghij");
-
-        vt.feed_str("\x1b[1J");
-
-        assert_eq!(text(&vt), "\n | gh\nij");
-        assert_eq!(wrapped(&vt), vec![false, true, false]);
-
-        // c) clear the whole screen
-
-        let mut vt = build_vt(4, 3, 1, 1, "abcdefghij");
-
-        vt.feed_str("\x1b[2J");
-
-        assert_eq!(text(&vt), "\n |\n");
-        assert_eq!(wrapped(&vt), vec![false, false, false]);
-    }
-
-    #[test]
-    fn execute_dch() {
-        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijkl");
-
-        vt.feed_str("\x1b[P");
-
-        assert_eq!(text(&vt), "abc|efgh\nijkl");
-        assert_eq!(wrapped(&vt), vec![false, false]);
-
-        vt.feed_str("\x1b[2P");
-
-        assert_eq!(text(&vt), "abc|gh\nijkl");
-
-        vt.feed_str("\x1b[10P");
-
-        assert_eq!(text(&vt), "abc|\nijkl");
-
-        vt.feed_str("\x1b[10C");
-        vt.feed_str("\x1b[10P");
-
-        assert_eq!(text(&vt), "abc    |\nijkl");
-    }
-
-    #[test]
-    fn execute_ech() {
-        let mut vt = build_vt(8, 2, 3, 0, "abcdefghijkl");
-
-        vt.feed_str("\x1b[X");
-
-        assert_eq!(text(&vt), "abc| efgh\nijkl");
-        assert_eq!(wrapped(&vt), vec![true, false]);
-
-        vt.feed_str("\x1b[2X");
-
-        assert_eq!(text(&vt), "abc|  fgh\nijkl");
-        assert_eq!(wrapped(&vt), vec![true, false]);
-
-        vt.feed_str("\x1b[10X");
-
-        assert_eq!(text(&vt), "abc|\nijkl");
-        assert_eq!(wrapped(&vt), vec![false, false]);
-
-        vt.feed_str("\x1b[3C\x1b[X");
-
-        assert_eq!(text(&vt), "abc   |\nijkl");
-    }
-
-    #[test]
-    fn execute_cht() {
-        let mut vt = build_vt(28, 1, 3, 0, "abcdefghijklmnopqrstuwxyzabc");
-
-        vt.feed_str("\x1b[I");
-
-        assert_eq!(vt.cursor(), (8, 0));
-
-        vt.feed_str("\x1b[2I");
-
-        assert_eq!(vt.cursor(), (24, 0));
-
-        vt.feed_str("\x1b[I");
-
-        assert_eq!(vt.cursor(), (27, 0));
-    }
-
-    #[test]
-    fn execute_cbt() {
-        let mut vt = build_vt(28, 1, 26, 0, "abcdefghijklmnopqrstuwxyzabc");
-
-        vt.feed_str("\x1b[Z");
-
-        assert_eq!(vt.cursor(), (24, 0));
-
-        vt.feed_str("\x1b[2Z");
-
-        assert_eq!(vt.cursor(), (8, 0));
-
-        vt.feed_str("\x1b[Z");
-
-        assert_eq!(vt.cursor(), (0, 0));
-    }
-
-    #[test]
-    fn execute_sc_rc() {
-        // DECSC/DECRC variant
-
-        let mut vt = build_vt(4, 3, 0, 0, "");
-
-        // move 2x right, 1 down
-        vt.feed_str("  \n");
-
-        // save cursor
-        vt.feed_str("\x1b7");
-
-        // move 1x right, 1x down
-        vt.feed_str(" \n");
-
-        // restore cursor
-        vt.feed_str("\x1b8");
-
+        assert_eq!(vt.size(), (2, 2));
         assert_eq!(vt.cursor(), (2, 1));
 
-        // ansi.sys variant
+        assert_eq!(
+            vt.text(),
+            vec!["aa".to_owned(), "bb".to_owned(), "cc".to_owned()]
+        );
 
-        let mut vt = build_vt(4, 3, 0, 0, "");
-
-        // move 2x right, 1 down
-        vt.feed_str("  \n");
-
-        // save cursor
-        vt.feed_str("\x1b[s");
-
-        // move 1x right, 1x down
-        vt.feed_str(" \n");
-
-        // restore cursor
-        vt.feed_str("\x1b[u");
-
-        assert_eq!(vt.cursor(), (2, 1));
+        assert_eq!(vt.view().count(), 2);
+        assert!(vt.lines().count() >= 2);
+        assert_eq!(vt.line(0).chars().take(2).collect::<String>(), "bb");
     }
 
     #[test]
-    fn execute_rep() {
-        let mut vt = build_vt(20, 2, 0, 0, "");
+    fn feed_str_returns_trimmed_scrollback() {
+        let mut vt = Vt::builder().size(2, 2).scrollback_limit(0).build();
 
-        vt.feed_str("\x1b[b"); // REP
+        vt.feed_str("");
 
-        assert_eq!(text(&vt), "|\n");
+        let scrollback = {
+            let changes = vt.feed_str("aa\r\nbb\r\ncc");
 
-        vt.feed_str("A");
-        vt.feed_str("\x1b[b");
+            changes
+                .scrollback
+                .map(|line| line.text())
+                .collect::<Vec<_>>()
+        };
 
-        assert_eq!(text(&vt), "AA|\n");
-
-        vt.feed_str("\x1b[3b");
-
-        assert_eq!(text(&vt), "AAAAA|\n");
-
-        vt.feed_str("\x1b[5C"); // move 5 cols to the right
-        vt.feed_str("\x1b[b");
-
-        assert_eq!(text(&vt), "AAAAA      |\n");
+        assert_eq!(scrollback, vec!["aa".to_owned()]);
+        assert_eq!(vt.text(), vec!["bb".to_owned(), "cc".to_owned()]);
     }
 
     #[test]
-    fn resize_wider() {
-        let mut builder = Vt::builder();
+    fn resize_returns_changed_lines() {
+        let mut vt = Vt::new(4, 2);
 
-        let mut vt = builder.size(6, 6).build();
+        vt.feed_str("");
 
-        vt.resize(7, 6);
+        let (lines, scrollback_count) = {
+            let changes = vt.resize(4, 3);
 
-        assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().any(|l| l.wrapped));
+            (changes.lines, changes.scrollback.count())
+        };
 
-        vt.resize(15, 6);
-
-        assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().any(|l| l.wrapped));
-
-        let mut vt = builder.size(6, 6).build();
-
-        vt.feed_str("000000111111222222333333444444555");
-
-        assert_eq!(text(&vt), "000000\n111111\n222222\n333333\n444444\n555|");
-        assert_eq!(wrapped(&vt), vec![true, true, true, true, true, false]);
-
-        vt.resize(7, 6);
-
-        assert_eq!(text(&vt), "0000001\n1111122\n2222333\n3334444\n44555|\n");
-        assert_eq!(wrapped(&vt), vec![true, true, true, true, false, false]);
-
-        vt.resize(15, 6);
-
-        assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
-        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
-
-        let mut vt = builder.size(4, 3).build();
-
-        vt.feed_str("000011\r\n22");
-
-        assert_eq!(text(&vt), "0000\n11\n22|");
-        assert_eq!(wrapped(&vt), vec![true, false, false]);
-
-        vt.resize(8, 3);
-
-        assert_eq!(text(&vt), "000011\n22|\n");
-        assert_eq!(wrapped(&vt), vec![false, false, false]);
+        assert_eq!(lines, vec![0, 1, 2]);
+        assert_eq!(scrollback_count, 0);
     }
 
     #[test]
-    fn resize_narrower() {
-        let mut builder = Vt::builder();
+    fn resize_updates_size_accessor() {
+        let mut vt = Vt::new(4, 2);
 
-        let mut vt = builder.size(15, 6).build();
+        vt.resize(4, 3);
 
-        vt.resize(7, 6);
-
-        assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().any(|l| l.wrapped));
-
-        vt.resize(6, 6);
-
-        assert_eq!(text(&vt), "|\n\n\n\n\n");
-        assert!(!vt.view().any(|l| l.wrapped));
-
-        let mut vt = builder.size(8, 2).build();
-
-        vt.feed_str("\nabcdef");
-
-        assert_eq!(wrapped(&vt), vec![false, false]);
-
-        vt.resize(4, 2);
-
-        assert_eq!(text(&vt), "abcd\nef|");
-        assert_eq!(wrapped(&vt), vec![true, false]);
-
-        let mut vt = builder.size(15, 6).build();
-
-        vt.feed_str("000000111111222222333333444444555");
-
-        assert_eq!(text(&vt), "000000111111222\n222333333444444\n555|\n\n\n");
-        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
-
-        vt.resize(7, 6);
-
-        assert_eq!(text(&vt), "2222333\n3334444\n44555|\n\n\n");
-        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
-
-        vt.resize(6, 6);
-
-        assert_eq!(text(&vt), "333333\n444444\n555|\n\n\n");
-        assert_eq!(wrapped(&vt), vec![true, true, false, false, false, false]);
-    }
-
-    #[test]
-    fn resize() {
-        let mut vt = Vt::builder().size(8, 4).build();
-        vt.feed_str("abcdefgh\r\nijklmnop\r\nqrstuw");
-        vt.feed_str("\x1b[4;1H");
-        vt.feed_str("AAA");
-
-        vt.resize(8, 5);
-
-        assert_eq!(text(&vt), "abcdefgh\nijklmnop\nqrstuw\nAAA|\n");
-
-        vt.feed_str("BBBBB");
-
-        assert_eq!(vt.cursor(), (8, 3));
-
-        vt.resize(4, 5);
-
-        assert_eq!(text(&vt), "qrst\nuw\nAAAB\nBBB|B\n");
-
-        vt.feed_str("\rCCC");
-
-        assert_eq!(text(&vt), "qrst\nuw\nAAAB\nCCC|B\n");
-        assert_eq!(wrapped(&vt), vec![true, false, true, false, false]);
-
-        vt.resize(3, 5);
-
-        assert_eq!(text(&vt), "tuw\nAAA\nBCC\nC|B\n");
-
-        vt.resize(5, 5);
-
-        assert_eq!(text(&vt), "qrstu\nw\nAAABC\nCC|B\n");
-
-        vt.feed_str("DDD");
-        vt.resize(6, 5);
-
-        assert_eq!(text(&vt), "op\nqrstuw\nAAABCC\nCDDD|\n");
-    }
-
-    #[test]
-    fn resize_taller() {
-        let mut vt = Vt::builder().size(6, 4).build();
-        vt.feed_str("AAA\n\rBBB\n\r");
-
-        vt.resize(6, 5);
-
-        assert_eq!(text(&vt), "AAA\nBBB\n|\n\n");
-    }
-
-    #[test]
-    fn resize_shorter() {
-        let mut vt = Vt::builder().size(6, 6).build();
-
-        vt.feed_str("AAA\n\rBBB\n\rCCC\n\r");
-
-        vt.resize(6, 5);
-
-        assert_eq!(text(&vt), "AAA\nBBB\nCCC\n|\n");
-
-        vt.resize(6, 3);
-
-        assert_eq!(text(&vt), "BBB\nCCC\n|");
-
-        vt.resize(6, 2);
-
-        assert_eq!(text(&vt), "CCC\n|");
-    }
-
-    #[test]
-    fn resize_vs_buffer_switching() {
-        let mut vt = Vt::builder().size(4, 4).build();
-
-        // fill primary buffer
-        vt.feed_str("aaa\n\rbbb\n\rc\n\rddd");
-
-        assert_eq!(vt.cursor(), (3, 3));
-
-        // resize to 4x5
-        vt.resize(4, 5);
-
-        assert_eq!(text(&vt), "aaa\nbbb\nc\nddd|\n");
-
-        // switch to alternate buffer
-        vt.feed_str("\x1b[?1049h");
-
-        assert_eq!(vt.cursor(), (3, 3));
-
-        // resize to 4x2
-        vt.resize(4, 2);
-
-        assert_eq!(vt.cursor(), (3, 1));
-
-        // resize to 2x3, we'll check later if primary buffer preserved more columns
-        vt.resize(2, 3);
-
-        // resize to 3x3
-        vt.resize(3, 3);
-
-        // switch back to primary buffer
-        vt.feed_str("\x1b[?1049l");
-
-        assert_eq!(text(&vt), "bbb\nc\ndd|d");
+        assert_eq!(vt.size(), (4, 3));
     }
 
     #[test]
@@ -1101,31 +257,6 @@ mod tests {
                 s = (s + 1) % step;
             }
         }
-    }
-
-    #[test]
-    fn charsets() {
-        let mut vt = build_vt(6, 7, 0, 0, "");
-
-        // GL points to G0, G0 is set to ascii
-        vt.feed_str("alpty\r\n");
-
-        // GL points to G0, G0 is set to drawing
-        vt.feed_str("\x1b(0alpty\r\n");
-
-        // GL points to G1, G1 is still set to ascii
-        vt.feed_str("\u{0e}alpty\r\n");
-
-        // GL points to G1, G1 is set to drawing
-        vt.feed_str("\x1b)0alpty\r\n");
-
-        // GL points to G1, G1 is set back to ascii
-        vt.feed_str("\x1b)Balpty\r\n");
-
-        // GL points to G0, G0 is set back to ascii
-        vt.feed_str("\x1b(B\u{0f}alpty");
-
-        assert_eq!(text(&vt), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
     }
 
     fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
@@ -1324,67 +455,8 @@ mod tests {
         Ok((w, h, input, step))
     }
 
-    fn build_vt(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Vt {
-        let mut vt = Vt::new(cols, rows);
-        vt.feed_str(init);
-        vt.feed_str(&format!("\u{9b}{};{}H", cy + 1, cx + 1));
-
-        vt
-    }
-
     fn assert_vts_eq(vt1: &Vt, vt2: &Vt) {
         vt1.parser.assert_eq(&vt2.parser);
         vt1.terminal.assert_eq(&vt2.terminal);
-    }
-
-    fn text(vt: &Vt) -> String {
-        let cursor = vt.cursor();
-
-        buffer_text(vt.terminal.view(), cursor.col, cursor.row)
-    }
-
-    fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(
-        mut view: I,
-        cursor_col: usize,
-        cursor_row: usize,
-    ) -> String {
-        let mut lines = Vec::new();
-        lines.extend(view.by_ref().take(cursor_row).map(|l| l.text()));
-        let cursor_line = view.next().unwrap();
-        let mut offset = 0;
-        let mut line = String::new();
-        let mut cells = cursor_line.cells().iter().filter(|c| c.width() > 0);
-
-        for cell in cells.by_ref() {
-            let width = cell.width() as usize;
-
-            if offset + width <= cursor_col {
-                line.push(cell.char());
-                offset += width;
-            } else {
-                line.push('|');
-                line.push(cell.char());
-                offset += width;
-                break;
-            }
-        }
-
-        if offset == cursor_col {
-            line.push('|');
-        }
-
-        line.extend(cells.map(|c| c.char()));
-        lines.push(line);
-        lines.extend(view.map(|l| l.text()));
-
-        lines
-            .into_iter()
-            .map(|line| line.trim_end().to_owned())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-
-    fn wrapped(vt: &Vt) -> Vec<bool> {
-        vt.terminal.view().map(|l| l.wrapped).collect()
     }
 }
