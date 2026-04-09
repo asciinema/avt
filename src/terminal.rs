@@ -4,6 +4,7 @@ mod dirty_lines;
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
+use crate::cell::Cell;
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
@@ -1292,7 +1293,7 @@ impl Terminal {
         }
     }
 
-    pub fn dump(&self) -> String {
+    pub fn dump(&self) -> Vec<Function> {
         let (primary_ctx, alternate_ctx): (&SavedCtx, &SavedCtx) = match self.active_buffer_type {
             BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
             BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx),
@@ -1300,17 +1301,19 @@ impl Terminal {
 
         // 1. dump primary screen buffer
 
-        let mut seq: String = self.primary_buffer().dump();
+        let mut funs = Vec::new();
+        dump_buffer(self.primary_buffer(), &mut funs);
 
         // 2. setup tab stops
 
         if self.tabs != Tabs::new(self.cols) {
             // clear all tab stops
-            seq.push_str("\u{9b}5W");
+            funs.push(Function::Ctc(CtcOp::ClearAll));
 
             // set each tab stop
             for t in &self.tabs {
-                seq.push_str(&format!("\u{9b}{}`\u{1b}[W", t + 1));
+                funs.push(Function::Cha(as_u16(t + 1)));
+                funs.push(Function::Ctc(CtcOp::Set));
             }
         }
 
@@ -1319,54 +1322,53 @@ impl Terminal {
         if !primary_ctx.is_default() {
             if !primary_ctx.auto_wrap_mode {
                 // disable auto-wrap mode
-                seq.push_str("\u{9b}?7l");
+                funs.push(Function::Decrst(vec![DecMode::AutoWrap]));
             }
 
             if primary_ctx.origin_mode {
                 // enable origin mode
-                seq.push_str("\u{9b}?6h");
+                funs.push(Function::Decset(vec![DecMode::Origin]));
             }
 
             // fix cursor in target position
-            seq.push_str(&format!(
-                "\u{9b}{};{}H",
-                primary_ctx.cursor_row + 1,
-                primary_ctx.cursor_col + 1
+            funs.push(Function::Cup(
+                as_u16(primary_ctx.cursor_row + 1),
+                as_u16(primary_ctx.cursor_col + 1),
             ));
 
             // configure pen
-            seq.push_str(&primary_ctx.pen.dump());
+            funs.push(to_sgr(&primary_ctx.pen));
 
             // save cursor
-            seq.push_str("\u{1b}7");
+            funs.push(Function::Decsc);
 
             if !primary_ctx.auto_wrap_mode {
                 // re-enable auto-wrap mode
-                seq.push_str("\u{9b}?7h");
+                funs.push(Function::Decset(vec![DecMode::AutoWrap]));
             }
 
             if primary_ctx.origin_mode {
                 // re-disable origin mode
-                seq.push_str("\u{9b}?6l");
+                funs.push(Function::Decrst(vec![DecMode::Origin]));
             }
         }
 
         // prevent pen bleed into alt screen buffer
-        seq.push_str("\u{1b}[m");
+        funs.push(to_sgr(&Pen::default()));
 
         // 4. dump alternate screen buffer
 
         // switch to alternate screen
         if self.active_buffer_type == BufferType::Alternate || !alternate_ctx.is_default() {
-            seq.push_str("\u{9b}?1047h");
+            funs.push(Function::Decset(vec![DecMode::AltScreenBuffer]));
         }
 
         if self.active_buffer_type == BufferType::Alternate {
             // move cursor home
-            seq.push_str("\u{9b}1;1H");
+            funs.push(Function::Cup(1, 1));
 
             // dump alternate buffer
-            seq.push_str(&self.alternate_buffer().dump());
+            dump_buffer(self.alternate_buffer(), &mut funs);
         }
 
         // 5. configure saved context for alternate screen
@@ -1374,35 +1376,34 @@ impl Terminal {
         if !alternate_ctx.is_default() {
             if !alternate_ctx.auto_wrap_mode {
                 // disable auto-wrap mode
-                seq.push_str("\u{9b}?7l");
+                funs.push(Function::Decrst(vec![DecMode::AutoWrap]));
             }
 
             if alternate_ctx.origin_mode {
                 // enable origin mode
-                seq.push_str("\u{9b}?6h");
+                funs.push(Function::Decset(vec![DecMode::Origin]));
             }
 
             // fix cursor in target position
-            seq.push_str(&format!(
-                "\u{9b}{};{}H",
-                alternate_ctx.cursor_row + 1,
-                alternate_ctx.cursor_col + 1
+            funs.push(Function::Cup(
+                as_u16(alternate_ctx.cursor_row + 1),
+                as_u16(alternate_ctx.cursor_col + 1),
             ));
 
             // configure pen
-            seq.push_str(&alternate_ctx.pen.dump());
+            funs.push(to_sgr(&alternate_ctx.pen));
 
             // save cursor
-            seq.push_str("\u{1b}7");
+            funs.push(Function::Decsc);
 
             if !alternate_ctx.auto_wrap_mode {
                 // re-enable auto-wrap mode
-                seq.push_str("\u{9b}?7h");
+                funs.push(Function::Decset(vec![DecMode::AutoWrap]));
             }
 
             if alternate_ctx.origin_mode {
                 // re-disable origin mode
-                seq.push_str("\u{9b}?6l");
+                funs.push(Function::Decrst(vec![DecMode::Origin]));
             }
         }
 
@@ -1410,7 +1411,7 @@ impl Terminal {
 
         if self.active_buffer_type == BufferType::Primary && !alternate_ctx.is_default() {
             // switch back to primary screen
-            seq.push_str("\u{9b}?1047l");
+            funs.push(Function::Decrst(vec![DecMode::AltScreenBuffer]));
         }
 
         // 7. setup origin mode
@@ -1418,17 +1419,16 @@ impl Terminal {
         if self.origin_mode {
             // enable origin mode
             // note: this resets cursor position - must be done before fixing cursor
-            seq.push_str("\u{9b}?6h");
+            funs.push(Function::Decset(vec![DecMode::Origin]));
         }
 
         // 8. setup margins
 
         // note: this resets cursor position - must be done before fixing cursor
         if self.top_margin > 0 || self.bottom_margin < self.rows - 1 {
-            seq.push_str(&format!(
-                "\u{9b}{};{}r",
-                self.top_margin + 1,
-                self.bottom_margin + 1
+            funs.push(Function::Decstbm(
+                as_u16(self.top_margin + 1),
+                as_u16(self.bottom_margin + 1),
             ));
         }
 
@@ -1442,17 +1442,17 @@ impl Terminal {
                 // bring cursor outside scroll region by restoring saved cursor
                 // and moving it to desired position via CSI A/B/C/D
 
-                seq.push_str("\u{9b}u");
+                funs.push(Function::Scorc);
 
                 match col.cmp(&self.saved_ctx.cursor_col) {
                     Ordering::Less => {
                         let n = self.saved_ctx.cursor_col - col;
-                        seq.push_str(&format!("\u{9b}{n}D"));
+                        funs.push(Function::Cub(as_u16(n)));
                     }
 
                     Ordering::Greater => {
                         let n = col - self.saved_ctx.cursor_col;
-                        seq.push_str(&format!("\u{9b}{n}C"));
+                        funs.push(Function::Cuf(as_u16(n)));
                     }
 
                     Ordering::Equal => (),
@@ -1461,22 +1461,22 @@ impl Terminal {
                 match row.cmp(&self.saved_ctx.cursor_row) {
                     Ordering::Less => {
                         let n = self.saved_ctx.cursor_row - row;
-                        seq.push_str(&format!("\u{9b}{n}A"));
+                        funs.push(Function::Cuu(as_u16(n)));
                     }
 
                     Ordering::Greater => {
                         let n = row - self.saved_ctx.cursor_row;
-                        seq.push_str(&format!("\u{9b}{n}B"));
+                        funs.push(Function::Cud(as_u16(n)));
                     }
 
                     Ordering::Equal => (),
                 }
             } else {
                 row -= self.top_margin;
-                seq.push_str(&format!("\u{9b}{};{}H", row + 1, col + 1));
+                funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
             }
         } else {
-            seq.push_str(&format!("\u{9b}{};{}H", row + 1, col + 1));
+            funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
         }
 
         if self.cursor.col >= self.cols {
@@ -1486,24 +1486,23 @@ impl Terminal {
             let width = last_cell.width();
 
             if width == 1 {
-                seq.push_str(&format!("{}{}", last_cell.pen().dump(), last_cell.char()));
+                funs.push(to_sgr(last_cell.pen()));
+                funs.push(Function::Print(last_cell.char()));
             } else if width == 0 {
                 let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
 
-                seq.push_str(&format!(
-                    "\u{9b}D{}{}", // move cursor back
-                    prev_cell.pen().dump(),
-                    prev_cell.char()
-                ));
+                funs.push(Function::Cub(1));
+                funs.push(to_sgr(prev_cell.pen()));
+                funs.push(Function::Print(prev_cell.char()));
             }
         }
 
         // configure pen
-        seq.push_str(&self.pen.dump());
+        funs.push(to_sgr(&self.pen));
 
         if !self.cursor.visible {
             // hide cursor
-            seq.push_str("\u{9b}?25l");
+            funs.push(Function::Decrst(vec![DecMode::TextCursorEnable]));
         }
 
         // Following 3 steps must happen after ALL prints as they alter print behaviour,
@@ -1513,49 +1512,150 @@ impl Terminal {
 
         if self.charsets[0] == Charset::Drawing {
             // put drawing charset into G0 slot
-            seq.push_str("\u{1b}(0");
+            funs.push(Function::Gzd4(Charset::Drawing));
         }
 
         if self.charsets[1] == Charset::Drawing {
             // put drawing charset into G1 slot
-            seq.push_str("\u{1b})0");
+            funs.push(Function::G1d4(Charset::Drawing));
         }
 
         if self.active_charset == 1 {
             // shift-out: point GL to G1 slot
-            seq.push('\u{0e}');
+            funs.push(Function::So);
         }
 
         // 11. setup insert mode
 
         if self.insert_mode {
             // enable insert mode
-            seq.push_str("\u{9b}4h");
+            funs.push(Function::Sm(vec![AnsiMode::Insert]));
         }
 
         // 12. setup auto-wrap mode
 
         if !self.auto_wrap_mode {
             // disable auto-wrap mode
-            seq.push_str("\u{9b}?7l");
+            funs.push(Function::Decrst(vec![DecMode::AutoWrap]));
         }
 
         // 13. setup new line mode
 
         if self.new_line_mode {
             // enable new line mode
-            seq.push_str("\u{9b}20h");
+            funs.push(Function::Sm(vec![AnsiMode::NewLine]));
         }
 
         // 14. setup cursor key mode
 
         if self.cursor_keys_mode == CursorKeysMode::Application {
-            // enable new line mode
-            seq.push_str("\u{9b}?1h");
+            funs.push(Function::Decset(vec![DecMode::CursorKeys]));
         }
 
-        seq
+        funs
     }
+}
+
+fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
+    let mut cutoff = 0;
+    let mut wrapped = false;
+
+    for (i, line) in buffer.view().enumerate() {
+        if wrapped || line.wrapped || !line.is_blank() {
+            cutoff = i + 1;
+        }
+
+        wrapped = line.wrapped;
+    }
+
+    let last = buffer.rows - 1;
+    let mut pen = Pen::default();
+
+    for (i, line) in buffer.view().take(cutoff).enumerate() {
+        for cells in line.chunks(|c1, c2| c1.pen() != c2.pen()) {
+            if cells[0].pen() != &pen {
+                funs.push(to_sgr(cells[0].pen()));
+                pen = *cells[0].pen();
+            }
+
+            dump_cells(&cells, funs);
+        }
+
+        if i < last && !line.wrapped {
+            funs.push(Function::Cr);
+            funs.push(Function::Lf);
+        }
+    }
+}
+
+fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
+    let mut i = 0;
+
+    while i < cells.len() {
+        let ch = cells[i].char();
+        let mut run_len = 1;
+
+        while i + run_len < cells.len() && cells[i + run_len].char() == ch {
+            run_len += 1;
+        }
+
+        if run_len > 5 {
+            funs.push(Function::Print(ch));
+            funs.push(Function::Rep(as_u16(run_len - 1)));
+        } else {
+            for _ in 0..run_len {
+                funs.push(Function::Print(ch));
+            }
+        }
+
+        i += run_len;
+    }
+}
+
+fn to_sgr(pen: &Pen) -> Function {
+    let mut ops = vec![SgrOp::Reset];
+
+    if let Some(color) = pen.foreground() {
+        ops.push(SgrOp::SetForegroundColor(color));
+    }
+
+    if let Some(color) = pen.background() {
+        ops.push(SgrOp::SetBackgroundColor(color));
+    }
+
+    match pen.intensity {
+        Intensity::Normal => {}
+        Intensity::Bold => ops.push(SgrOp::SetBoldIntensity),
+        Intensity::Faint => ops.push(SgrOp::SetFaintIntensity),
+    }
+
+    if pen.is_italic() {
+        ops.push(SgrOp::SetItalic);
+    }
+
+    if pen.is_underline() {
+        ops.push(SgrOp::SetUnderline);
+    }
+
+    if pen.is_blink() {
+        ops.push(SgrOp::SetBlink);
+    }
+
+    if pen.is_inverse() {
+        ops.push(SgrOp::SetInverse);
+    }
+
+    if pen.is_strikethrough() {
+        ops.push(SgrOp::SetStrikethrough);
+    }
+
+    Function::Sgr(ops)
+}
+
+fn as_u16(value: usize) -> u16 {
+    value
+        .try_into()
+        .expect("terminal dump parameter exceeds u16 range")
 }
 
 fn as_usize(value: u16, default: usize) -> usize {
@@ -2056,6 +2156,17 @@ mod tests {
         term.execute(Rep(3));
 
         assert_eq!(text(&term), " ハハハ|\n");
+    }
+
+    #[test]
+    fn dump_uses_rep_for_wide_char_runs() {
+        let mut term = build_term(20, 2, 0, 0, "");
+
+        feed(&mut term, "ハハハハハハ");
+
+        let funs = term.dump();
+
+        assert_eq!(funs[..2], [Print('ハ'), Rep(5)]);
     }
 
     #[test]

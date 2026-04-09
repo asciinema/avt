@@ -747,6 +747,282 @@ impl Parser {
     }
 }
 
+pub(crate) fn dump(funs: &[Function]) -> String {
+    let mut seq = String::new();
+
+    for fun in funs {
+        dump_function(&mut seq, fun);
+    }
+
+    seq
+}
+
+pub(crate) fn dump_sgr_color(color: Color, base: u8) -> String {
+    match color {
+        Color::Indexed(c) if c < 8 => (base + c).to_string(),
+        Color::Indexed(c) if c < 16 => (base + 52 + c).to_string(),
+        Color::Indexed(c) => format!("{}:5:{}", base + 8, c),
+        Color::RGB(c) => format!("{}:2:{}:{}:{}", base + 8, c.r, c.g, c.b),
+    }
+}
+
+fn dump_function(seq: &mut String, fun: &Function) {
+    use AnsiMode::*;
+    use CtcOp::*;
+    use DecMode::*;
+    use EdScope::*;
+    use ElScope::*;
+    use Function::*;
+    use SgrOp::*;
+    use TbcScope::*;
+    use XtwinopsOp::*;
+
+    match fun {
+        Bs => seq.push('\u{08}'),
+        Cbt(n) => push_csi(seq, None, &[n.to_string()], 'Z'),
+        Cha(n) => push_csi(seq, None, &[n.to_string()], 'G'),
+        Cht(n) => push_csi(seq, None, &[n.to_string()], 'I'),
+        Cnl(n) => push_csi(seq, None, &[n.to_string()], 'E'),
+        Cpl(n) => push_csi(seq, None, &[n.to_string()], 'F'),
+        Cr => seq.push('\r'),
+
+        Ctc(op) => {
+            let param = match op {
+                Set => 0,
+                ClearCurrentColumn => 2,
+                ClearAll => 5,
+            };
+
+            push_csi(seq, None, &[param.to_string()], 'W');
+        }
+
+        Cub(n) => push_csi(seq, None, &[n.to_string()], 'D'),
+        Cud(n) => push_csi(seq, None, &[n.to_string()], 'B'),
+        Cuf(n) => push_csi(seq, None, &[n.to_string()], 'C'),
+        Cup(row, col) => push_csi(seq, None, &[row.to_string(), col.to_string()], 'H'),
+        Cuu(n) => push_csi(seq, None, &[n.to_string()], 'A'),
+        Dch(n) => push_csi(seq, None, &[n.to_string()], 'P'),
+        Decaln => push_esc(seq, Some('#'), '8'),
+        Decrc => push_esc(seq, None, '8'),
+
+        Decrst(modes) => {
+            let params = modes
+                .iter()
+                .map(|mode| match mode {
+                    CursorKeys => 1,
+                    Origin => 6,
+                    AutoWrap => 7,
+                    TextCursorEnable => 25,
+                    AltScreenBuffer => 1047,
+                    SaveCursor => 1048,
+                    SaveCursorAltScreenBuffer => 1049,
+                })
+                .map(|param| param.to_string())
+                .collect::<Vec<_>>();
+
+            push_csi(seq, Some('?'), &params, 'l');
+        }
+
+        Decsc => push_esc(seq, None, '7'),
+
+        Decset(modes) => {
+            let params = modes
+                .iter()
+                .map(|mode| match mode {
+                    CursorKeys => 1,
+                    Origin => 6,
+                    AutoWrap => 7,
+                    TextCursorEnable => 25,
+                    AltScreenBuffer => 1047,
+                    SaveCursor => 1048,
+                    SaveCursorAltScreenBuffer => 1049,
+                })
+                .map(|param| param.to_string())
+                .collect::<Vec<_>>();
+
+            push_csi(seq, Some('?'), &params, 'h');
+        }
+
+        Decstbm(top, bottom) => {
+            push_csi(seq, None, &[top.to_string(), bottom.to_string()], 'r');
+        }
+
+        Decstr => push_csi(seq, Some('!'), &[], 'p'),
+        Dl(n) => push_csi(seq, None, &[n.to_string()], 'M'),
+        Ech(n) => push_csi(seq, None, &[n.to_string()], 'X'),
+
+        Ed(scope) => {
+            let param = match scope {
+                Below => 0,
+                Above => 1,
+                EdScope::All => 2,
+                SavedLines => 3,
+            };
+
+            push_csi(seq, None, &[param.to_string()], 'J');
+        }
+
+        El(scope) => {
+            let param = match scope {
+                ToRight => 0,
+                ToLeft => 1,
+                ElScope::All => 2,
+            };
+
+            push_csi(seq, None, &[param.to_string()], 'K');
+        }
+
+        G1d4(charset) => push_esc(
+            seq,
+            Some(')'),
+            match charset {
+                Charset::Drawing => '0',
+                Charset::Ascii => 'B',
+            },
+        ),
+
+        Gzd4(charset) => push_esc(
+            seq,
+            Some('('),
+            match charset {
+                Charset::Drawing => '0',
+                Charset::Ascii => 'B',
+            },
+        ),
+
+        Ht => seq.push('\t'),
+        Hts => push_esc(seq, None, 'H'),
+        Ich(n) => push_csi(seq, None, &[n.to_string()], '@'),
+        Il(n) => push_csi(seq, None, &[n.to_string()], 'L'),
+        Lf => seq.push('\n'),
+        Nel => push_esc(seq, None, 'E'),
+        Print(ch) => seq.push(*ch),
+        Rep(n) => push_csi(seq, None, &[n.to_string()], 'b'),
+        Ri => push_esc(seq, None, 'M'),
+        Ris => push_esc(seq, None, 'c'),
+
+        Rm(modes) => {
+            let params = modes
+                .iter()
+                .map(|mode| match mode {
+                    Insert => 4,
+                    NewLine => 20,
+                })
+                .map(|param| param.to_string())
+                .collect::<Vec<_>>();
+
+            push_csi(seq, None, &params, 'l');
+        }
+
+        Scorc => push_csi(seq, None, &[], 'u'),
+        Scosc => push_csi(seq, None, &[], 's'),
+        Sd(n) => push_csi(seq, None, &[n.to_string()], 'T'),
+
+        Sgr(ops) => {
+            if ops.is_empty() {
+                // `CSI m` roundtrips to `Sgr([Reset])`, so we need a syntactically
+                // valid but semantically incomplete SGR sequence for `Sgr([])`.
+                seq.push_str("\x1b[38;2m");
+            } else {
+                let params = ops
+                    .iter()
+                    .map(|op| match op {
+                        Reset => "0".to_owned(),
+                        SetBoldIntensity => "1".to_owned(),
+                        SetFaintIntensity => "2".to_owned(),
+                        SetItalic => "3".to_owned(),
+                        SetUnderline => "4".to_owned(),
+                        SetBlink => "5".to_owned(),
+                        SetInverse => "7".to_owned(),
+                        SetStrikethrough => "9".to_owned(),
+                        ResetIntensity => "22".to_owned(),
+                        ResetItalic => "23".to_owned(),
+                        ResetUnderline => "24".to_owned(),
+                        ResetBlink => "25".to_owned(),
+                        ResetInverse => "27".to_owned(),
+                        ResetStrikethrough => "29".to_owned(),
+                        SetForegroundColor(color) => dump_sgr_color(*color, 30),
+                        ResetForegroundColor => "39".to_owned(),
+                        SetBackgroundColor(color) => dump_sgr_color(*color, 40),
+                        ResetBackgroundColor => "49".to_owned(),
+                    })
+                    .collect::<Vec<_>>();
+
+                push_csi(seq, None, &params, 'm');
+            }
+        }
+
+        Si => seq.push('\u{0f}'),
+
+        Sm(modes) => {
+            let params = modes
+                .iter()
+                .map(|mode| match mode {
+                    Insert => 4,
+                    NewLine => 20,
+                })
+                .map(|param| param.to_string())
+                .collect::<Vec<_>>();
+
+            push_csi(seq, None, &params, 'h');
+        }
+
+        So => seq.push('\u{0e}'),
+        Su(n) => push_csi(seq, None, &[n.to_string()], 'S'),
+
+        Tbc(scope) => {
+            let param = match scope {
+                CurrentColumn => 0,
+                TbcScope::All => 3,
+            };
+
+            push_csi(seq, None, &[param.to_string()], 'g');
+        }
+
+        Vpa(n) => push_csi(seq, None, &[n.to_string()], 'd'),
+        Vpr(n) => push_csi(seq, None, &[n.to_string()], 'e'),
+
+        Xtwinops(Resize(cols, rows)) => {
+            push_csi(
+                seq,
+                None,
+                &["8".to_owned(), rows.to_string(), cols.to_string()],
+                't',
+            );
+        }
+    }
+}
+
+fn push_esc(seq: &mut String, intermediate: Option<char>, final_char: char) {
+    seq.push('\u{1b}');
+
+    if let Some(intermediate) = intermediate {
+        seq.push(intermediate);
+    }
+
+    seq.push(final_char);
+}
+
+fn push_csi(seq: &mut String, intermediate: Option<char>, params: &[String], final_char: char) {
+    seq.push('\u{1b}');
+    seq.push('[');
+
+    if let Some(intermediate) = intermediate {
+        seq.push(intermediate);
+    }
+
+    if let Some((first, rest)) = params.split_first() {
+        seq.push_str(first);
+
+        for param in rest {
+            seq.push(';');
+            seq.push_str(param);
+        }
+    }
+
+    seq.push(final_char);
+}
+
 fn ansi_mode(param: &Param) -> Option<AnsiMode> {
     use AnsiMode::*;
 
@@ -1117,7 +1393,6 @@ impl PartialEq<Vec<u16>> for Param {
 
 #[cfg(test)]
 mod tests {
-    use proptest::prelude::*;
     use super::AnsiMode;
     use super::CtcOp;
     use super::DecMode;
@@ -1132,6 +1407,7 @@ mod tests {
     use super::XtwinopsOp;
     use crate::charset::Charset;
     use crate::color::Color;
+    use proptest::prelude::*;
 
     fn parse(s: &str) -> Vec<Function> {
         let mut parser = Parser::new();
@@ -1161,12 +1437,12 @@ mod tests {
     fn gen_parser_char() -> impl Strategy<Value = char> {
         prop_oneof![
             prop::sample::select(vec![
-                '\x1b', '\x18', '\x1a', '\u{9b}', '\u{9c}', '\u{9d}', '\u{90}', '\u{98}',
-                '\u{9e}', '\u{9f}', '[', ']', 'P', 'X', '^', '_', '?', '!', ';', ':', ' ',
-                '#', '(', ')', '@', 'A', 'B', 'C', 'D', 'H', 'J', 'K', 'L', 'M', 'P', 'S',
-                'T', 'W', 'X', 'Z', '`', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'l', 'm', 'p',
-                'r', 's', 't', 'u', '0', '1', '2', '3', '4', '5', '6', '7', '8', '9',
-                '\x08', '\x09', '\x0a', '\x0d', '\x0e', '\x0f',
+                '\x1b', '\x18', '\x1a', '\u{9b}', '\u{9c}', '\u{9d}', '\u{90}', '\u{98}', '\u{9e}',
+                '\u{9f}', '[', ']', 'P', 'X', '^', '_', '?', '!', ';', ':', ' ', '#', '(', ')',
+                '@', 'A', 'B', 'C', 'D', 'H', 'J', 'K', 'L', 'M', 'P', 'S', 'T', 'W', 'X', 'Z',
+                '`', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'l', 'm', 'p', 'r', 's', 't', 'u', '0',
+                '1', '2', '3', '4', '5', '6', '7', '8', '9', '\x08', '\x09', '\x0a', '\x0d',
+                '\x0e', '\x0f',
             ]),
             (0x20u8..=0x7eu8).prop_map(|b| b as char),
             prop::sample::select(vec!['日', '▒', 'ハ']),
@@ -1555,6 +1831,115 @@ mod tests {
         }
 
         assert_eq!(parser.dump(), "\u{9b}0;1;0;38:2:1:2:3;0");
+    }
+
+    #[test]
+    fn dump_functions_roundtrip() {
+        let functions = vec![
+            Bs,
+            Cbt(2),
+            Cha(7),
+            Cht(8),
+            Cnl(5),
+            Cpl(6),
+            Cr,
+            Ctc(CtcOp::Set),
+            Ctc(CtcOp::ClearCurrentColumn),
+            Ctc(CtcOp::ClearAll),
+            Cub(4),
+            Cud(2),
+            Cuf(3),
+            Cup(3, 4),
+            Cuu(1),
+            Dch(18),
+            Decaln,
+            Decrc,
+            Decrst(vec![]),
+            Decrst(vec![
+                DecMode::CursorKeys,
+                DecMode::Origin,
+                DecMode::AutoWrap,
+                DecMode::TextCursorEnable,
+                DecMode::AltScreenBuffer,
+                DecMode::SaveCursor,
+                DecMode::SaveCursorAltScreenBuffer,
+            ]),
+            Decsc,
+            Decset(vec![]),
+            Decset(vec![
+                DecMode::CursorKeys,
+                DecMode::Origin,
+                DecMode::AutoWrap,
+                DecMode::TextCursorEnable,
+                DecMode::AltScreenBuffer,
+                DecMode::SaveCursor,
+                DecMode::SaveCursorAltScreenBuffer,
+            ]),
+            Decstbm(2, 5),
+            Decstr,
+            Dl(17),
+            Ech(21),
+            Ed(EdScope::Below),
+            Ed(EdScope::Above),
+            Ed(EdScope::All),
+            Ed(EdScope::SavedLines),
+            El(ElScope::ToRight),
+            El(ElScope::ToLeft),
+            El(ElScope::All),
+            G1d4(Charset::Drawing),
+            G1d4(Charset::Ascii),
+            Gzd4(Charset::Drawing),
+            Gzd4(Charset::Ascii),
+            Ht,
+            Hts,
+            Ich(16),
+            Il(16),
+            Lf,
+            Nel,
+            Print('A'),
+            Print('日'),
+            Rep(11),
+            Ri,
+            Ris,
+            Rm(vec![]),
+            Rm(vec![AnsiMode::Insert, AnsiMode::NewLine]),
+            Scorc,
+            Scosc,
+            Sd(20),
+            Sgr(vec![]),
+            Sgr(vec![
+                Reset,
+                SetBoldIntensity,
+                SetFaintIntensity,
+                SetItalic,
+                SetUnderline,
+                SetBlink,
+                SetInverse,
+                SetStrikethrough,
+                ResetIntensity,
+                ResetItalic,
+                ResetUnderline,
+                ResetBlink,
+                ResetInverse,
+                ResetStrikethrough,
+                SetForegroundColor(Color::Indexed(1)),
+                ResetForegroundColor,
+                SetBackgroundColor(Color::rgb(1, 2, 3)),
+                ResetBackgroundColor,
+            ]),
+            Si,
+            Sm(vec![]),
+            Sm(vec![AnsiMode::Insert, AnsiMode::NewLine]),
+            So,
+            Su(19),
+            Tbc(TbcScope::CurrentColumn),
+            Tbc(TbcScope::All),
+            Vpa(12),
+            Vpr(13),
+            Xtwinops(XtwinopsOp::Resize(80, 24)),
+        ];
+
+        assert_eq!(parse(&super::dump(&functions)), functions);
     }
 
     proptest! {

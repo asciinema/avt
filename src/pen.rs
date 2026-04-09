@@ -108,54 +108,6 @@ impl Pen {
             && !self.is_blink()
             && !self.is_inverse()
     }
-
-    pub(crate) fn dump(&self) -> String {
-        let mut s = "\x1b[0".to_owned();
-
-        if let Some(c) = self.foreground {
-            s.push_str(&format!(";{}", c.sgr_params(30)));
-        }
-
-        if let Some(c) = self.background {
-            s.push_str(&format!(";{}", c.sgr_params(40)));
-        }
-
-        match self.intensity {
-            Intensity::Normal => (),
-
-            Intensity::Bold => {
-                s.push_str(";1");
-            }
-
-            Intensity::Faint => {
-                s.push_str(";2");
-            }
-        }
-
-        if self.is_italic() {
-            s.push_str(";3");
-        }
-
-        if self.is_underline() {
-            s.push_str(";4");
-        }
-
-        if self.is_blink() {
-            s.push_str(";5");
-        }
-
-        if self.is_inverse() {
-            s.push_str(";7");
-        }
-
-        if self.is_strikethrough() {
-            s.push_str(";9");
-        }
-
-        s.push('m');
-
-        s
-    }
 }
 
 impl Default for Pen {

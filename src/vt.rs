@@ -1,5 +1,5 @@
 use crate::line::Line;
-use crate::parser::Parser;
+use crate::parser::{self, Parser};
 use crate::terminal::{Cursor, Terminal};
 
 #[derive(Debug)]
@@ -72,7 +72,9 @@ impl Vt {
     }
 
     pub fn dump(&self) -> String {
-        let mut seq = self.terminal.dump();
+        let funs = self.terminal.dump();
+        let mut seq = parser::dump(&funs);
+
         seq.push_str(&self.parser.dump());
 
         seq

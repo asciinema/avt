@@ -328,17 +328,7 @@ impl Line {
 
 impl std::fmt::Debug for Line {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let mut s = String::new();
-
-        for cells in self.chunks(|c1, c2| c1.pen() != c2.pen()) {
-            s.push_str(&cells[0].pen().dump());
-
-            for cell in cells {
-                if cell.width() > 0 {
-                    s.push(cell.char());
-                }
-            }
-        }
+        let mut s = self.text();
 
         if self.wrapped {
             s.push('⏎');
