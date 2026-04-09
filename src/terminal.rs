@@ -1574,7 +1574,10 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
     for (i, line) in buffer.view().take(cutoff).enumerate() {
         for cells in line.chunks(|c1, c2| c1.pen() != c2.pen()) {
             if cells[0].pen() != &pen {
-                funs.push(to_sgr(cells[0].pen()));
+                if let Some(sgr) = to_sgr_diff(&pen, cells[0].pen()) {
+                    funs.push(sgr);
+                }
+
                 pen = *cells[0].pen();
             }
 
@@ -1585,6 +1588,92 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
             funs.push(Function::Cr);
             funs.push(Function::Lf);
         }
+    }
+}
+
+fn to_sgr_diff(from: &Pen, to: &Pen) -> Option<Function> {
+    if from == to {
+        return None;
+    }
+
+    let full = to_sgr_ops(to);
+    let diff = to_sgr_diff_ops(from, to);
+    let ops = if diff.len() <= full.len() { diff } else { full };
+
+    Some(Function::Sgr(ops))
+}
+
+fn to_sgr_diff_ops(from: &Pen, to: &Pen) -> Vec<SgrOp> {
+    let mut ops = Vec::new();
+
+    if from.intensity != to.intensity {
+        match to.intensity {
+            Intensity::Normal => ops.push(SgrOp::ResetIntensity),
+            Intensity::Bold => ops.push(SgrOp::SetBoldIntensity),
+            Intensity::Faint => ops.push(SgrOp::SetFaintIntensity),
+        }
+    }
+
+    if from.foreground() != to.foreground() {
+        match to.foreground() {
+            Some(color) => ops.push(SgrOp::SetForegroundColor(color)),
+            None => ops.push(SgrOp::ResetForegroundColor),
+        }
+    }
+
+    if from.background() != to.background() {
+        match to.background() {
+            Some(color) => ops.push(SgrOp::SetBackgroundColor(color)),
+            None => ops.push(SgrOp::ResetBackgroundColor),
+        }
+    }
+
+    push_attr_diff(
+        &mut ops,
+        from.is_italic(),
+        to.is_italic(),
+        SgrOp::SetItalic,
+        SgrOp::ResetItalic,
+    );
+
+    push_attr_diff(
+        &mut ops,
+        from.is_underline(),
+        to.is_underline(),
+        SgrOp::SetUnderline,
+        SgrOp::ResetUnderline,
+    );
+
+    push_attr_diff(
+        &mut ops,
+        from.is_blink(),
+        to.is_blink(),
+        SgrOp::SetBlink,
+        SgrOp::ResetBlink,
+    );
+
+    push_attr_diff(
+        &mut ops,
+        from.is_inverse(),
+        to.is_inverse(),
+        SgrOp::SetInverse,
+        SgrOp::ResetInverse,
+    );
+
+    push_attr_diff(
+        &mut ops,
+        from.is_strikethrough(),
+        to.is_strikethrough(),
+        SgrOp::SetStrikethrough,
+        SgrOp::ResetStrikethrough,
+    );
+
+    ops
+}
+
+fn push_attr_diff(ops: &mut Vec<SgrOp>, from: bool, to: bool, set: SgrOp, reset: SgrOp) {
+    if from != to {
+        ops.push(if to { set } else { reset });
     }
 }
 
@@ -1613,6 +1702,10 @@ fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
 }
 
 fn to_sgr(pen: &Pen) -> Function {
+    Function::Sgr(to_sgr_ops(pen))
+}
+
+fn to_sgr_ops(pen: &Pen) -> Vec<SgrOp> {
     let mut ops = vec![SgrOp::Reset];
 
     if let Some(color) = pen.foreground() {
@@ -1649,7 +1742,7 @@ fn to_sgr(pen: &Pen) -> Function {
         ops.push(SgrOp::SetStrikethrough);
     }
 
-    Function::Sgr(ops)
+    ops
 }
 
 fn as_u16(value: usize) -> u16 {
@@ -1680,6 +1773,7 @@ mod tests {
     use crate::line::Line;
     use crate::parser::{AnsiMode, DecMode, EdScope, ElScope, Function, SgrOp};
     use crate::pen::Intensity;
+    use crate::pen::Pen;
     use Function::*;
     use SgrOp::*;
 
@@ -1756,6 +1850,12 @@ mod tests {
 
     fn sgr(op: SgrOp) -> Function {
         Sgr(vec![op])
+    }
+
+    fn pen(f: impl FnOnce(&mut Pen)) -> Pen {
+        let mut pen = Pen::default();
+        f(&mut pen);
+        pen
     }
 
     #[test]
@@ -2167,6 +2267,42 @@ mod tests {
         let funs = term.dump();
 
         assert_eq!(funs[..2], [Print('ハ'), Rep(5)]);
+    }
+
+    #[test]
+    fn sgr_diff_prefers_targeted_ops_on_tie() {
+        let from = pen(|pen| pen.intensity = Intensity::Bold);
+
+        assert_eq!(
+            super::to_sgr_diff(&from, &Pen::default()),
+            Some(sgr(ResetIntensity))
+        );
+    }
+
+    #[test]
+    fn sgr_diff_uses_full_reset_when_shorter() {
+        let from = pen(|pen| {
+            pen.intensity = Intensity::Bold;
+            pen.set_underline();
+        });
+
+        assert_eq!(super::to_sgr_diff(&from, &Pen::default()), Some(sgr(Reset)));
+    }
+
+    #[test]
+    fn sgr_diff_uses_targeted_sets_for_first_styled_chunk() {
+        let to = pen(|pen| {
+            pen.intensity = Intensity::Bold;
+            pen.foreground = Some(Color::Indexed(1));
+        });
+
+        assert_eq!(
+            super::to_sgr_diff(&Pen::default(), &to),
+            Some(Sgr(vec![
+                SetBoldIntensity,
+                SetForegroundColor(Color::Indexed(1))
+            ]))
+        );
     }
 
     #[test]
