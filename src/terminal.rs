@@ -1039,7 +1039,14 @@ impl Terminal {
     fn rep(&mut self, n: u16) {
         if self.cursor.col > 0 {
             let n = as_usize(n, 1);
-            let char = self.buffer[(self.cursor.col - 1, self.cursor.row)].char();
+            let row = self.cursor.row;
+            let mut col = self.cursor.col - 1;
+
+            while col > 0 && self.buffer[(col, row)].width() == 0 {
+                col -= 1;
+            }
+
+            let char = self.buffer[(col, row)].char();
 
             for _n in 0..n {
                 self.print(char);
@@ -2028,6 +2035,27 @@ mod tests {
         term.execute(Rep(0));
 
         assert_eq!(text(&term), "AAAAA      |\n");
+    }
+
+    #[test]
+    fn execute_rep_after_wide_char() {
+        let mut term = build_term(20, 2, 0, 0, "");
+
+        term.execute(Print('ハ'));
+        term.execute(Rep(3));
+
+        assert_eq!(text(&term), "ハハハハ|\n");
+    }
+
+    #[test]
+    fn execute_rep_after_moving_into_wide_char_tail() {
+        let mut term = build_term(20, 2, 0, 0, "");
+
+        term.execute(Print('ハ'));
+        term.execute(Cub(1));
+        term.execute(Rep(3));
+
+        assert_eq!(text(&term), " ハハハ|\n");
     }
 
     #[test]
