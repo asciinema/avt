@@ -39,7 +39,7 @@ impl Line {
         }
     }
 
-    pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) -> usize {
+    pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
         let cell_width = self.cells[col].width();
         let char_width = self.char_display_width(ch);
         let remaining_cols = self.len() as isize - 1 - col as isize;
@@ -51,7 +51,7 @@ impl Line {
 
             (1, 2, 0) => {
                 self.cells[col].set(' ', 1, pen);
-                return 0;
+                return None;
             }
 
             (1, 2, 1) => {
@@ -99,7 +99,7 @@ impl Line {
                 debug_assert!(col > 0);
                 debug_assert!(self.cells[col - 1].width() == 2);
 
-                return 0;
+                return None;
             }
 
             (0, 2, 1) => {
@@ -107,7 +107,7 @@ impl Line {
                 debug_assert!(self.cells[col - 1].width() == 2);
 
                 self.cells[col + 1].set(' ', 1, pen);
-                return 0;
+                return None;
             }
 
             (0, 2, _right) => {
@@ -129,7 +129,7 @@ impl Line {
             }
         }
 
-        char_width
+        Some(char_width)
     }
 
     pub(crate) fn shift_right(&mut self, col: usize, n: usize, pen: Pen) {

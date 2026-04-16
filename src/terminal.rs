@@ -711,10 +711,10 @@ impl Terminal {
             self.buffer
                 .print((self.cursor.col, self.cursor.row), ch, self.pen)
         } else {
-            0
+            None
         };
 
-        if n > 0 {
+        if let Some(n) = n {
             self.cursor.col += n;
 
             if self.cursor.col == self.cols && !self.auto_wrap_mode {
@@ -729,13 +729,16 @@ impl Terminal {
                 self.cursor.row += 1;
             }
 
-            self.cursor.col = self.buffer.print((0, self.cursor.row), ch, self.pen);
+            self.cursor.col = self
+                .buffer
+                .print((0, self.cursor.row), ch, self.pen)
+                .unwrap();
         } else {
             let n = self
                 .buffer
                 .print((self.cursor.col - 1, self.cursor.row), ch, self.pen);
 
-            if n == 0 {
+            if n.is_none() {
                 self.buffer
                     .print((self.cursor.col - 2, self.cursor.row), ch, self.pen);
             }

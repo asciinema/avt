@@ -81,7 +81,7 @@ impl Buffer {
         text
     }
 
-    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> usize {
+    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> Option<usize> {
         self[row].print(col, ch, pen)
     }
 
