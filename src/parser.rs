@@ -424,7 +424,38 @@ impl Parser {
                 self.state = DcsIgnore;
             }
 
-            _ => {}
+            // DEL (0x7F) is ignored in all states except Ground and OscString
+            (Escape | EscapeIntermediate
+            | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore
+            | DcsEntry | DcsParam | DcsIntermediate | DcsPassthrough | DcsIgnore
+            | SosPmApcString, '\u{7f}')
+
+            // CsiIgnore: params and intermediates range ignored
+            | (CsiIgnore, '\u{20}'..='\u{3f}')
+
+            // C0 controls ignored in DCS entry/param/intermediate
+            | (DcsEntry | DcsParam | DcsIntermediate, '\u{00}'..='\u{17}')
+            | (DcsEntry | DcsParam | DcsIntermediate, '\u{19}')
+            | (DcsEntry | DcsParam | DcsIntermediate, '\u{1c}'..='\u{1f}')
+
+            // C0 controls and printable range ignored in DcsIgnore and SosPmApcString
+            | (DcsIgnore | SosPmApcString, '\u{00}'..='\u{17}')
+            | (DcsIgnore | SosPmApcString, '\u{19}')
+            | (DcsIgnore | SosPmApcString, '\u{1c}'..='\u{7e}')
+
+            // Some C0 controls ignored in OscString (0x07 handled above as xterm ST)
+            | (OscString, '\u{00}'..='\u{06}')
+            | (OscString, '\u{08}'..='\u{17}')
+            | (OscString, '\u{19}')
+            | (OscString, '\u{1c}'..='\u{1f}') => {}
+
+            // input2 is always < 0xA0 due to the mapping above
+            (Ground | Escape | EscapeIntermediate
+            | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore
+            | DcsEntry | DcsParam | DcsIntermediate | DcsPassthrough | DcsIgnore
+            | OscString | SosPmApcString, '\u{a0}'..='\u{10ffff}') => {
+                unreachable!()
+            }
         }
 
         None
