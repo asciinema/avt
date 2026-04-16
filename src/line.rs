@@ -33,6 +33,12 @@ impl Line {
         }
     }
 
+    pub(crate) fn reset(&mut self, cols: usize, pen: Pen) {
+        self.cells.clear();
+        self.cells.resize(cols, Cell::blank(pen));
+        self.wrapped = false;
+    }
+
     pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
         if range.start == self.len() {
             return;

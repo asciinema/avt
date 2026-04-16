@@ -338,14 +338,14 @@ impl Buffer {
     }
 
     fn clear(&mut self, range: Range<usize>, pen: &Pen) {
-        let template = Line::blank(self.cols, *pen);
+        let cols = self.cols;
         let offset = self.view_offset();
 
         for line in self
             .lines
             .range_mut(offset + range.start..offset + range.end)
         {
-            *line = template.clone();
+            line.reset(cols, *pen);
         }
     }
 
