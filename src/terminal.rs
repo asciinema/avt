@@ -4,7 +4,7 @@ mod dirty_lines;
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
-use crate::cell::Cell;
+use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
@@ -656,13 +656,13 @@ impl Terminal {
 
         for line in self.lines() {
             for i in 0..self.cols {
-                let width = line[i].width();
+                let occupancy = line[i].occupancy();
 
-                if width == 0 {
+                if occupancy == Occupancy::WideTail {
                     assert!(i > 0);
-                    assert!(line[i - 1].width() == 2);
-                } else if width == 2 {
-                    assert!(line[i + 1].width() == 0, "{:?}", line);
+                    assert!(line[i - 1].occupancy() == Occupancy::WideHead);
+                } else if occupancy == Occupancy::WideHead {
+                    assert!(line[i + 1].occupancy() == Occupancy::WideTail, "{:?}", line);
                 }
             }
         }
@@ -1046,7 +1046,7 @@ impl Terminal {
             let row = self.cursor.row;
             let mut col = self.cursor.col - 1;
 
-            while col > 0 && self.buffer[(col, row)].width() == 0 {
+            while col > 0 && self.buffer[(col, row)].occupancy() == Occupancy::WideTail {
                 col -= 1;
             }
 
@@ -1486,12 +1486,12 @@ impl Terminal {
             // move cursor past the right border by re-printing the character in
             // the last column
             let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
-            let width = last_cell.width();
+            let occupancy = last_cell.occupancy();
 
-            if width == 1 {
+            if occupancy == Occupancy::Single {
                 funs.push(to_sgr(last_cell.pen()));
                 funs.push(Function::Print(last_cell.char()));
-            } else if width == 0 {
+            } else if occupancy == Occupancy::WideTail {
                 let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
 
                 funs.push(Function::Cub(1));
@@ -1770,7 +1770,7 @@ impl Default for Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::{BufferType, Terminal};
+    use super::{BufferType, Occupancy, Terminal};
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
@@ -1816,7 +1816,11 @@ mod tests {
         let cursor_line = view.next().unwrap();
         let mut offset = 0;
         let mut line = String::new();
-        let mut cells = cursor_line.cells().iter().filter(|c| c.width() > 0);
+
+        let mut cells = cursor_line
+            .cells()
+            .iter()
+            .filter(|c| c.occupancy() != Occupancy::WideTail);
 
         for cell in cells.by_ref() {
             let width = cell.width() as usize;
