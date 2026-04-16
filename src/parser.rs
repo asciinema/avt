@@ -77,7 +77,7 @@ pub enum Function {
     Scorc,
     Scosc,
     Sd(u16),
-    Sgr(Vec<SgrOp>),
+    Sgr(SgrOps),
     Si,
     Sm(Vec<AnsiMode>),
     So,
@@ -160,6 +160,92 @@ pub enum TbcScope {
 #[derive(Debug, PartialEq)]
 pub enum XtwinopsOp {
     Resize(u16, u16),
+}
+
+/// Number of SgrOp values that fit inline without heap allocation.
+pub const SGR_OPS_INLINE_CAP: usize = 4;
+
+/// Small-buffer-optimized collection of SgrOp values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SgrOps(SgrOpsStorage);
+
+#[derive(Debug, Clone, PartialEq)]
+enum SgrOpsStorage {
+    Inline {
+        ops: [SgrOp; SGR_OPS_INLINE_CAP],
+        len: u8,
+    },
+    Heap(Vec<SgrOp>),
+}
+
+impl SgrOps {
+    pub(crate) fn new() -> Self {
+        Self(SgrOpsStorage::Inline {
+            ops: [SgrOp::Reset; SGR_OPS_INLINE_CAP],
+            len: 0,
+        })
+    }
+
+    pub(crate) fn collect<I: IntoIterator<Item = SgrOp>>(iter: I) -> Self {
+        let mut ops = Self::new();
+
+        for op in iter {
+            ops.push(op);
+        }
+
+        ops
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        match &self.0 {
+            SgrOpsStorage::Inline { len, .. } => *len as usize,
+            SgrOpsStorage::Heap(v) => v.len(),
+        }
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn as_slice(&self) -> &[SgrOp] {
+        match &self.0 {
+            SgrOpsStorage::Inline { ops, len } => &ops[..*len as usize],
+            SgrOpsStorage::Heap(v) => v.as_slice(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, op: SgrOp) {
+        match &mut self.0 {
+            SgrOpsStorage::Inline { ops, len } => {
+                if (*len as usize) < SGR_OPS_INLINE_CAP {
+                    ops[*len as usize] = op;
+                    *len += 1;
+                } else {
+                    let mut v = Vec::with_capacity(SGR_OPS_INLINE_CAP * 2);
+                    v.extend_from_slice(ops);
+                    v.push(op);
+                    self.0 = SgrOpsStorage::Heap(v);
+                }
+            }
+            SgrOpsStorage::Heap(v) => v.push(op),
+        }
+    }
+}
+
+impl From<Vec<SgrOp>> for SgrOps {
+    fn from(v: Vec<SgrOp>) -> Self {
+        if v.len() <= SGR_OPS_INLINE_CAP {
+            Self::collect(v)
+        } else {
+            Self(SgrOpsStorage::Heap(v))
+        }
+    }
+}
+
+impl From<&[SgrOp]> for SgrOps {
+    fn from(v: &[SgrOp]) -> Self {
+        Self::collect(v.iter().copied())
+    }
 }
 
 impl Parser {
@@ -550,10 +636,9 @@ impl Parser {
                 .filter_map(ansi_mode)
                 .collect())),
 
-            (None, 'm') => Some(Sgr(SgrOps {
+            (None, 'm') => Some(Sgr(SgrOps::collect(SgrOpsDecoder {
                 ps: &ps[..=self.cur_param],
-            }
-            .collect())),
+            }))),
 
             (None, 'r') => Some(Decstbm(ps[0].as_u16(), ps[1].as_u16())),
 
@@ -879,6 +964,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
                 seq.push_str("\x1b[38;2m");
             } else {
                 let params = ops
+                    .as_slice()
                     .iter()
                     .map(|op| match op {
                         Reset => "0".to_owned(),
@@ -987,11 +1073,11 @@ fn ansi_mode(param: &Param) -> Option<AnsiMode> {
     }
 }
 
-struct SgrOps<'a> {
+struct SgrOpsDecoder<'a> {
     ps: &'a [Param],
 }
 
-impl<'a> Iterator for SgrOps<'a> {
+impl<'a> Iterator for SgrOpsDecoder<'a> {
     type Item = SgrOp;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -1356,6 +1442,7 @@ mod tests {
     use super::Function::*;
     use super::Parser;
     use super::SgrOp::*;
+    use super::SgrOps;
     use super::State;
     use super::TbcScope;
     use super::XtwinopsOp;
@@ -1377,6 +1464,10 @@ mod tests {
         for ch in s.chars() {
             assert_eq!(parser.feed(ch), None);
         }
+    }
+
+    fn sgr_ops<const N: usize>(ops: [super::SgrOp; N]) -> SgrOps {
+        SgrOps::from(&ops[..])
     }
 
     fn assert_dump(input: &str, state: State, dump: &str) {
@@ -1535,7 +1626,7 @@ mod tests {
             parse("\x1b[4;20l"),
             [Rm(vec![AnsiMode::Insert, AnsiMode::NewLine])]
         );
-        assert_eq!(parse("\x1b[m"), [Sgr(vec![Reset])]);
+        assert_eq!(parse("\x1b[m"), [Sgr(sgr_ops([Reset]))]);
         assert_eq!(parse("\x1b[2;5r"), [Decstbm(2, 5)]);
         assert_eq!(
             parse("\x1b[8;24;80t"),
@@ -1632,106 +1723,106 @@ mod tests {
         assert_eq!(parse("\x1b[ 1H"), []);
         assert_eq!(parse("\x1b[ 1m"), []);
         assert_eq!(parse("\x1b[1 q"), []);
-        assert_eq!(parse("\x1b[38;2m"), [Sgr(vec![])]);
-        assert_eq!(parse("\x1b[48;5m"), [Sgr(vec![])]);
+        assert_eq!(parse("\x1b[38;2m"), [Sgr(sgr_ops([]))]);
+        assert_eq!(parse("\x1b[48;5m"), [Sgr(sgr_ops([]))]);
     }
 
     #[test]
     fn parse_sgr_seq() {
         assert_eq!(
             parse("\x1b[;1;m"),
-            [Sgr(vec![Reset, SetBoldIntensity, Reset])]
+            [Sgr(sgr_ops([Reset, SetBoldIntensity, Reset]))]
         );
 
-        assert_eq!(parse("\x1b[1m"), [Sgr(vec![SetBoldIntensity])]);
-        assert_eq!(parse("\x1b[2m"), [Sgr(vec![SetFaintIntensity])]);
-        assert_eq!(parse("\x1b[3m"), [Sgr(vec![SetItalic])]);
-        assert_eq!(parse("\x1b[4m"), [Sgr(vec![SetUnderline])]);
-        assert_eq!(parse("\x1b[5m"), [Sgr(vec![SetBlink])]);
-        assert_eq!(parse("\x1b[7m"), [Sgr(vec![SetInverse])]);
-        assert_eq!(parse("\x1b[9m"), [Sgr(vec![SetStrikethrough])]);
-        assert_eq!(parse("\x1b[21m"), [Sgr(vec![ResetIntensity])]);
-        assert_eq!(parse("\x1b[22m"), [Sgr(vec![ResetIntensity])]);
-        assert_eq!(parse("\x1b[23m"), [Sgr(vec![ResetItalic])]);
-        assert_eq!(parse("\x1b[24m"), [Sgr(vec![ResetUnderline])]);
-        assert_eq!(parse("\x1b[25m"), [Sgr(vec![ResetBlink])]);
-        assert_eq!(parse("\x1b[27m"), [Sgr(vec![ResetInverse])]);
-        assert_eq!(parse("\x1b[29m"), [Sgr(vec![ResetStrikethrough])]);
+        assert_eq!(parse("\x1b[1m"), [Sgr(sgr_ops([SetBoldIntensity]))]);
+        assert_eq!(parse("\x1b[2m"), [Sgr(sgr_ops([SetFaintIntensity]))]);
+        assert_eq!(parse("\x1b[3m"), [Sgr(sgr_ops([SetItalic]))]);
+        assert_eq!(parse("\x1b[4m"), [Sgr(sgr_ops([SetUnderline]))]);
+        assert_eq!(parse("\x1b[5m"), [Sgr(sgr_ops([SetBlink]))]);
+        assert_eq!(parse("\x1b[7m"), [Sgr(sgr_ops([SetInverse]))]);
+        assert_eq!(parse("\x1b[9m"), [Sgr(sgr_ops([SetStrikethrough]))]);
+        assert_eq!(parse("\x1b[21m"), [Sgr(sgr_ops([ResetIntensity]))]);
+        assert_eq!(parse("\x1b[22m"), [Sgr(sgr_ops([ResetIntensity]))]);
+        assert_eq!(parse("\x1b[23m"), [Sgr(sgr_ops([ResetItalic]))]);
+        assert_eq!(parse("\x1b[24m"), [Sgr(sgr_ops([ResetUnderline]))]);
+        assert_eq!(parse("\x1b[25m"), [Sgr(sgr_ops([ResetBlink]))]);
+        assert_eq!(parse("\x1b[27m"), [Sgr(sgr_ops([ResetInverse]))]);
+        assert_eq!(parse("\x1b[29m"), [Sgr(sgr_ops([ResetStrikethrough]))]);
 
         assert_eq!(
             parse("\x1b[31m"),
-            [Sgr(vec![SetForegroundColor(Color::Indexed(1))])]
+            [Sgr(sgr_ops([SetForegroundColor(Color::Indexed(1))]))]
         );
 
         assert_eq!(
             parse("\x1b[38:2:1:2:3m"),
-            [Sgr(vec![SetForegroundColor(Color::rgb(1, 2, 3))])]
+            [Sgr(sgr_ops([SetForegroundColor(Color::rgb(1, 2, 3))]))]
         );
 
         assert_eq!(
             parse("\x1b[38:2::1:2:3m"),
-            [Sgr(vec![SetForegroundColor(Color::rgb(1, 2, 3))])]
+            [Sgr(sgr_ops([SetForegroundColor(Color::rgb(1, 2, 3))]))]
         );
 
         assert_eq!(
             parse("\x1b[38:5:88m"),
-            [Sgr(vec![SetForegroundColor(Color::Indexed(88))])]
+            [Sgr(sgr_ops([SetForegroundColor(Color::Indexed(88))]))]
         );
 
-        assert_eq!(parse("\x1b[39m"), [Sgr(vec![ResetForegroundColor])]);
+        assert_eq!(parse("\x1b[39m"), [Sgr(sgr_ops([ResetForegroundColor]))]);
 
         assert_eq!(
             parse("\x1b[41m"),
-            [Sgr(vec![SetBackgroundColor(Color::Indexed(1))])]
+            [Sgr(sgr_ops([SetBackgroundColor(Color::Indexed(1))]))]
         );
 
         assert_eq!(
             parse("\x1b[91m"),
-            [Sgr(vec![SetForegroundColor(Color::Indexed(9))])]
+            [Sgr(sgr_ops([SetForegroundColor(Color::Indexed(9))]))]
         );
 
         assert_eq!(
             parse("\x1b[48:2:1:2:3m"),
-            [Sgr(vec![SetBackgroundColor(Color::rgb(1, 2, 3))])]
+            [Sgr(sgr_ops([SetBackgroundColor(Color::rgb(1, 2, 3))]))]
         );
 
         assert_eq!(
             parse("\x1b[48:2::1:2:3m"),
-            [Sgr(vec![SetBackgroundColor(Color::rgb(1, 2, 3))])]
+            [Sgr(sgr_ops([SetBackgroundColor(Color::rgb(1, 2, 3))]))]
         );
 
         assert_eq!(
             parse("\x1b[48:5:99m"),
-            [Sgr(vec![SetBackgroundColor(Color::Indexed(99))])]
+            [Sgr(sgr_ops([SetBackgroundColor(Color::Indexed(99))]))]
         );
 
-        assert_eq!(parse("\x1b[49m"), [Sgr(vec![ResetBackgroundColor])]);
+        assert_eq!(parse("\x1b[49m"), [Sgr(sgr_ops([ResetBackgroundColor]))]);
 
         assert_eq!(
             parse("\x1b[104m"),
-            [Sgr(vec![SetBackgroundColor(Color::Indexed(12))])]
+            [Sgr(sgr_ops([SetBackgroundColor(Color::Indexed(12))]))]
         );
 
         // legacy syntax for 24-bit color, within a larger sequence
         assert_eq!(
             parse("\x1b[1;38;2;1;2;3;48;2;1;2;3;0m"),
-            [Sgr(vec![
+            [Sgr(sgr_ops([
                 SetBoldIntensity,
                 SetForegroundColor(Color::rgb(1, 2, 3)),
                 SetBackgroundColor(Color::rgb(1, 2, 3)),
                 Reset,
-            ])]
+            ]))]
         );
 
         // legacy syntax for 8-bit color, within a larger sequence
         assert_eq!(
             parse("\x1b[1;38;5;88;48;5;99;0m"),
-            [Sgr(vec![
+            [Sgr(sgr_ops([
                 SetBoldIntensity,
                 SetForegroundColor(Color::Indexed(88)),
                 SetBackgroundColor(Color::Indexed(99)),
                 Reset,
-            ])]
+            ]))]
         );
     }
 
@@ -1860,8 +1951,8 @@ mod tests {
             Scorc,
             Scosc,
             Sd(20),
-            Sgr(vec![]),
-            Sgr(vec![
+            Sgr(sgr_ops([])),
+            Sgr(sgr_ops([
                 Reset,
                 SetBoldIntensity,
                 SetFaintIntensity,
@@ -1880,7 +1971,7 @@ mod tests {
                 ResetForegroundColor,
                 SetBackgroundColor(Color::rgb(1, 2, 3)),
                 ResetBackgroundColor,
-            ]),
+            ])),
             Si,
             Sm(vec![]),
             Sm(vec![AnsiMode::Insert, AnsiMode::NewLine]),

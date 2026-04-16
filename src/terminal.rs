@@ -8,7 +8,7 @@ use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
-    AnsiMode, CtcOp, DecMode, EdScope, ElScope, Function, SgrOp, TbcScope, XtwinopsOp,
+    AnsiMode, CtcOp, DecMode, EdScope, ElScope, Function, SgrOp, SgrOps, TbcScope, XtwinopsOp,
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
@@ -1110,10 +1110,10 @@ impl Terminal {
         }
     }
 
-    fn sgr(&mut self, ops: Vec<SgrOp>) {
+    fn sgr(&mut self, ops: SgrOps) {
         use SgrOp::*;
 
-        for op in ops {
+        for op in ops.as_slice().iter().copied() {
             match op {
                 Reset => {
                     self.pen = Pen::default();
@@ -1606,8 +1606,8 @@ fn to_sgr_diff(from: &Pen, to: &Pen) -> Option<Function> {
     Some(Function::Sgr(ops))
 }
 
-fn to_sgr_diff_ops(from: &Pen, to: &Pen) -> Vec<SgrOp> {
-    let mut ops = Vec::new();
+fn to_sgr_diff_ops(from: &Pen, to: &Pen) -> SgrOps {
+    let mut ops = SgrOps::new();
 
     if from.intensity != to.intensity {
         match to.intensity {
@@ -1674,7 +1674,7 @@ fn to_sgr_diff_ops(from: &Pen, to: &Pen) -> Vec<SgrOp> {
     ops
 }
 
-fn push_attr_diff(ops: &mut Vec<SgrOp>, from: bool, to: bool, set: SgrOp, reset: SgrOp) {
+fn push_attr_diff(ops: &mut SgrOps, from: bool, to: bool, set: SgrOp, reset: SgrOp) {
     if from != to {
         ops.push(if to { set } else { reset });
     }
@@ -1708,8 +1708,9 @@ fn to_sgr(pen: &Pen) -> Function {
     Function::Sgr(to_sgr_ops(pen))
 }
 
-fn to_sgr_ops(pen: &Pen) -> Vec<SgrOp> {
-    let mut ops = vec![SgrOp::Reset];
+fn to_sgr_ops(pen: &Pen) -> SgrOps {
+    let mut ops = SgrOps::new();
+    ops.push(SgrOp::Reset);
 
     if let Some(color) = pen.foreground() {
         ops.push(SgrOp::SetForegroundColor(color));
@@ -1774,7 +1775,7 @@ mod tests {
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
-    use crate::parser::{AnsiMode, DecMode, EdScope, ElScope, Function, SgrOp};
+    use crate::parser::{AnsiMode, DecMode, EdScope, ElScope, Function, SgrOp, SgrOps};
     use crate::pen::Intensity;
     use crate::pen::Pen;
     use Function::*;
@@ -1856,7 +1857,7 @@ mod tests {
     }
 
     fn sgr(op: SgrOp) -> Function {
-        Sgr(vec![op])
+        Sgr(SgrOps::from(vec![op]))
     }
 
     fn pen(f: impl FnOnce(&mut Pen)) -> Pen {
@@ -1913,13 +1914,13 @@ mod tests {
 
         assert_eq!(term.pen.background, None);
 
-        term.execute(Sgr(vec![
+        term.execute(Sgr(SgrOps::from(vec![
             SetBoldIntensity,
             SetForegroundColor(Color::Indexed(1)),
             SetBackgroundColor(Color::Indexed(2)),
             SetBlink,
             ResetIntensity,
-        ]));
+        ])));
 
         assert_eq!(term.pen.intensity, Intensity::Normal);
         assert!(term.pen.is_blink());
@@ -2305,10 +2306,10 @@ mod tests {
 
         assert_eq!(
             super::to_sgr_diff(&Pen::default(), &to),
-            Some(Sgr(vec![
+            Some(Sgr(SgrOps::from(vec![
                 SetBoldIntensity,
                 SetForegroundColor(Color::Indexed(1))
-            ]))
+            ])))
         );
     }
 
