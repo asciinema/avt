@@ -340,10 +340,10 @@ impl Line {
     }
 
     fn char_display_width(&self, ch: char) -> CharWidth {
-        if ch.width().unwrap_or(1) == 2 {
-            CharWidth::Double
-        } else {
+        if ch <= '\u{7e}' || ch.width().unwrap_or(1) != 2 {
             CharWidth::Single
+        } else {
+            CharWidth::Double
         }
     }
 }
