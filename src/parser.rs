@@ -191,7 +191,7 @@ impl Parser {
                 self.clear();
             }
 
-            (CsiParam, '\u{40}'..='\u{7e}') => {
+            (CsiParam | CsiEntry | CsiIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = Ground;
                 return self.csi_dispatch(input);
             }
@@ -205,11 +205,6 @@ impl Parser {
                 return self.execute(input);
             }
 
-            (CsiEntry, '\u{40}'..='\u{7e}') => {
-                self.state = Ground;
-                return self.csi_dispatch(input);
-            }
-
             (OscString, '\u{20}'..='\u{7f}') => {
                 self.osc_put(input);
             }
@@ -219,7 +214,13 @@ impl Parser {
                 self.collect(input);
             }
 
-            (EscapeIntermediate, '\u{30}'..='\u{7e}') => {
+            (EscapeIntermediate, '\u{30}'..='\u{7e}')
+            | (Escape, '\u{30}'..='\u{4f}')
+            | (Escape, '\u{51}'..='\u{57}')
+            | (Escape, '\u{59}')
+            | (Escape, '\u{5a}')
+            | (Escape, '\u{5c}')
+            | (Escape, '\u{60}'..='\u{7e}') => {
                 self.state = Ground;
                 return self.esc_dispatch(input);
             }
@@ -229,7 +230,9 @@ impl Parser {
                 self.collect(input);
             }
 
-            (DcsPassthrough, '\u{20}'..='\u{7e}') => {
+            (DcsPassthrough, '\u{00}'..='\u{17}')
+            | (DcsPassthrough, '\u{19}')
+            | (DcsPassthrough, '\u{1c}'..='\u{7e}') => {
                 self.put(input);
             }
 
@@ -237,18 +240,10 @@ impl Parser {
                 self.state = Ground;
             }
 
-            (CsiParam, '\u{3c}'..='\u{3f}') => {
+            (CsiParam, '\u{3c}'..='\u{3f}')
+            | (CsiIntermediate, '\u{30}'..='\u{3f}')
+            | (CsiEntry, '\u{3a}') => {
                 self.state = CsiIgnore;
-            }
-
-            (Escape, '\u{30}'..='\u{4f}')
-            | (Escape, '\u{51}'..='\u{57}')
-            | (Escape, '\u{59}')
-            | (Escape, '\u{5a}')
-            | (Escape, '\u{5c}')
-            | (Escape, '\u{60}'..='\u{7e}') => {
-                self.state = Ground;
-                return self.esc_dispatch(input);
             }
 
             (Escape, '\u{5d}') => {
@@ -275,22 +270,13 @@ impl Parser {
                 self.clear();
             }
 
-            (CsiParam, '\u{20}'..='\u{2f}') => {
+            (CsiParam | CsiEntry, '\u{20}'..='\u{2f}') => {
                 self.state = CsiIntermediate;
                 self.collect(input);
             }
 
-            (CsiIntermediate, '\u{40}'..='\u{7e}') => {
-                self.state = Ground;
-                return self.csi_dispatch(input);
-            }
-
             (DcsParam, '\u{30}'..='\u{39}') | (DcsParam, '\u{3b}') => {
                 self.param(input);
-            }
-
-            (DcsParam, '\u{40}'..='\u{7e}') => {
-                self.state = DcsPassthrough;
             }
 
             (DcsEntry, '\u{3c}'..='\u{3f}') => {
@@ -298,61 +284,40 @@ impl Parser {
                 self.collect(input);
             }
 
-            (CsiParam, '\u{00}'..='\u{17}')
-            | (CsiParam, '\u{19}')
-            | (CsiParam, '\u{1c}'..='\u{1f}') => {
-                return self.execute(input);
+            (DcsEntry | DcsParam | DcsIntermediate, '\u{40}'..='\u{7e}') => {
+                self.state = DcsPassthrough;
             }
 
-            (Escape, '\u{00}'..='\u{17}') | (Escape, '\u{19}') | (Escape, '\u{1c}'..='\u{1f}') => {
-                return self.execute(input);
-            }
-
-            (DcsEntry, '\u{20}'..='\u{2f}') => {
+            (DcsEntry | DcsParam, '\u{20}'..='\u{2f}') => {
                 self.state = DcsIntermediate;
                 self.collect(input);
             }
 
-            (DcsIntermediate, '\u{40}'..='\u{7e}') => {
-                self.state = DcsPassthrough;
-            }
-
-            (DcsPassthrough, '\u{00}'..='\u{17}')
-            | (DcsPassthrough, '\u{19}')
-            | (DcsPassthrough, '\u{1c}'..='\u{1f}') => {
-                self.put(input);
-            }
-
-            (CsiEntry, '\u{00}'..='\u{17}')
-            | (CsiEntry, '\u{19}')
-            | (CsiEntry, '\u{1c}'..='\u{1f}') => {
-                return self.execute(input);
-            }
-
-            (DcsEntry, '\u{40}'..='\u{7e}') => {
-                self.state = DcsPassthrough;
-            }
-
-            (CsiIntermediate, '\u{20}'..='\u{2f}') => {
+            (CsiIntermediate | EscapeIntermediate | DcsIntermediate, '\u{20}'..='\u{2f}') => {
                 self.collect(input);
             }
 
-            (EscapeIntermediate, '\u{20}'..='\u{2f}') => {
-                self.collect(input);
+            (DcsEntry, '\u{3a}')
+            | (DcsIntermediate, '\u{30}'..='\u{3f}')
+            | (DcsParam, '\u{3a}')
+            | (DcsParam, '\u{3c}'..='\u{3f}') => {
+                self.state = DcsIgnore;
             }
 
-            (CsiIntermediate, '\u{30}'..='\u{3f}') => {
-                self.state = CsiIgnore;
+            (DcsEntry, '\u{30}'..='\u{39}') | (DcsEntry, '\u{3b}') => {
+                self.state = DcsParam;
+                self.param(input);
             }
 
-            (CsiEntry, '\u{20}'..='\u{2f}') => {
-                self.state = CsiIntermediate;
-                self.collect(input);
-            }
-
-            (EscapeIntermediate, '\u{00}'..='\u{17}')
-            | (EscapeIntermediate, '\u{19}')
-            | (EscapeIntermediate, '\u{1c}'..='\u{1f}') => {
+            (Escape | EscapeIntermediate
+            | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore,
+            '\u{00}'..='\u{17}')
+            | (Escape | EscapeIntermediate
+            | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore,
+            '\u{19}')
+            | (Escape | EscapeIntermediate
+            | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore,
+            '\u{1c}'..='\u{1f}') => {
                 return self.execute(input);
             }
 
@@ -380,48 +345,6 @@ impl Parser {
             (_, '\u{9b}') => {
                 self.state = CsiEntry;
                 self.clear();
-            }
-
-            (DcsEntry, '\u{30}'..='\u{39}') | (DcsEntry, '\u{3b}') => {
-                self.state = DcsParam;
-                self.param(input);
-            }
-
-            (DcsIntermediate, '\u{20}'..='\u{2f}') => {
-                self.collect(input);
-            }
-
-            (CsiIntermediate, '\u{00}'..='\u{17}')
-            | (CsiIntermediate, '\u{19}')
-            | (CsiIntermediate, '\u{1c}'..='\u{1f}') => {
-                return self.execute(input);
-            }
-
-            (DcsEntry, '\u{3a}') => {
-                self.state = DcsIgnore;
-            }
-
-            (DcsIntermediate, '\u{30}'..='\u{3f}') => {
-                self.state = DcsIgnore;
-            }
-
-            (CsiIgnore, '\u{00}'..='\u{17}')
-            | (CsiIgnore, '\u{19}')
-            | (CsiIgnore, '\u{1c}'..='\u{1f}') => {
-                return self.execute(input);
-            }
-
-            (DcsParam, '\u{20}'..='\u{2f}') => {
-                self.state = DcsIntermediate;
-                self.collect(input);
-            }
-
-            (CsiEntry, '\u{3a}') => {
-                self.state = CsiIgnore;
-            }
-
-            (DcsParam, '\u{3a}') | (DcsParam, '\u{3c}'..='\u{3f}') => {
-                self.state = DcsIgnore;
             }
 
             // DEL (0x7F) is ignored in all states except Ground and OscString
