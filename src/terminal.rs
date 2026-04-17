@@ -8,7 +8,8 @@ use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
-    AnsiMode, CtcOp, DecMode, EdScope, ElScope, Function, SgrOp, SgrOps, TbcScope, XtwinopsOp,
+    AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, EdScope, ElScope, Function, SgrOp, SgrOps,
+    TbcScope, XtwinopsOp,
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
@@ -1078,10 +1079,10 @@ impl Terminal {
         }
     }
 
-    fn sm(&mut self, modes: Vec<AnsiMode>) {
+    fn sm(&mut self, modes: AnsiModes) {
         use AnsiMode::*;
 
-        for mode in modes {
+        for &mode in modes.as_slice() {
             match mode {
                 Insert => {
                     self.insert_mode = true;
@@ -1094,10 +1095,10 @@ impl Terminal {
         }
     }
 
-    fn rm(&mut self, modes: Vec<AnsiMode>) {
+    fn rm(&mut self, modes: AnsiModes) {
         use AnsiMode::*;
 
-        for mode in modes {
+        for &mode in modes.as_slice() {
             match mode {
                 Insert => {
                     self.insert_mode = false;
@@ -1216,10 +1217,10 @@ impl Terminal {
         self.soft_reset();
     }
 
-    fn decset(&mut self, modes: Vec<DecMode>) {
+    fn decset(&mut self, modes: DecModes) {
         use DecMode::*;
 
-        for mode in modes {
+        for &mode in modes.as_slice() {
             match mode {
                 CursorKeys => {
                     self.cursor_keys_mode = CursorKeysMode::Application;
@@ -1256,10 +1257,10 @@ impl Terminal {
         }
     }
 
-    fn decrst(&mut self, modes: Vec<DecMode>) {
+    fn decrst(&mut self, modes: DecModes) {
         use DecMode::*;
 
-        for mode in modes {
+        for &mode in modes.as_slice() {
             match mode {
                 CursorKeys => {
                     self.cursor_keys_mode = CursorKeysMode::Normal;
@@ -1325,12 +1326,12 @@ impl Terminal {
         if !primary_ctx.is_default() {
             if !primary_ctx.auto_wrap_mode {
                 // disable auto-wrap mode
-                funs.push(Function::Decrst(vec![DecMode::AutoWrap]));
+                funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
             }
 
             if primary_ctx.origin_mode {
                 // enable origin mode
-                funs.push(Function::Decset(vec![DecMode::Origin]));
+                funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
             }
 
             // fix cursor in target position
@@ -1347,12 +1348,12 @@ impl Terminal {
 
             if !primary_ctx.auto_wrap_mode {
                 // re-enable auto-wrap mode
-                funs.push(Function::Decset(vec![DecMode::AutoWrap]));
+                funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
             }
 
             if primary_ctx.origin_mode {
                 // re-disable origin mode
-                funs.push(Function::Decrst(vec![DecMode::Origin]));
+                funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
             }
         }
 
@@ -1363,7 +1364,7 @@ impl Terminal {
 
         // switch to alternate screen
         if self.active_buffer_type == BufferType::Alternate || !alternate_ctx.is_default() {
-            funs.push(Function::Decset(vec![DecMode::AltScreenBuffer]));
+            funs.push(Function::Decset(DecModes::one(DecMode::AltScreenBuffer)));
         }
 
         if self.active_buffer_type == BufferType::Alternate {
@@ -1379,12 +1380,12 @@ impl Terminal {
         if !alternate_ctx.is_default() {
             if !alternate_ctx.auto_wrap_mode {
                 // disable auto-wrap mode
-                funs.push(Function::Decrst(vec![DecMode::AutoWrap]));
+                funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
             }
 
             if alternate_ctx.origin_mode {
                 // enable origin mode
-                funs.push(Function::Decset(vec![DecMode::Origin]));
+                funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
             }
 
             // fix cursor in target position
@@ -1401,12 +1402,12 @@ impl Terminal {
 
             if !alternate_ctx.auto_wrap_mode {
                 // re-enable auto-wrap mode
-                funs.push(Function::Decset(vec![DecMode::AutoWrap]));
+                funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
             }
 
             if alternate_ctx.origin_mode {
                 // re-disable origin mode
-                funs.push(Function::Decrst(vec![DecMode::Origin]));
+                funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
             }
         }
 
@@ -1414,7 +1415,7 @@ impl Terminal {
 
         if self.active_buffer_type == BufferType::Primary && !alternate_ctx.is_default() {
             // switch back to primary screen
-            funs.push(Function::Decrst(vec![DecMode::AltScreenBuffer]));
+            funs.push(Function::Decrst(DecModes::one(DecMode::AltScreenBuffer)));
         }
 
         // 7. setup origin mode
@@ -1422,7 +1423,7 @@ impl Terminal {
         if self.origin_mode {
             // enable origin mode
             // note: this resets cursor position - must be done before fixing cursor
-            funs.push(Function::Decset(vec![DecMode::Origin]));
+            funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
         }
 
         // 8. setup margins
@@ -1505,7 +1506,7 @@ impl Terminal {
 
         if !self.cursor.visible {
             // hide cursor
-            funs.push(Function::Decrst(vec![DecMode::TextCursorEnable]));
+            funs.push(Function::Decrst(DecModes::one(DecMode::TextCursorEnable)));
         }
 
         // Following 3 steps must happen after ALL prints as they alter print behaviour,
@@ -1532,27 +1533,27 @@ impl Terminal {
 
         if self.insert_mode {
             // enable insert mode
-            funs.push(Function::Sm(vec![AnsiMode::Insert]));
+            funs.push(Function::Sm(AnsiModes::one(AnsiMode::Insert)));
         }
 
         // 12. setup auto-wrap mode
 
         if !self.auto_wrap_mode {
             // disable auto-wrap mode
-            funs.push(Function::Decrst(vec![DecMode::AutoWrap]));
+            funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
         }
 
         // 13. setup new line mode
 
         if self.new_line_mode {
             // enable new line mode
-            funs.push(Function::Sm(vec![AnsiMode::NewLine]));
+            funs.push(Function::Sm(AnsiModes::one(AnsiMode::NewLine)));
         }
 
         // 14. setup cursor key mode
 
         if self.cursor_keys_mode == CursorKeysMode::Application {
-            funs.push(Function::Decset(vec![DecMode::CursorKeys]));
+            funs.push(Function::Decset(DecModes::one(DecMode::CursorKeys)));
         }
 
         funs
@@ -1775,7 +1776,9 @@ mod tests {
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
-    use crate::parser::{AnsiMode, DecMode, EdScope, ElScope, Function, SgrOp, SgrOps};
+    use crate::parser::{
+        AnsiMode, AnsiModes, DecMode, DecModes, EdScope, ElScope, Function, SgrOp, SgrOps,
+    };
     use crate::pen::Intensity;
     use crate::pen::Pen;
     use Function::*;
@@ -1854,6 +1857,14 @@ mod tests {
 
     fn wrapped(term: &Terminal) -> Vec<bool> {
         term.view().map(|l| l.wrapped).collect()
+    }
+
+    fn ansi_modes<const N: usize>(modes: [AnsiMode; N]) -> AnsiModes {
+        AnsiModes::from(&modes[..])
+    }
+
+    fn dec_modes<const N: usize>(modes: [DecMode; N]) -> DecModes {
+        DecModes::from(&modes[..])
     }
 
     fn sgr(op: SgrOp) -> Function {
@@ -2596,15 +2607,15 @@ mod tests {
         fn assert_save_restore(save: Function, restore: Function) {
             let mut term = Terminal::new((4, 4), None);
 
-            term.execute(Decrst(vec![DecMode::AutoWrap]));
+            term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
             term.execute(Decstbm(2, 4));
-            term.execute(Decset(vec![DecMode::Origin]));
+            term.execute(Decset(dec_modes([DecMode::Origin])));
             term.execute(Cup(2, 3));
             term.execute(sgr(SetBoldIntensity));
             term.execute(save);
 
-            term.execute(Decset(vec![DecMode::AutoWrap]));
-            term.execute(Decrst(vec![DecMode::Origin]));
+            term.execute(Decset(dec_modes([DecMode::AutoWrap])));
+            term.execute(Decrst(dec_modes([DecMode::Origin])));
             term.execute(Cup(4, 4));
             term.execute(sgr(Reset));
             term.execute(restore);
@@ -2623,14 +2634,14 @@ mod tests {
     fn auto_wrap_mode() {
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decset(vec![DecMode::AutoWrap]));
+        term.execute(Decset(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
         assert_eq!(text(&term), "abcd\nef|\n\n");
 
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decrst(vec![DecMode::AutoWrap]));
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
         assert_eq!(text(&term), "abc|f\n\n\n");
@@ -2642,7 +2653,7 @@ mod tests {
 
         feed(&mut term, "abcd");
         term.execute(Cub(2));
-        term.execute(Sm(vec![AnsiMode::Insert]));
+        term.execute(Sm(ansi_modes([AnsiMode::Insert])));
         feed(&mut term, "ef");
 
         assert_eq!(text(&term), "aef|b\n\n\n");
@@ -2984,7 +2995,7 @@ mod tests {
 
         assert_eq!(text(&term), "aaa\nbbb\nc\nddd|\n");
 
-        term.execute(Decset(vec![DecMode::SaveCursorAltScreenBuffer]));
+        term.execute(Decset(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
 
         assert_eq!(term.cursor(), (3, 3));
 
@@ -2995,7 +3006,7 @@ mod tests {
         term.resize(2, 3);
         term.resize(3, 3);
 
-        term.execute(Decrst(vec![DecMode::SaveCursorAltScreenBuffer]));
+        term.execute(Decrst(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
 
         assert_eq!(text(&term), "bbb\nc\ndd|d");
     }
@@ -3004,12 +3015,12 @@ mod tests {
     fn execute_new_line_mode() {
         let mut term = build_term(8, 2, 3, 0, "abc");
 
-        term.execute(Sm(vec![AnsiMode::NewLine]));
+        term.execute(Sm(ansi_modes([AnsiMode::NewLine])));
         term.execute(Lf);
 
         assert_eq!(term.cursor(), (0, 1));
 
-        term.execute(Rm(vec![AnsiMode::NewLine]));
+        term.execute(Rm(ansi_modes([AnsiMode::NewLine])));
         term.execute(Cup(1, 4));
         term.execute(Lf);
 
@@ -3022,10 +3033,10 @@ mod tests {
 
         assert!(!term.cursor_keys_app_mode());
 
-        term.execute(Decset(vec![DecMode::CursorKeys]));
+        term.execute(Decset(dec_modes([DecMode::CursorKeys])));
         assert!(term.cursor_keys_app_mode());
 
-        term.execute(Decrst(vec![DecMode::CursorKeys]));
+        term.execute(Decrst(dec_modes([DecMode::CursorKeys])));
         assert!(!term.cursor_keys_app_mode());
     }
 
@@ -3035,10 +3046,10 @@ mod tests {
 
         assert!(term.cursor.visible);
 
-        term.execute(Decrst(vec![DecMode::TextCursorEnable]));
+        term.execute(Decrst(dec_modes([DecMode::TextCursorEnable])));
         assert!(!term.cursor.visible);
 
-        term.execute(Decset(vec![DecMode::TextCursorEnable]));
+        term.execute(Decset(dec_modes([DecMode::TextCursorEnable])));
         assert!(term.cursor.visible);
     }
 
@@ -3047,14 +3058,14 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         term.execute(Decstbm(2, 4));
-        term.execute(Decset(vec![DecMode::Origin]));
+        term.execute(Decset(dec_modes([DecMode::Origin])));
 
         assert_eq!(term.cursor(), (0, 1));
 
         term.execute(Cup(2, 1));
         assert_eq!(term.cursor(), (0, 2));
 
-        term.execute(Decrst(vec![DecMode::Origin]));
+        term.execute(Decrst(dec_modes([DecMode::Origin])));
         assert_eq!(term.cursor(), (0, 0));
     }
 
@@ -3067,7 +3078,7 @@ mod tests {
         assert_eq!(term.active_buffer_type(), BufferType::Primary);
         assert_eq!(text(&term), "ab\ncd|\n");
 
-        term.execute(Decset(vec![DecMode::AltScreenBuffer]));
+        term.execute(Decset(dec_modes([DecMode::AltScreenBuffer])));
 
         assert_eq!(term.active_buffer_type(), BufferType::Alternate);
         assert_eq!(text(&term), "\n  |\n");
@@ -3075,7 +3086,7 @@ mod tests {
         feed(&mut term, "xy");
         assert_eq!(text(&term), "\n  xy|\n");
 
-        term.execute(Decrst(vec![DecMode::AltScreenBuffer]));
+        term.execute(Decrst(dec_modes([DecMode::AltScreenBuffer])));
 
         assert_eq!(term.active_buffer_type(), BufferType::Primary);
         assert_eq!(text(&term), "ab\ncd  |\n");
@@ -3085,20 +3096,20 @@ mod tests {
     fn execute_save_cursor_mode() {
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decrst(vec![DecMode::AutoWrap]));
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         term.execute(Decstbm(2, 4));
-        term.execute(Decset(vec![DecMode::Origin]));
+        term.execute(Decset(dec_modes([DecMode::Origin])));
         term.execute(Cup(2, 3));
         term.execute(sgr(SetBoldIntensity));
 
-        term.execute(Decset(vec![DecMode::SaveCursor]));
+        term.execute(Decset(dec_modes([DecMode::SaveCursor])));
 
-        term.execute(Decset(vec![DecMode::AutoWrap]));
-        term.execute(Decrst(vec![DecMode::Origin]));
+        term.execute(Decset(dec_modes([DecMode::AutoWrap])));
+        term.execute(Decrst(dec_modes([DecMode::Origin])));
         term.execute(Cup(4, 4));
         term.execute(sgr(Reset));
 
-        term.execute(Decrst(vec![DecMode::SaveCursor]));
+        term.execute(Decrst(dec_modes([DecMode::SaveCursor])));
 
         assert_eq!(term.cursor(), (2, 2));
         assert_eq!(term.pen.intensity, Intensity::Bold);
@@ -3111,14 +3122,14 @@ mod tests {
         let mut term = Terminal::new((4, 3), None);
 
         feed(&mut term, "ab");
-        term.execute(Decset(vec![DecMode::AltScreenBuffer]));
+        term.execute(Decset(dec_modes([DecMode::AltScreenBuffer])));
         feed(&mut term, "xy");
-        term.execute(Decrst(vec![DecMode::TextCursorEnable]));
-        term.execute(Sm(vec![AnsiMode::Insert, AnsiMode::NewLine]));
-        term.execute(Decrst(vec![DecMode::AutoWrap]));
-        term.execute(Decset(vec![DecMode::CursorKeys]));
+        term.execute(Decrst(dec_modes([DecMode::TextCursorEnable])));
+        term.execute(Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])));
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        term.execute(Decset(dec_modes([DecMode::CursorKeys])));
         term.execute(Decstbm(2, 3));
-        term.execute(Decset(vec![DecMode::Origin]));
+        term.execute(Decset(dec_modes([DecMode::Origin])));
         term.execute(Cup(2, 3));
         term.execute(sgr(SetBoldIntensity));
         term.execute(G1d4(Charset::Drawing));
@@ -3168,10 +3179,10 @@ mod tests {
         feed(&mut term, "ab\r\ncd");
         term.execute(sgr(SetBoldIntensity));
 
-        term.execute(Decset(vec![
+        term.execute(Decset(dec_modes([
             DecMode::CursorKeys,
             DecMode::SaveCursorAltScreenBuffer,
-        ]));
+        ])));
 
         feed(&mut term, "zz");
 
@@ -3220,7 +3231,7 @@ mod tests {
         assert_eq!(term.saved_ctx.cursor_col, 15);
 
         // switch to alternate buffer
-        term.execute(Decset(vec![AltScreenBuffer]));
+        term.execute(Decset(dec_modes([AltScreenBuffer])));
 
         // save cursor
         term.execute(Decsc);

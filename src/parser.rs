@@ -52,9 +52,9 @@ pub enum Function {
     Dch(u16),
     Decaln,
     Decrc,
-    Decrst(Vec<DecMode>),
+    Decrst(DecModes),
     Decsc,
-    Decset(Vec<DecMode>),
+    Decset(DecModes),
     Decstbm(u16, u16),
     Decstr,
     Dl(u16),
@@ -73,13 +73,13 @@ pub enum Function {
     Rep(u16),
     Ri,
     Ris,
-    Rm(Vec<AnsiMode>),
+    Rm(AnsiModes),
     Scorc,
     Scosc,
     Sd(u16),
     Sgr(SgrOps),
     Si,
-    Sm(Vec<AnsiMode>),
+    Sm(AnsiModes),
     So,
     Su(u16),
     Tbc(TbcScope),
@@ -88,10 +88,10 @@ pub enum Function {
     Xtwinops(XtwinopsOp),
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum AnsiMode {
-    Insert = 4,   // IRM
+    Insert = 4, // IRM
     NewLine = 20, // LNM
 }
 
@@ -102,10 +102,10 @@ pub enum CtcOp {
     ClearAll,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum DecMode {
-    CursorKeys = 1,                   // DECCKM
+    CursorKeys = 1, // DECCKM
     Origin = 6,                       // DECOM
     AutoWrap = 7,                     // DECAWM
     TextCursorEnable = 25,            // DECTCEM
@@ -244,6 +244,165 @@ impl From<Vec<SgrOp>> for SgrOps {
 
 impl From<&[SgrOp]> for SgrOps {
     fn from(v: &[SgrOp]) -> Self {
+        Self::collect(v.iter().copied())
+    }
+}
+
+/// Number of mode values that fit inline without heap allocation.
+pub const MODES_INLINE_CAP: usize = 4;
+
+/// Small-buffer-optimized collection of mode values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnsiModes(AnsiModesStorage);
+
+#[derive(Debug, Clone, PartialEq)]
+enum AnsiModesStorage {
+    Inline {
+        modes: [AnsiMode; MODES_INLINE_CAP],
+        len: u8,
+    },
+    Heap(Vec<AnsiMode>),
+}
+
+impl AnsiModes {
+    pub(crate) fn new() -> Self {
+        Self(AnsiModesStorage::Inline {
+            modes: [AnsiMode::Insert; MODES_INLINE_CAP],
+            len: 0,
+        })
+    }
+
+    pub(crate) fn one(mode: AnsiMode) -> Self {
+        let mut modes = Self::new();
+        modes.push(mode);
+        modes
+    }
+
+    pub(crate) fn collect<I: IntoIterator<Item = AnsiMode>>(iter: I) -> Self {
+        let mut v = Self::new();
+
+        for m in iter {
+            v.push(m);
+        }
+
+        v
+    }
+
+    pub(crate) fn as_slice(&self) -> &[AnsiMode] {
+        match &self.0 {
+            AnsiModesStorage::Inline { modes, len } => &modes[..*len as usize],
+            AnsiModesStorage::Heap(v) => v.as_slice(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, m: AnsiMode) {
+        match &mut self.0 {
+            AnsiModesStorage::Inline { modes, len } => {
+                if (*len as usize) < MODES_INLINE_CAP {
+                    modes[*len as usize] = m;
+                    *len += 1;
+                } else {
+                    let mut v = Vec::with_capacity(MODES_INLINE_CAP * 2);
+                    v.extend_from_slice(modes);
+                    v.push(m);
+                    self.0 = AnsiModesStorage::Heap(v);
+                }
+            }
+            AnsiModesStorage::Heap(v) => v.push(m),
+        }
+    }
+}
+
+impl From<Vec<AnsiMode>> for AnsiModes {
+    fn from(v: Vec<AnsiMode>) -> Self {
+        if v.len() <= MODES_INLINE_CAP {
+            Self::collect(v)
+        } else {
+            Self(AnsiModesStorage::Heap(v))
+        }
+    }
+}
+
+impl From<&[AnsiMode]> for AnsiModes {
+    fn from(v: &[AnsiMode]) -> Self {
+        Self::collect(v.iter().copied())
+    }
+}
+
+/// Small-buffer-optimized collection of DEC mode values.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DecModes(DecModesStorage);
+
+#[derive(Debug, Clone, PartialEq)]
+enum DecModesStorage {
+    Inline {
+        modes: [DecMode; MODES_INLINE_CAP],
+        len: u8,
+    },
+    Heap(Vec<DecMode>),
+}
+
+impl DecModes {
+    pub(crate) fn new() -> Self {
+        Self(DecModesStorage::Inline {
+            modes: [DecMode::CursorKeys; MODES_INLINE_CAP],
+            len: 0,
+        })
+    }
+
+    pub(crate) fn one(mode: DecMode) -> Self {
+        let mut modes = Self::new();
+        modes.push(mode);
+        modes
+    }
+
+    pub(crate) fn collect<I: IntoIterator<Item = DecMode>>(iter: I) -> Self {
+        let mut v = Self::new();
+
+        for m in iter {
+            v.push(m);
+        }
+
+        v
+    }
+
+    pub(crate) fn as_slice(&self) -> &[DecMode] {
+        match &self.0 {
+            DecModesStorage::Inline { modes, len } => &modes[..*len as usize],
+            DecModesStorage::Heap(v) => v.as_slice(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, m: DecMode) {
+        match &mut self.0 {
+            DecModesStorage::Inline { modes, len } => {
+                if (*len as usize) < MODES_INLINE_CAP {
+                    modes[*len as usize] = m;
+                    *len += 1;
+                } else {
+                    let mut v = Vec::with_capacity(MODES_INLINE_CAP * 2);
+                    v.extend_from_slice(modes);
+                    v.push(m);
+                    self.0 = DecModesStorage::Heap(v);
+                }
+            }
+            DecModesStorage::Heap(v) => v.push(m),
+        }
+    }
+}
+
+impl From<Vec<DecMode>> for DecModes {
+    fn from(v: Vec<DecMode>) -> Self {
+        if v.len() <= MODES_INLINE_CAP {
+            Self::collect(v)
+        } else {
+            Self(DecModesStorage::Heap(v))
+        }
+    }
+}
+
+impl From<&[DecMode]> for DecModes {
+    fn from(v: &[DecMode]) -> Self {
         Self::collect(v.iter().copied())
     }
 }
@@ -626,15 +785,13 @@ impl Parser {
                 _ => None,
             },
 
-            (None, 'h') => Some(Sm(ps[..=self.cur_param]
-                .iter()
-                .filter_map(ansi_mode)
-                .collect())),
+            (None, 'h') => Some(Sm(AnsiModes::collect(
+                ps[..=self.cur_param].iter().filter_map(ansi_mode),
+            ))),
 
-            (None, 'l') => Some(Rm(ps[..=self.cur_param]
-                .iter()
-                .filter_map(ansi_mode)
-                .collect())),
+            (None, 'l') => Some(Rm(AnsiModes::collect(
+                ps[..=self.cur_param].iter().filter_map(ansi_mode),
+            ))),
 
             (None, 'm') => Some(Sgr(SgrOps::collect(SgrOpsDecoder {
                 ps: &ps[..=self.cur_param],
@@ -659,13 +816,13 @@ impl Parser {
 
             (Some('!'), 'p') => Some(Decstr),
 
-            (Some('?'), 'h') => Some(Decset(
-                ps[..=self.cur_param].iter().filter_map(dec_mode).collect(),
-            )),
+            (Some('?'), 'h') => Some(Decset(DecModes::collect(
+                ps[..=self.cur_param].iter().filter_map(dec_mode),
+            ))),
 
-            (Some('?'), 'l') => Some(Decrst(
-                ps[..=self.cur_param].iter().filter_map(dec_mode).collect(),
-            )),
+            (Some('?'), 'l') => Some(Decrst(DecModes::collect(
+                ps[..=self.cur_param].iter().filter_map(dec_mode),
+            ))),
 
             _ => None,
         }
@@ -846,6 +1003,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
 
         Decrst(modes) => {
             let params = modes
+                .as_slice()
                 .iter()
                 .map(|mode| match mode {
                     CursorKeys => 1,
@@ -866,6 +1024,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
 
         Decset(modes) => {
             let params = modes
+                .as_slice()
                 .iter()
                 .map(|mode| match mode {
                     CursorKeys => 1,
@@ -942,6 +1101,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
 
         Rm(modes) => {
             let params = modes
+                .as_slice()
                 .iter()
                 .map(|mode| match mode {
                     Insert => 4,
@@ -996,6 +1156,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
 
         Sm(modes) => {
             let params = modes
+                .as_slice()
                 .iter()
                 .map(|mode| match mode {
                     Insert => 4,
@@ -1434,8 +1595,10 @@ impl PartialEq<Vec<u16>> for Param {
 #[cfg(test)]
 mod tests {
     use super::AnsiMode;
+    use super::AnsiModes;
     use super::CtcOp;
     use super::DecMode;
+    use super::DecModes;
     use super::EdScope;
     use super::ElScope;
     use super::Function;
@@ -1468,6 +1631,14 @@ mod tests {
 
     fn sgr_ops<const N: usize>(ops: [super::SgrOp; N]) -> SgrOps {
         SgrOps::from(&ops[..])
+    }
+
+    fn ansi_modes<const N: usize>(modes: [AnsiMode; N]) -> AnsiModes {
+        AnsiModes::from(&modes[..])
+    }
+
+    fn dec_modes<const N: usize>(modes: [DecMode; N]) -> DecModes {
+        DecModes::from(&modes[..])
     }
 
     fn assert_dump(input: &str, state: State, dump: &str) {
@@ -1620,11 +1791,11 @@ mod tests {
         // ANSI mode setting and generic CSI operations.
         assert_eq!(
             parse("\x1b[4;20h"),
-            [Sm(vec![AnsiMode::Insert, AnsiMode::NewLine])]
+            [Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine]))]
         );
         assert_eq!(
             parse("\x1b[4;20l"),
-            [Rm(vec![AnsiMode::Insert, AnsiMode::NewLine])]
+            [Rm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine]))]
         );
         assert_eq!(parse("\x1b[m"), [Sgr(sgr_ops([Reset]))]);
         assert_eq!(parse("\x1b[2;5r"), [Decstbm(2, 5)]);
@@ -1637,37 +1808,58 @@ mod tests {
         assert_eq!(parse("\x1b[!p"), [Decstr]);
 
         // DEC private modes.
-        assert_eq!(parse("\x1b[?7h"), [Decset(vec![DecMode::AutoWrap])]);
-        assert_eq!(parse("\u{9b}?7h"), [Decset(vec![DecMode::AutoWrap])]);
+        assert_eq!(
+            parse("\x1b[?7h"),
+            [Decset(dec_modes([DecMode::AutoWrap]))]
+        );
+        assert_eq!(
+            parse("\u{9b}?7h"),
+            [Decset(dec_modes([DecMode::AutoWrap]))]
+        );
         assert_eq!(
             parse("\x1b[?6;1047h"),
-            [Decset(vec![DecMode::Origin, DecMode::AltScreenBuffer])]
+            [Decset(dec_modes([
+                DecMode::Origin,
+                DecMode::AltScreenBuffer
+            ]))]
         );
-        assert_eq!(parse("\x1b[?47h"), [Decset(vec![DecMode::AltScreenBuffer])]);
+        assert_eq!(
+            parse("\x1b[?47h"),
+            [Decset(dec_modes([DecMode::AltScreenBuffer]))]
+        );
         assert_eq!(
             parse("\x1b[?1049h"),
-            [Decset(vec![DecMode::SaveCursorAltScreenBuffer])]
+            [Decset(dec_modes([DecMode::SaveCursorAltScreenBuffer]))]
         );
         assert_eq!(
             parse("\u{9b}?1049h"),
-            [Decset(vec![DecMode::SaveCursorAltScreenBuffer])]
+            [Decset(dec_modes([DecMode::SaveCursorAltScreenBuffer]))]
         );
-        assert_eq!(parse("\x1b[?7l"), [Decrst(vec![DecMode::AutoWrap])]);
-        assert_eq!(parse("\u{9b}?7l"), [Decrst(vec![DecMode::AutoWrap])]);
-        assert_eq!(parse("\x1b[?47l"), [Decrst(vec![DecMode::AltScreenBuffer])]);
+        assert_eq!(
+            parse("\x1b[?7l"),
+            [Decrst(dec_modes([DecMode::AutoWrap]))]
+        );
+        assert_eq!(
+            parse("\u{9b}?7l"),
+            [Decrst(dec_modes([DecMode::AutoWrap]))]
+        );
+        assert_eq!(
+            parse("\x1b[?47l"),
+            [Decrst(dec_modes([DecMode::AltScreenBuffer]))]
+        );
         assert_eq!(
             parse("\x1b[?6;1049l"),
-            [Decrst(vec![
+            [Decrst(dec_modes([
                 DecMode::Origin,
                 DecMode::SaveCursorAltScreenBuffer,
-            ])]
+            ]))]
         );
         assert_eq!(
             parse("\u{9b}?6;1049l"),
-            [Decrst(vec![
+            [Decrst(dec_modes([
                 DecMode::Origin,
                 DecMode::SaveCursorAltScreenBuffer,
-            ])]
+            ]))]
         );
     }
 
@@ -1717,7 +1909,7 @@ mod tests {
     fn ignore_unsupported_seq() {
         assert_eq!(parse("\x1b[4q"), []);
         assert_eq!(parse("\x1b[9W"), []);
-        assert_eq!(parse("\x1b[?9999h"), [Decset(vec![])]);
+        assert_eq!(parse("\x1b[?9999h"), [Decset(dec_modes([]))]);
         assert_eq!(parse("\x1b[:m"), []);
         assert_eq!(parse("\x1b[1?m"), []);
         assert_eq!(parse("\x1b[ 1H"), []);
@@ -1899,8 +2091,8 @@ mod tests {
             Dch(18),
             Decaln,
             Decrc,
-            Decrst(vec![]),
-            Decrst(vec![
+            Decrst(dec_modes([])),
+            Decrst(dec_modes([
                 DecMode::CursorKeys,
                 DecMode::Origin,
                 DecMode::AutoWrap,
@@ -1908,10 +2100,10 @@ mod tests {
                 DecMode::AltScreenBuffer,
                 DecMode::SaveCursor,
                 DecMode::SaveCursorAltScreenBuffer,
-            ]),
+            ])),
             Decsc,
-            Decset(vec![]),
-            Decset(vec![
+            Decset(dec_modes([])),
+            Decset(dec_modes([
                 DecMode::CursorKeys,
                 DecMode::Origin,
                 DecMode::AutoWrap,
@@ -1919,7 +2111,7 @@ mod tests {
                 DecMode::AltScreenBuffer,
                 DecMode::SaveCursor,
                 DecMode::SaveCursorAltScreenBuffer,
-            ]),
+            ])),
             Decstbm(2, 5),
             Decstr,
             Dl(17),
@@ -1946,8 +2138,8 @@ mod tests {
             Rep(11),
             Ri,
             Ris,
-            Rm(vec![]),
-            Rm(vec![AnsiMode::Insert, AnsiMode::NewLine]),
+            Rm(ansi_modes([])),
+            Rm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])),
             Scorc,
             Scosc,
             Sd(20),
@@ -1973,8 +2165,8 @@ mod tests {
                 ResetBackgroundColor,
             ])),
             Si,
-            Sm(vec![]),
-            Sm(vec![AnsiMode::Insert, AnsiMode::NewLine]),
+            Sm(ansi_modes([])),
+            Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])),
             So,
             Su(19),
             Tbc(TbcScope::CurrentColumn),
