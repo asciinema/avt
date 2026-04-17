@@ -1114,7 +1114,7 @@ impl Terminal {
     fn sgr(&mut self, ops: SgrOps) {
         use SgrOp::*;
 
-        for op in ops.as_slice().iter().copied() {
+        for &op in ops.as_slice() {
             match op {
                 Reset => {
                     self.pen = Pen::default();
