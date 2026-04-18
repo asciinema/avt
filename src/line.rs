@@ -71,7 +71,6 @@ impl Line {
             }
 
             (Occupancy::Single, CharWidth::Double, 0) => {
-                self.cells[col].set(' ', Occupancy::Single, pen);
                 return None;
             }
 
@@ -127,8 +126,9 @@ impl Line {
                 debug_assert!(col > 0);
                 debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
 
-                self.cells[col + 1].set(' ', Occupancy::Single, pen);
-                return None;
+                self.cells[col - 1].set(' ', Occupancy::Single, pen);
+                self.cells[col].set(ch, Occupancy::WideHead, pen);
+                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
             }
 
             (Occupancy::WideTail, CharWidth::Double, _right) => {

@@ -85,6 +85,11 @@ impl SavedCtx {
     }
 }
 
+enum PrintResult {
+    Printed(usize),
+    NeedsRelocation,
+}
+
 impl Terminal {
     pub fn new((cols, rows): (usize, usize), scrollback_limit: Option<usize>) -> Self {
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
@@ -703,51 +708,73 @@ impl Terminal {
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
 
-        let n = if self.cursor.col < self.cols {
-            if self.insert_mode {
-                self.buffer
-                    .shift_right((self.cursor.col, self.cursor.row), 1, self.pen);
+        match self.try_print(ch) {
+            PrintResult::Printed(width) => self.advance_cursor_after_print(width),
+            PrintResult::NeedsRelocation if self.auto_wrap_mode => {
+                self.wrap_and_print_at_line_start(ch)
             }
-
-            self.buffer
-                .print((self.cursor.col, self.cursor.row), ch, self.pen)
-        } else {
-            None
-        };
-
-        if let Some(n) = n {
-            self.cursor.col += n;
-
-            if self.cursor.col == self.cols && !self.auto_wrap_mode {
-                self.cursor.col = self.cols - 1;
-            }
-        } else if self.auto_wrap_mode {
-            if self.cursor.row == self.bottom_margin {
-                self.buffer.wrap(self.cursor.row);
-                self.scroll_up_in_region(1);
-            } else if self.cursor.row < self.rows - 1 {
-                self.buffer.wrap(self.cursor.row);
-                self.cursor.row += 1;
-            }
-
-            self.cursor.col = self
-                .buffer
-                .print((0, self.cursor.row), ch, self.pen)
-                .unwrap();
-        } else {
-            let n = self
-                .buffer
-                .print((self.cursor.col - 1, self.cursor.row), ch, self.pen);
-
-            if n.is_none() {
-                self.buffer
-                    .print((self.cursor.col - 2, self.cursor.row), ch, self.pen);
-            }
-
-            self.cursor.col = self.cols - 1;
+            PrintResult::NeedsRelocation => self.print_at_line_end(ch),
         }
 
         self.dirty_lines.add(self.cursor.row);
+    }
+
+    fn try_print(&mut self, ch: char) -> PrintResult {
+        if self.cursor.col >= self.cols {
+            return PrintResult::NeedsRelocation;
+        }
+
+        if self.insert_mode {
+            self.buffer
+                .shift_right((self.cursor.col, self.cursor.row), 1, self.pen);
+        }
+
+        match self
+            .buffer
+            .print((self.cursor.col, self.cursor.row), ch, self.pen)
+        {
+            Some(width) => PrintResult::Printed(width),
+            None => PrintResult::NeedsRelocation,
+        }
+    }
+
+    fn advance_cursor_after_print(&mut self, width: usize) {
+        self.cursor.col += width;
+
+        if self.cursor.col == self.cols && !self.auto_wrap_mode {
+            self.cursor.col = self.cols - 1;
+        }
+    }
+
+    fn wrap_and_print_at_line_start(&mut self, ch: char) {
+        if self.cursor.row == self.bottom_margin {
+            self.buffer.wrap(self.cursor.row);
+            self.scroll_up_in_region(1);
+        } else if self.cursor.row < self.rows - 1 {
+            self.buffer.wrap(self.cursor.row);
+            self.cursor.row += 1;
+        }
+
+        if let Some(width) = self.buffer.print((0, self.cursor.row), ch, self.pen) {
+            self.cursor.col = width;
+        } else {
+            self.cursor.col = 0;
+        }
+    }
+
+    fn print_at_line_end(&mut self, ch: char) {
+        let row = self.cursor.row;
+
+        if self.cursor.col > 0 {
+            let col = self.cursor.col - 1;
+            let printed = self.buffer.print((col, row), ch, self.pen).is_some();
+
+            if !printed && col > 0 {
+                self.buffer.print((col - 1, row), ch, self.pen);
+            }
+        }
+
+        self.cursor.col = self.cols - 1;
     }
 
     fn bs(&mut self) {
@@ -2708,6 +2735,112 @@ mod tests {
         term.execute(Cub(5));
         assert_eq!(term.cursor().col, 9);
         assert_eq!(text(&term), "ハローワ|ールド\n");
+    }
+
+    #[test]
+    fn print_wide_char_on_wide_tail_with_one_col_right_and_autowrap() {
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "Aハz");
+        term.execute(Cub(1));
+        term.execute(Print('界'));
+
+        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(text(&term), "A 界|\n");
+        assert_eq!(wrapped(&term), vec![false, false]);
+
+        let row0 = term.view().next().unwrap();
+        assert_eq!(row0.text(), "A 界");
+
+        assert_eq!(
+            row0.cells()
+                .iter()
+                .map(|cell| (cell.char(), cell.occupancy()))
+                .collect::<Vec<_>>(),
+            vec![
+                ('A', Occupancy::Single),
+                (' ', Occupancy::Single),
+                ('界', Occupancy::WideHead),
+                (' ', Occupancy::WideTail),
+            ]
+        );
+    }
+
+    #[test]
+    fn print_wide_char_on_wide_tail_with_one_col_right_and_no_autowrap() {
+        let mut term = Terminal::new((4, 2), None);
+
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "Aハz");
+        term.execute(Cub(1));
+        term.execute(Print('界'));
+
+        assert_eq!(term.cursor(), (3, 0));
+        assert_eq!(text(&term), "A |界\n");
+        assert_eq!(wrapped(&term), vec![false, false]);
+
+        let row0 = term.view().next().unwrap();
+        assert_eq!(row0.text(), "A 界");
+
+        assert_eq!(
+            row0.cells()
+                .iter()
+                .map(|cell| (cell.char(), cell.occupancy()))
+                .collect::<Vec<_>>(),
+            vec![
+                ('A', Occupancy::Single),
+                (' ', Occupancy::Single),
+                ('界', Occupancy::WideHead),
+                (' ', Occupancy::WideTail),
+            ]
+        );
+    }
+
+    #[test]
+    fn print_wide_char_in_occupied_last_column_preserves_cell_before_wrap() {
+        let mut term = Terminal::new((4, 2), None);
+
+        feed(&mut term, "abcz");
+        term.execute(Cup(1, 4));
+        term.execute(Print('界'));
+
+        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(text(&term), "abcz\n界|");
+        assert_eq!(wrapped(&term), vec![true, false]);
+
+        let mut view = term.view();
+        let row0 = view.next().unwrap();
+        let row1 = view.next().unwrap();
+
+        assert_eq!(row0.text(), "abcz");
+
+        assert_eq!(
+            row0.cells()
+                .iter()
+                .map(|cell| (cell.char(), cell.occupancy()))
+                .collect::<Vec<_>>(),
+            vec![
+                ('a', Occupancy::Single),
+                ('b', Occupancy::Single),
+                ('c', Occupancy::Single),
+                ('z', Occupancy::Single),
+            ]
+        );
+
+        assert_eq!(row1.text(), "界  ");
+
+        assert_eq!(
+            row1.cells()
+                .iter()
+                .map(|cell| (cell.char(), cell.occupancy()))
+                .collect::<Vec<_>>(),
+            vec![
+                ('界', Occupancy::WideHead),
+                (' ', Occupancy::WideTail),
+                (' ', Occupancy::Single),
+                (' ', Occupancy::Single),
+            ]
+        );
     }
 
     #[test]
