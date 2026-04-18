@@ -91,7 +91,7 @@ pub enum Function {
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum AnsiMode {
-    Insert = 4, // IRM
+    Insert = 4,   // IRM
     NewLine = 20, // LNM
 }
 
@@ -105,7 +105,7 @@ pub enum CtcOp {
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum DecMode {
-    CursorKeys = 1, // DECCKM
+    CursorKeys = 1,                   // DECCKM
     Origin = 6,                       // DECOM
     AutoWrap = 7,                     // DECAWM
     TextCursorEnable = 25,            // DECTCEM
@@ -1808,14 +1808,8 @@ mod tests {
         assert_eq!(parse("\x1b[!p"), [Decstr]);
 
         // DEC private modes.
-        assert_eq!(
-            parse("\x1b[?7h"),
-            [Decset(dec_modes([DecMode::AutoWrap]))]
-        );
-        assert_eq!(
-            parse("\u{9b}?7h"),
-            [Decset(dec_modes([DecMode::AutoWrap]))]
-        );
+        assert_eq!(parse("\x1b[?7h"), [Decset(dec_modes([DecMode::AutoWrap]))]);
+        assert_eq!(parse("\u{9b}?7h"), [Decset(dec_modes([DecMode::AutoWrap]))]);
         assert_eq!(
             parse("\x1b[?6;1047h"),
             [Decset(dec_modes([
@@ -1835,14 +1829,8 @@ mod tests {
             parse("\u{9b}?1049h"),
             [Decset(dec_modes([DecMode::SaveCursorAltScreenBuffer]))]
         );
-        assert_eq!(
-            parse("\x1b[?7l"),
-            [Decrst(dec_modes([DecMode::AutoWrap]))]
-        );
-        assert_eq!(
-            parse("\u{9b}?7l"),
-            [Decrst(dec_modes([DecMode::AutoWrap]))]
-        );
+        assert_eq!(parse("\x1b[?7l"), [Decrst(dec_modes([DecMode::AutoWrap]))]);
+        assert_eq!(parse("\u{9b}?7l"), [Decrst(dec_modes([DecMode::AutoWrap]))]);
         assert_eq!(
             parse("\x1b[?47l"),
             [Decrst(dec_modes([DecMode::AltScreenBuffer]))]
