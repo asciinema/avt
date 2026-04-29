@@ -16,7 +16,8 @@ unicode-width = "0.1.13"
 
 [dev-dependencies]
 rand = "0.7"
-proptest = "1.2.0"
+proptest = "=1.9.0"
+tempfile = "=3.24.0"
 criterion = "0.3"
 pretty_assertions = "1.0"
 
