@@ -91,8 +91,15 @@ impl SavedCtx {
 }
 
 enum PrintResult {
+    /// Glyph landed at the current cell with `width` advance.
     Printed(usize),
-    NeedsRelocation,
+    /// Cursor was already past the last column when the print
+    /// started (the auto-wrap "pending-wrap" state).
+    Overshoot,
+    /// Cursor is still inside the screen but the glyph would
+    /// straddle the right edge — i.e. a wide glyph reaching the
+    /// last column.
+    WideAtEdge,
 }
 
 impl Terminal {
@@ -741,10 +748,20 @@ impl Terminal {
 
         match self.try_print(ch) {
             PrintResult::Printed(width) => self.advance_cursor_after_print(width),
-            PrintResult::NeedsRelocation if self.auto_wrap_mode => {
+            PrintResult::Overshoot if self.auto_wrap_mode => {
                 self.wrap_and_print_at_line_start(ch)
             }
-            PrintResult::NeedsRelocation => self.print_at_line_end(ch),
+            PrintResult::Overshoot => self.print_at_line_end(ch),
+            PrintResult::WideAtEdge if self.auto_wrap_mode => {
+                self.wrap_and_print_at_line_start(ch)
+            }
+            // A wide glyph that doesn't fit while auto-wrap is off
+            // is silently discarded — xterm.js drops it and leaves
+            // the cursor anchored at the last column. Earlier
+            // versions of this emulator overwrote the previous cell
+            // with the wide glyph, which produced visible junk and
+            // moved the cursor into the overshoot column.
+            PrintResult::WideAtEdge => {}
         }
 
         self.last_print_char = Some(ch);
@@ -753,7 +770,7 @@ impl Terminal {
 
     fn try_print(&mut self, ch: char) -> PrintResult {
         if self.cursor.col >= self.cols {
-            return PrintResult::NeedsRelocation;
+            return PrintResult::Overshoot;
         }
 
         if self.insert_mode {
@@ -766,7 +783,7 @@ impl Terminal {
             .print((self.cursor.col, self.cursor.row), ch, self.pen)
         {
             Some(width) => PrintResult::Printed(width),
-            None => PrintResult::NeedsRelocation,
+            None => PrintResult::WideAtEdge,
         }
     }
 
@@ -3093,6 +3110,24 @@ mod tests {
                 (' ', Occupancy::WideTail),
             ]
         );
+    }
+
+    #[test]
+    fn print_wide_char_at_last_column_no_autowrap_drops_glyph() {
+        // 5-column row, auto-wrap off. After "ABCD" the cursor sits
+        // at the last column (col 4), with that cell still blank —
+        // we haven't yet entered the pending-wrap state. A wide
+        // glyph that would straddle the right edge is dropped and
+        // the cursor stays anchored.
+        let mut term = Terminal::new((5, 1), None);
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "ABCD");
+        assert_eq!(term.cursor(), (4, 0));
+
+        term.execute(Print('你'));
+
+        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(text(&term), "ABCD|");
     }
 
     #[test]
