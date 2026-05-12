@@ -870,6 +870,10 @@ impl Terminal {
 
             self.dirty_lines.add(row);
         }
+
+        // DECALN homes the cursor as part of the alignment test.
+        self.cursor.col = 0;
+        self.cursor.row = 0;
     }
 
     fn gzd4(&mut self, charset: Charset) {
@@ -3123,8 +3127,10 @@ mod tests {
         term.execute(Cup(2, 3));
         term.execute(Decaln);
 
-        assert_eq!(term.cursor(), (2, 1));
-        assert_eq!(text(&term), "EEEE\nEE|EE");
+        // Per VT100: DECALN fills the screen with the test pattern
+        // AND homes the cursor as part of the alignment check.
+        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(text(&term), "|EEEE\nEEEE");
     }
 
     #[test]
