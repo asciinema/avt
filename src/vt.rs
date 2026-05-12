@@ -1,6 +1,6 @@
 use crate::line::Line;
 use crate::parser::{self, Parser};
-use crate::terminal::{Cursor, Terminal};
+use crate::terminal::{BufferType, Cursor, Terminal};
 
 #[derive(Debug)]
 pub struct Vt {
@@ -69,6 +69,14 @@ impl Vt {
 
     pub fn cursor_key_app_mode(&self) -> bool {
         self.terminal.cursor_keys_app_mode()
+    }
+
+    /// Currently active screen buffer. Switches to
+    /// [`BufferType::Alternate`] when the application enters the
+    /// alternate screen (DECSET 1047 / 1049 / 47) and back to
+    /// [`BufferType::Primary`] when it leaves.
+    pub fn active_buffer_type(&self) -> BufferType {
+        self.terminal.active_buffer_type()
     }
 
     pub fn dump(&self) -> String {
@@ -211,6 +219,29 @@ mod tests {
         vt.resize(4, 3);
 
         assert_eq!(vt.size(), (4, 3));
+    }
+
+    #[test]
+    fn active_buffer_type_tracks_alternate_screen() {
+        use super::BufferType;
+
+        let mut vt = Vt::new(4, 2);
+
+        assert_eq!(vt.active_buffer_type(), BufferType::Primary);
+
+        // DECSET 1049: enter alternate screen.
+        vt.feed_str("\x1b[?1049h");
+        assert_eq!(vt.active_buffer_type(), BufferType::Alternate);
+
+        // DECRST 1049: leave alternate screen.
+        vt.feed_str("\x1b[?1049l");
+        assert_eq!(vt.active_buffer_type(), BufferType::Primary);
+
+        // DECSET 47 (legacy alt-screen toggle).
+        vt.feed_str("\x1b[?47h");
+        assert_eq!(vt.active_buffer_type(), BufferType::Alternate);
+        vt.feed_str("\x1b[?47l");
+        assert_eq!(vt.active_buffer_type(), BufferType::Primary);
     }
 
     #[test]
