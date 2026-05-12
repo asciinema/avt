@@ -81,8 +81,10 @@ pub enum Function {
     Sd(u16),
     Sgr(SgrOps),
     Si,
+    Sl(u16),
     Sm(AnsiModes),
     So,
+    Sr(u16),
     Su(u16),
     Tbc(TbcScope),
     Vpa(u16),
@@ -822,6 +824,10 @@ impl Parser {
 
             (Some('\''), '~') => Some(Decdc(ps[0].as_u16())),
 
+            (Some(' '), '@') => Some(Sl(ps[0].as_u16())),
+
+            (Some(' '), 'A') => Some(Sr(ps[0].as_u16())),
+
             (Some('?'), 'h') => Some(Decset(DecModes::collect(
                 ps[..=self.cur_param].iter().filter_map(dec_mode),
             ))),
@@ -1176,7 +1182,9 @@ fn dump_function(seq: &mut String, fun: &Function) {
             push_csi(seq, None, &params, 'h');
         }
 
+        Sl(n) => push_csi(seq, Some(' '), &[n.to_string()], '@'),
         So => seq.push('\u{0e}'),
+        Sr(n) => push_csi(seq, Some(' '), &[n.to_string()], 'A'),
         Su(n) => push_csi(seq, None, &[n.to_string()], 'S'),
 
         Tbc(scope) => {
@@ -1837,6 +1845,10 @@ mod tests {
         assert_eq!(parse("\x1b[2'}"), [Decic(2)]);
         assert_eq!(parse("\x1b['~"), [Decdc(0)]);
         assert_eq!(parse("\x1b[3'~"), [Decdc(3)]);
+        assert_eq!(parse("\x1b[ @"), [Sl(0)]);
+        assert_eq!(parse("\x1b[4 @"), [Sl(4)]);
+        assert_eq!(parse("\x1b[ A"), [Sr(0)]);
+        assert_eq!(parse("\x1b[5 A"), [Sr(5)]);
 
         // DEC private modes.
         assert_eq!(parse("\x1b[?7h"), [Decset(dec_modes([DecMode::AutoWrap]))]);
@@ -2186,9 +2198,11 @@ mod tests {
                 ResetBackgroundColor,
             ])),
             Si,
+            Sl(7),
             Sm(ansi_modes([])),
             Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])),
             So,
+            Sr(8),
             Su(19),
             Tbc(TbcScope::CurrentColumn),
             Tbc(TbcScope::All),

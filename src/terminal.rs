@@ -329,12 +329,20 @@ impl Terminal {
                 self.si();
             }
 
+            Sl(n) => {
+                self.sl(n);
+            }
+
             Sm(modes) => {
                 self.sm(modes);
             }
 
             So => {
                 self.so();
+            }
+
+            Sr(n) => {
+                self.sr(n);
             }
 
             Su(n) => {
@@ -874,23 +882,7 @@ impl Terminal {
     /// shifting cells to the right within each row of the active
     /// scroll region. Columns shifted past the right edge are lost.
     fn decic(&mut self, n: u16) {
-        let n = as_usize(n, 1);
-        let cols_left = self.cols.saturating_sub(self.cursor.col);
-        let shift = n.min(cols_left);
-        if shift == 0 {
-            return;
-        }
-        let col = self.cursor.col;
-        let rows = self.top_margin..self.bottom_margin + 1;
-        for row in rows.clone() {
-            self.buffer.shift_right((col, row), shift, self.pen);
-            // shift_right rotates the cells in place; we still need
-            // to blank the freshly inserted columns at the cursor.
-            for c in col..col + shift {
-                self.buffer.print((c, row), ' ', self.pen);
-            }
-        }
-        self.dirty_lines.extend(rows);
+        self.insert_columns(self.cursor.col, n);
     }
 
     /// DECDC (CSI Pn ' ~) — Delete `n` columns at the cursor column,
@@ -898,13 +890,53 @@ impl Terminal {
     /// region. The freed columns at the right edge are filled with
     /// blanks using the active pen.
     fn decdc(&mut self, n: u16) {
+        self.delete_columns(self.cursor.col, n);
+    }
+
+    /// SL (CSI Pn SP @) — Scroll left by `n` columns. Every row in
+    /// the active scroll region shifts left by `n`; the leftmost
+    /// columns are dropped and freed columns at the right edge are
+    /// blanked with the active pen. Equivalent to DECDC anchored at
+    /// column 0. The cursor does not move.
+    fn sl(&mut self, n: u16) {
+        self.delete_columns(0, n);
+    }
+
+    /// SR (CSI Pn SP A) — Scroll right by `n` columns. Every row in
+    /// the active scroll region shifts right by `n`; the rightmost
+    /// columns are dropped and freed columns at the left edge are
+    /// blanked with the active pen. Equivalent to DECIC anchored at
+    /// column 0. The cursor does not move.
+    fn sr(&mut self, n: u16) {
+        self.insert_columns(0, n);
+    }
+
+    fn insert_columns(&mut self, col: usize, n: u16) {
         let n = as_usize(n, 1);
-        let cols_left = self.cols.saturating_sub(self.cursor.col);
+        let cols_left = self.cols.saturating_sub(col);
         let shift = n.min(cols_left);
         if shift == 0 {
             return;
         }
-        let col = self.cursor.col;
+        let rows = self.top_margin..self.bottom_margin + 1;
+        for row in rows.clone() {
+            self.buffer.shift_right((col, row), shift, self.pen);
+            // shift_right rotates the cells in place; the freshly
+            // inserted columns still need to be blanked.
+            for c in col..col + shift {
+                self.buffer.print((c, row), ' ', self.pen);
+            }
+        }
+        self.dirty_lines.extend(rows);
+    }
+
+    fn delete_columns(&mut self, col: usize, n: u16) {
+        let n = as_usize(n, 1);
+        let cols_left = self.cols.saturating_sub(col);
+        let shift = n.min(cols_left);
+        if shift == 0 {
+            return;
+        }
         let rows = self.top_margin..self.bottom_margin + 1;
         for row in rows.clone() {
             self.buffer.delete((col, row), shift, &self.pen);
@@ -2799,6 +2831,46 @@ mod tests {
         term.execute(Decdc(0));
 
         assert_eq!(text(&term), "|bcdefgh");
+    }
+
+    #[test]
+    fn execute_sl() {
+        // SL shifts every row left, regardless of cursor column.
+        let mut term = build_term(8, 2, 5, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Sl(3));
+
+        // The cursor row text trims trailing spaces past the cursor;
+        // the second row is also shifted because SL operates over
+        // the whole scroll region.
+        assert_eq!(text(&term), "defgh|\nLMNOP");
+    }
+
+    #[test]
+    fn execute_sl_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Sl(0));
+
+        assert_eq!(text(&term), "|bcdefgh");
+    }
+
+    #[test]
+    fn execute_sr() {
+        let mut term = build_term(8, 2, 5, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Sr(3));
+
+        assert_eq!(text(&term), "   ab|cde\n   IJKLM");
+    }
+
+    #[test]
+    fn execute_sr_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Sr(0));
+
+        assert_eq!(text(&term), "| abcdefg");
     }
 
     #[test]
