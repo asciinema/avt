@@ -739,11 +739,15 @@ impl Terminal {
     }
 
     fn advance_cursor_after_print(&mut self, width: usize) {
+        // Let the cursor sit at `cols` after a print that fills the
+        // last column. With auto-wrap on, the next printable advances
+        // via `wrap_and_print_at_line_start`; with auto-wrap off, the
+        // next printable is dispatched to `print_at_line_end`, which
+        // overwrites at `cols - 1` and leaves the cursor at `cols`.
+        // Either way, keeping the overshoot state visible matches the
+        // observable cursor position that interactive terminals (and
+        // xterm.js) report.
         self.cursor.col += width;
-
-        if self.cursor.col == self.cols && !self.auto_wrap_mode {
-            self.cursor.col = self.cols - 1;
-        }
     }
 
     fn wrap_and_print_at_line_start(&mut self, ch: char) {
@@ -774,7 +778,11 @@ impl Terminal {
             }
         }
 
-        self.cursor.col = self.cols - 1;
+        // Park the cursor in the "overshoot" position past the last
+        // column. With auto-wrap off, a subsequent print overwrites
+        // the same cell; toggling auto-wrap back on lets the next
+        // print wrap to a new row.
+        self.cursor.col = self.cols;
     }
 
     fn bs(&mut self) {
@@ -2696,6 +2704,25 @@ mod tests {
     }
 
     #[test]
+    fn auto_wrap_re_enabled_after_overshoot_wraps_next_print() {
+        // Fill the row with auto-wrap off, leaving the cursor in
+        // the overshoot position past the last column; re-enable
+        // auto-wrap; verify the next printable wraps to a new row.
+        let mut term = Terminal::new((4, 4), None);
+
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "abcd");
+
+        assert_eq!(term.cursor(), (4, 0));
+
+        term.execute(Decset(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "e");
+
+        assert_eq!(term.cursor(), (1, 1));
+        assert_eq!(text(&term), "abcd\ne|\n\n");
+    }
+
+    #[test]
     fn auto_wrap_mode() {
         let mut term = Terminal::new((4, 4), None);
 
@@ -2709,7 +2736,12 @@ mod tests {
         term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
-        assert_eq!(text(&term), "abc|f\n\n\n");
+        // Auto-wrap off: after filling the row, every subsequent
+        // printable overwrites the last column. The cursor parks one
+        // past the last column (the "overshoot" state) so flipping
+        // auto-wrap back on lets the next character wrap to a new
+        // row.
+        assert_eq!(text(&term), "abcf|\n\n\n");
     }
 
     #[test]
@@ -2813,8 +2845,12 @@ mod tests {
         term.execute(Cub(1));
         term.execute(Print('界'));
 
-        assert_eq!(term.cursor(), (3, 0));
-        assert_eq!(text(&term), "A |界\n");
+        // Auto-wrap off: 界 doesn't fit at col 3 (a single col left),
+        // so it gets placed one column back, overwriting the
+        // wide-tail of ハ. The cursor parks in the overshoot
+        // position past the last column.
+        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(text(&term), "A 界|\n");
         assert_eq!(wrapped(&term), vec![false, false]);
 
         let row0 = term.view().next().unwrap();
