@@ -1727,6 +1727,12 @@ impl Terminal {
             funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
         }
 
+        // 12b. setup reverse-wrap mode
+
+        if self.reverse_wrap_mode {
+            funs.push(Function::Decset(DecModes::one(DecMode::ReverseWrap)));
+        }
+
         // 13. setup new line mode
 
         if self.new_line_mode {
