@@ -85,6 +85,14 @@ impl Buffer {
         self[row].print(col, ch, pen)
     }
 
+    /// Append a zero-width combining mark to the cell at `(col,
+    /// row)`. Caller is responsible for choosing the right anchor
+    /// column when the cursor sits on a wide-tail or in the
+    /// overshoot position.
+    pub fn push_combining(&mut self, (col, row): VisualPosition, ch: char) {
+        self[row].cells[col].push_combining(ch);
+    }
+
     pub fn wrap(&mut self, row: usize) {
         self[row].wrapped = true;
     }

@@ -750,6 +750,11 @@ impl Terminal {
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
 
+        if is_combining_mark(ch) {
+            self.attach_combining(ch);
+            return;
+        }
+
         match self.try_print(ch) {
             PrintResult::Printed(width) => self.advance_cursor_after_print(width),
             PrintResult::Overshoot if self.auto_wrap_mode => {
@@ -770,6 +775,33 @@ impl Terminal {
 
         self.last_print_char = Some(ch);
         self.dirty_lines.add(self.cursor.row);
+    }
+
+    /// Attach a zero-width combining mark to the most recently
+    /// written cell. The "most recent cell" is the one immediately
+    /// to the left of the cursor (or two left of it if the cursor
+    /// sits on the tail of a wide character), and the mark is
+    /// dropped entirely when no such cell exists — e.g. at column 0
+    /// of a fresh row, before the first printable.
+    fn attach_combining(&mut self, ch: char) {
+        if self.cursor.col == 0 {
+            // Combining marks before the first printable on a row
+            // have nothing to bind to; drop them. xterm.js follows
+            // the same convention.
+            return;
+        }
+
+        let row = self.cursor.row;
+        // When auto-wrap has parked the cursor past the last column
+        // the mark still belongs to the glyph in the last column.
+        let mut attach_col = self.cursor.col.min(self.cols) - 1;
+
+        if self.buffer[(attach_col, row)].occupancy() == Occupancy::WideTail && attach_col > 0 {
+            attach_col -= 1;
+        }
+
+        self.buffer.push_combining((attach_col, row), ch);
+        self.dirty_lines.add(row);
     }
 
     fn try_print(&mut self, ch: char) -> PrintResult {
@@ -1670,14 +1702,14 @@ impl Terminal {
         if self.cursor.col >= self.cols {
             // move cursor past the right border by re-printing the character in
             // the last column
-            let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
+            let last_cell = &self.buffer[(self.cols - 1, self.cursor.row)];
             let occupancy = last_cell.occupancy();
 
             if occupancy == Occupancy::Single {
                 funs.push(to_sgr(last_cell.pen()));
                 funs.push(Function::Print(last_cell.char()));
             } else if occupancy == Occupancy::WideTail {
-                let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
+                let prev_cell = &self.buffer[(self.cols - 2, self.cursor.row)];
 
                 funs.push(Function::Cub(1));
                 funs.push(to_sgr(prev_cell.pen()));
@@ -1875,10 +1907,25 @@ fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
     let mut i = 0;
 
     while i < cells.len() {
+        // Cells that carry combining marks are dumped individually
+        // — neither REP nor a plain run-length share applies once
+        // the trailing marks have to be re-emitted after each base.
+        if !cells[i].combining().is_empty() {
+            funs.push(Function::Print(cells[i].char()));
+            for mark in cells[i].combining() {
+                funs.push(Function::Print(*mark));
+            }
+            i += 1;
+            continue;
+        }
+
         let ch = cells[i].char();
         let mut run_len = 1;
 
-        while i + run_len < cells.len() && cells[i + run_len].char() == ch {
+        while i + run_len < cells.len()
+            && cells[i + run_len].char() == ch
+            && cells[i + run_len].combining().is_empty()
+        {
             run_len += 1;
         }
 
@@ -1952,6 +1999,17 @@ fn as_usize(value: u16, default: usize) -> usize {
     } else {
         value as usize
     }
+}
+
+/// True for Unicode characters with display width 0 — combining
+/// marks, variation selectors, zero-width joiners, etc. ASCII is
+/// short-circuited to false. These attach to the preceding cell
+/// rather than consuming a cell of their own.
+fn is_combining_mark(ch: char) -> bool {
+    if ch <= '\u{7e}' {
+        return false;
+    }
+    matches!(unicode_width::UnicodeWidthChar::width(ch), Some(0))
 }
 
 impl Default for Terminal {
@@ -2201,6 +2259,52 @@ mod tests {
         term.execute(Bs);
 
         assert_eq!(text(&term), "abcd\n|ef");
+    }
+
+    #[test]
+    fn combining_mark_attaches_to_previous_cell() {
+        // U+0301 COMBINING ACUTE ACCENT has display width 0 — it
+        // should attach to the cell to its left without taking a
+        // column of its own.
+        let mut term = Terminal::new((10, 1), None);
+
+        feed(&mut term, "e\u{0301}X");
+
+        assert_eq!(term.cursor(), (2, 0));
+
+        let row = term.view().next().unwrap();
+        assert_eq!(row.text().trim_end(), "e\u{0301}X");
+        assert_eq!(row.cells()[0].combining(), &['\u{0301}'][..]);
+        // The second cell holds X with no marks of its own.
+        assert!(row.cells()[1].combining().is_empty());
+    }
+
+    #[test]
+    fn combining_mark_at_row_start_is_dropped() {
+        // With no preceding cell to bind to, the mark is silently
+        // discarded. This matches xterm.js.
+        let mut term = Terminal::new((10, 1), None);
+
+        feed(&mut term, "\u{0301}X");
+
+        assert_eq!(term.cursor(), (1, 0));
+        let row = term.view().next().unwrap();
+        assert_eq!(row.text().trim_end(), "X");
+    }
+
+    #[test]
+    fn combining_mark_attaches_to_wide_head_through_tail() {
+        // The cursor follows a wide glyph: cursor.col-1 is the
+        // wide-tail. The mark should still resolve to the head.
+        let mut term = Terminal::new((10, 1), None);
+
+        feed(&mut term, "ハ\u{0301}");
+
+        let row = term.view().next().unwrap();
+        assert_eq!(row.cells()[0].char(), 'ハ');
+        assert_eq!(row.cells()[0].combining(), &['\u{0301}'][..]);
+        // No combining mark sitting on the tail cell.
+        assert!(row.cells()[1].combining().is_empty());
     }
 
     #[test]
