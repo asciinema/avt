@@ -950,7 +950,13 @@ impl Terminal {
                 self.dirty_lines.extend(0..self.rows);
             }
 
-            _ => {}
+            EdScope::SavedLines => {
+                // CSI 3 J: erase scrollback only. The visible view is
+                // untouched, the cursor doesn't move. Implementations
+                // vary on whether this is a no-op when scrollback is
+                // disabled; we drain whatever scrollback exists.
+                self.buffer.clear_scrollback();
+            }
         }
     }
 
@@ -2543,6 +2549,38 @@ mod tests {
 
         assert_eq!(text(&term), "\n |\n");
         assert_eq!(wrapped(&term), vec![false, false, false]);
+    }
+
+    #[test]
+    fn execute_ed_saved_lines() {
+        // Build a buffer with scrollback: 2-row view + scrollback
+        // capacity. Feed 5 lines so 3 spill into scrollback.
+        let mut term = Terminal::new((4, 2), Some(10));
+        feed(&mut term, "L0\r\nL1\r\nL2\r\nL3\r\nL4");
+
+        assert!(term.lines().count() > 2, "expected scrollback to exist");
+        let view_before: Vec<String> = term.view().map(|l| l.text()).collect();
+
+        term.execute(Ed(EdScope::SavedLines));
+
+        // Scrollback drained, view intact, cursor unchanged.
+        assert_eq!(term.lines().count(), 2);
+        let view_after: Vec<String> = term.view().map(|l| l.text()).collect();
+        assert_eq!(view_after, view_before);
+        assert_eq!(term.cursor(), (2, 1));
+    }
+
+    #[test]
+    fn execute_ed_saved_lines_no_scrollback() {
+        // No scrollback buffered → ED 3 is a no-op for state but
+        // must not panic / corrupt anything.
+        let mut term = Terminal::new((4, 3), Some(10));
+        feed(&mut term, "abc");
+
+        term.execute(Ed(EdScope::SavedLines));
+
+        assert_eq!(text(&term), "abc|\n\n");
+        assert_eq!(term.lines().count(), 3);
     }
 
     #[test]

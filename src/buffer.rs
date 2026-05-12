@@ -355,6 +355,14 @@ impl Buffer {
         self.lines.extend(filler);
     }
 
+    /// Drop all scrollback lines, keeping the visible view intact.
+    pub fn clear_scrollback(&mut self) {
+        let offset = self.view_offset();
+        if offset > 0 {
+            self.lines.drain(..offset);
+        }
+    }
+
     fn trim_scrollback(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
         if let Some(limit) = &self.scrollback_limit {
             let line_count = self.lines.len();
