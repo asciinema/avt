@@ -1039,7 +1039,7 @@ impl Terminal {
         };
 
         self.buffer
-            .scroll_up(range.clone(), as_usize(n, 1), &self.pen);
+            .delete_lines(range.clone(), as_usize(n, 1), &self.pen);
 
         self.dirty_lines.extend(range);
     }
@@ -1059,7 +1059,14 @@ impl Terminal {
     }
 
     fn su(&mut self, n: u16) {
-        self.scroll_up_in_region(as_usize(n, 1));
+        // Explicit SU (CSI Pn S) discards lines that scroll off the
+        // top of the scroll region — they don't enter the scrollback
+        // buffer. Use the explicit-delete path; only natural overflow
+        // (LF / wrap at the bottom margin) preserves history.
+        let range = self.top_margin..self.bottom_margin + 1;
+        self.buffer
+            .delete_lines(range.clone(), as_usize(n, 1), &self.pen);
+        self.dirty_lines.extend(range);
     }
 
     fn sd(&mut self, n: u16) {
@@ -2495,6 +2502,50 @@ mod tests {
 
         assert_eq!(text(&term), "abcd\nefgh\nijkl\n|");
         assert_eq!(wrapped(&term), vec![true, true, false, false]);
+    }
+
+    #[test]
+    fn dl_at_top_row_does_not_grow_scrollback() {
+        // DL discards the deleted line — it must not be pushed into
+        // the scrollback buffer even when the deletion happens at
+        // the top of the viewport and the full row range is involved.
+        let mut term = Terminal::new((4, 3), Some(20));
+        feed(&mut term, "AAA\r\nBBB\r\nCCC");
+
+        let scrollback_before = term.lines().count() - term.size().1;
+        assert_eq!(scrollback_before, 0, "preconditions");
+
+        term.execute(Cup(1, 1));
+        term.execute(Dl(1));
+
+        // BBB shifted up, CCC shifted up, last row blank. AAA gone.
+        let visible: Vec<String> = term
+            .view()
+            .map(|l| l.text().trim_end().to_owned())
+            .collect();
+        assert_eq!(visible, vec!["BBB", "CCC", ""]);
+        assert_eq!(term.lines().count(), 3);
+    }
+
+    #[test]
+    fn su_does_not_grow_scrollback() {
+        // SU is an explicit scroll, not a natural overflow — it
+        // should drop the lines that leave the top of the scroll
+        // region, never preserving them in the scrollback buffer.
+        let mut term = Terminal::new((4, 3), Some(20));
+        feed(&mut term, "AAA\r\nBBB\r\nCCC");
+
+        let scrollback_before = term.lines().count() - term.size().1;
+        assert_eq!(scrollback_before, 0, "preconditions");
+
+        term.execute(Su(2));
+
+        let visible: Vec<String> = term
+            .view()
+            .map(|l| l.text().trim_end().to_owned())
+            .collect();
+        assert_eq!(visible, vec!["CCC", "", ""]);
+        assert_eq!(term.lines().count(), 3);
     }
 
     #[test]

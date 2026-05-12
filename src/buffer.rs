@@ -184,6 +184,27 @@ impl Buffer {
         self.trim_needed = true;
     }
 
+    /// Delete `n` lines starting at `range.start`, shifting the
+    /// remaining lines in `range` up and clearing the trailing `n`
+    /// rows. Unlike [`Buffer::scroll_up`], deleted lines are not
+    /// pushed into the scrollback — this matches how DL (CSI Pn M)
+    /// and SU (CSI Pn S) discard content rather than preserve it.
+    pub fn delete_lines(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
+        n = n.min(range.end - range.start);
+
+        if range.end - 1 < self.rows - 1 {
+            self[range.end - 1].wrapped = false;
+        }
+
+        if range.start > 0 {
+            self[range.start - 1].wrapped = false;
+        }
+
+        let end = range.end;
+        self[range].rotate_left(n);
+        self.clear((end - n)..end, pen);
+    }
+
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         let (start, end) = (range.start, range.end);
         n = n.min(end - start);
