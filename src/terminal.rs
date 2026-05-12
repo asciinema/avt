@@ -40,6 +40,11 @@ pub struct Terminal {
     alternate_saved_ctx: SavedCtx,
     dirty_lines: DirtyLines,
     xtwinops: bool,
+    /// Last printable character emitted, used by REP (CSI Pn b).
+    /// Cleared by every non-print / non-REP function so a cursor
+    /// move between the print and REP makes REP a no-op (matching
+    /// the de-facto xterm behavior).
+    last_print_char: Option<char>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -119,6 +124,7 @@ impl Terminal {
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
             xtwinops: false,
+            last_print_char: None,
         }
     }
 
@@ -132,6 +138,15 @@ impl Terminal {
 
     pub fn execute(&mut self, fun: Function) {
         use Function::*;
+
+        // REP repeats the last printable. Any other function — even
+        // a cursor move that doesn't visibly change buffer state —
+        // invalidates that history, so a `print "X"; cup ...; rep`
+        // sequence is a no-op rather than replaying whatever cell
+        // happens to be next to the new cursor position.
+        if !matches!(fun, Print(_) | Rep(_)) {
+            self.last_print_char = None;
+        }
 
         match fun {
             Bs => {
@@ -716,6 +731,7 @@ impl Terminal {
             PrintResult::NeedsRelocation => self.print_at_line_end(ch),
         }
 
+        self.last_print_char = Some(ch);
         self.dirty_lines.add(self.cursor.row);
     }
 
@@ -1083,19 +1099,11 @@ impl Terminal {
     }
 
     fn rep(&mut self, n: u16) {
-        if self.cursor.col > 0 {
+        if let Some(ch) = self.last_print_char {
             let n = as_usize(n, 1);
-            let row = self.cursor.row;
-            let mut col = self.cursor.col - 1;
 
-            while col > 0 && self.buffer[(col, row)].occupancy() == Occupancy::WideTail {
-                col -= 1;
-            }
-
-            let char = self.buffer[(col, row)].char();
-
-            for _n in 0..n {
-                self.print(char);
+            for _ in 0..n {
+                self.print(ch);
             }
         }
     }
@@ -2278,6 +2286,7 @@ mod tests {
     fn execute_rep() {
         let mut term = build_term(20, 2, 0, 0, "");
 
+        // REP with no preceding printable is a no-op.
         term.execute(Rep(0));
 
         assert_eq!(text(&term), "|\n");
@@ -2291,10 +2300,40 @@ mod tests {
 
         assert_eq!(text(&term), "AAAAA|\n");
 
+        // A cursor move invalidates the REP history; the following
+        // REP is a no-op.
         term.execute(Cuf(5));
         term.execute(Rep(0));
 
-        assert_eq!(text(&term), "AAAAA      |\n");
+        assert_eq!(text(&term), "AAAAA     |\n");
+    }
+
+    #[test]
+    fn rep_is_noop_after_cursor_movement() {
+        // Print 'A', explicitly move the cursor, then REP. With the
+        // last-print history cleared by every non-print operation,
+        // REP repeats nothing — the cells past the new cursor
+        // position stay blank.
+        let mut term = build_term(10, 1, 0, 0, "");
+
+        term.execute(Print('A'));
+        term.execute(Cup(1, 4));
+        term.execute(Rep(3));
+
+        assert_eq!(text(&term), "A  |");
+    }
+
+    #[test]
+    fn rep_chains_consecutively() {
+        // Two REPs in a row both repeat the last printable. Only a
+        // non-print/non-REP function would clear the history.
+        let mut term = build_term(10, 1, 0, 0, "");
+
+        term.execute(Print('A'));
+        term.execute(Rep(2));
+        term.execute(Rep(2));
+
+        assert_eq!(text(&term), "AAAAA|");
     }
 
     #[test]
@@ -2313,9 +2352,10 @@ mod tests {
 
         term.execute(Print('ハ'));
         term.execute(Cub(1));
+        // Cursor moved → REP has nothing to repeat.
         term.execute(Rep(3));
 
-        assert_eq!(text(&term), " ハハハ|\n");
+        assert_eq!(text(&term), "|ハ\n");
     }
 
     #[test]
