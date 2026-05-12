@@ -113,6 +113,7 @@ pub enum DecMode {
     Origin = 6,                       // DECOM
     AutoWrap = 7,                     // DECAWM
     TextCursorEnable = 25,            // DECTCEM
+    ReverseWrap = 45,                 // XTREVWRAP
     AltScreenBuffer = 1047,           // xterm
     SaveCursor = 1048,                // xterm
     SaveCursorAltScreenBuffer = 1049, // xterm
@@ -1024,6 +1025,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
                     Origin => 6,
                     AutoWrap => 7,
                     TextCursorEnable => 25,
+                    ReverseWrap => 45,
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
@@ -1045,6 +1047,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
                     Origin => 6,
                     AutoWrap => 7,
                     TextCursorEnable => 25,
+                    ReverseWrap => 45,
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
@@ -1522,6 +1525,7 @@ fn dec_mode(param: &Param) -> Option<DecMode> {
         6 => Some(Origin),
         7 => Some(AutoWrap),
         25 => Some(TextCursorEnable),
+        45 => Some(ReverseWrap),
         47 => Some(AltScreenBuffer), // legacy variant of 1047
         1047 => Some(AltScreenBuffer),
         1048 => Some(SaveCursor),

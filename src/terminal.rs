@@ -32,6 +32,7 @@ pub struct Terminal {
     insert_mode: bool,
     origin_mode: bool,
     auto_wrap_mode: bool,
+    reverse_wrap_mode: bool,
     new_line_mode: bool,
     cursor_keys_mode: CursorKeysMode,
     top_margin: usize,
@@ -123,6 +124,7 @@ impl Terminal {
             insert_mode: false,
             origin_mode: false,
             auto_wrap_mode: true,
+            reverse_wrap_mode: false,
             new_line_mode: false,
             cursor_keys_mode: CursorKeysMode::Normal,
             top_margin: 0,
@@ -646,6 +648,7 @@ impl Terminal {
         self.insert_mode = false;
         self.origin_mode = false;
         self.auto_wrap_mode = true;
+        self.reverse_wrap_mode = false;
         self.new_line_mode = false;
         self.cursor_keys_mode = CursorKeysMode::Normal;
         self.top_margin = 0;
@@ -723,6 +726,7 @@ impl Terminal {
         assert_eq!(self.insert_mode, other.insert_mode);
         assert_eq!(self.origin_mode, other.origin_mode);
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
+        assert_eq!(self.reverse_wrap_mode, other.reverse_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
         assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
         assert_eq!(self.top_margin, other.top_margin);
@@ -835,6 +839,19 @@ impl Terminal {
     }
 
     fn bs(&mut self) {
+        // XTREVWRAP (DEC private mode 45) makes BS at column 0 of a
+        // soft-wrapped continuation row hop back to the last column
+        // of the preceding row. Without it BS is clamped at col 0.
+        if self.cursor.col == 0
+            && self.reverse_wrap_mode
+            && self.cursor.row > 0
+            && self.buffer[self.cursor.row - 1].wrapped
+        {
+            self.cursor.row -= 1;
+            self.cursor.col = self.cols - 1;
+            return;
+        }
+
         if self.cursor.col == self.cols {
             self.move_cursor_to_rel_col(-2);
         } else {
@@ -1394,6 +1411,10 @@ impl Terminal {
                     self.auto_wrap_mode = true;
                 }
 
+                ReverseWrap => {
+                    self.reverse_wrap_mode = true;
+                }
+
                 TextCursorEnable => {
                     self.cursor.visible = true;
                 }
@@ -1432,6 +1453,10 @@ impl Terminal {
 
                 AutoWrap => {
                     self.auto_wrap_mode = false;
+                }
+
+                ReverseWrap => {
+                    self.reverse_wrap_mode = false;
                 }
 
                 TextCursorEnable => {
@@ -2170,6 +2195,52 @@ mod tests {
         term.execute(Bs);
 
         assert_eq!(text(&term), "abcd\n|ef");
+    }
+
+    #[test]
+    fn execute_bs_with_reverse_wrap() {
+        // DECSET 45 (XTREVWRAP) makes BS at column 0 cross over to
+        // the last column of the previous row, but only when the
+        // previous row is soft-wrapped (continued onto the current
+        // row). Hard line breaks block the rewind.
+        let mut term = Terminal::new((4, 3), None);
+
+        term.execute(Decset(dec_modes([DecMode::ReverseWrap])));
+
+        // Soft-wrapped row: fill row 0 and let auto-wrap push into
+        // row 1.
+        feed(&mut term, "abcdef");
+        assert_eq!(term.cursor(), (2, 1));
+
+        // BS at col 2 → col 1, normal step.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (1, 1));
+
+        // BS at col 1 → col 0, still inside the same row.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (0, 1));
+
+        // BS at col 0 with a soft-wrapped predecessor → last col of
+        // the previous row.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (3, 0));
+    }
+
+    #[test]
+    fn execute_bs_with_reverse_wrap_stops_at_hard_break() {
+        // Reverse-wrap should not cross hard line breaks (CR/LF).
+        let mut term = Terminal::new((4, 3), None);
+
+        term.execute(Decset(dec_modes([DecMode::ReverseWrap])));
+        feed(&mut term, "ab\r\ncd");
+        // Cursor sits at row 1, col 2. Walk it back to col 0.
+        term.execute(Bs);
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (0, 1));
+
+        // BS at col 0 with a hard-break predecessor stays put.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (0, 1));
     }
 
     #[test]
