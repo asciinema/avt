@@ -209,6 +209,14 @@ impl Terminal {
                 self.decaln();
             }
 
+            Decdc(n) => {
+                self.decdc(n);
+            }
+
+            Decic(n) => {
+                self.decic(n);
+            }
+
             Decrc => {
                 self.rc();
             }
@@ -860,6 +868,48 @@ impl Terminal {
 
     fn ris(&mut self) {
         self.hard_reset();
+    }
+
+    /// DECIC (CSI Pn ' }) — Insert `n` columns at the cursor column,
+    /// shifting cells to the right within each row of the active
+    /// scroll region. Columns shifted past the right edge are lost.
+    fn decic(&mut self, n: u16) {
+        let n = as_usize(n, 1);
+        let cols_left = self.cols.saturating_sub(self.cursor.col);
+        let shift = n.min(cols_left);
+        if shift == 0 {
+            return;
+        }
+        let col = self.cursor.col;
+        let rows = self.top_margin..self.bottom_margin + 1;
+        for row in rows.clone() {
+            self.buffer.shift_right((col, row), shift, self.pen);
+            // shift_right rotates the cells in place; we still need
+            // to blank the freshly inserted columns at the cursor.
+            for c in col..col + shift {
+                self.buffer.print((c, row), ' ', self.pen);
+            }
+        }
+        self.dirty_lines.extend(rows);
+    }
+
+    /// DECDC (CSI Pn ' ~) — Delete `n` columns at the cursor column,
+    /// shifting cells left within each row of the active scroll
+    /// region. The freed columns at the right edge are filled with
+    /// blanks using the active pen.
+    fn decdc(&mut self, n: u16) {
+        let n = as_usize(n, 1);
+        let cols_left = self.cols.saturating_sub(self.cursor.col);
+        let shift = n.min(cols_left);
+        if shift == 0 {
+            return;
+        }
+        let col = self.cursor.col;
+        let rows = self.top_margin..self.bottom_margin + 1;
+        for row in rows.clone() {
+            self.buffer.delete((col, row), shift, &self.pen);
+        }
+        self.dirty_lines.extend(rows);
     }
 
     fn decaln(&mut self) {
@@ -2707,6 +2757,48 @@ mod tests {
         term.execute(Dch(10));
 
         assert_eq!(text(&term), "abc    |\nijkl");
+    }
+
+    #[test]
+    fn execute_decic() {
+        // DECIC: insert columns at the cursor column in every row of
+        // the active scroll region, shifting existing cells right.
+        // Columns past the right margin are dropped.
+        let mut term = build_term(8, 2, 2, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Decic(3));
+
+        assert_eq!(text(&term), "ab|   cde\nIJ   KLM");
+    }
+
+    #[test]
+    fn execute_decic_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Decic(0));
+
+        assert_eq!(text(&term), "| abcdefg");
+    }
+
+    #[test]
+    fn execute_decdc() {
+        // DECDC: delete columns at the cursor column in every row of
+        // the active scroll region, shifting existing cells left.
+        // Freed cells at the right edge are blanked.
+        let mut term = build_term(8, 2, 2, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Decdc(3));
+
+        assert_eq!(text(&term), "ab|fgh\nIJNOP");
+    }
+
+    #[test]
+    fn execute_decdc_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Decdc(0));
+
+        assert_eq!(text(&term), "|bcdefgh");
     }
 
     #[test]
