@@ -757,13 +757,9 @@ impl Terminal {
 
         match self.try_print(ch) {
             PrintResult::Printed(width) => self.advance_cursor_after_print(width),
-            PrintResult::Overshoot if self.auto_wrap_mode => {
-                self.wrap_and_print_at_line_start(ch)
-            }
+            PrintResult::Overshoot if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch),
             PrintResult::Overshoot => self.print_at_line_end(ch),
-            PrintResult::WideAtEdge if self.auto_wrap_mode => {
-                self.wrap_and_print_at_line_start(ch)
-            }
+            PrintResult::WideAtEdge if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch),
             // A wide glyph that doesn't fit while auto-wrap is off
             // is silently discarded — xterm.js drops it and leaves
             // the cursor anchored at the last column. Earlier
@@ -1701,19 +1697,27 @@ impl Terminal {
 
         if self.cursor.col >= self.cols {
             // move cursor past the right border by re-printing the character in
-            // the last column
+            // the last column. Trailing combining marks on the trigger cell
+            // get re-emitted as their own Print functions so the round-trip
+            // doesn't strip them when the re-print clears the destination.
             let last_cell = &self.buffer[(self.cols - 1, self.cursor.row)];
             let occupancy = last_cell.occupancy();
 
             if occupancy == Occupancy::Single {
                 funs.push(to_sgr(last_cell.pen()));
                 funs.push(Function::Print(last_cell.char()));
+                for mark in last_cell.combining() {
+                    funs.push(Function::Print(*mark));
+                }
             } else if occupancy == Occupancy::WideTail {
                 let prev_cell = &self.buffer[(self.cols - 2, self.cursor.row)];
 
                 funs.push(Function::Cub(1));
                 funs.push(to_sgr(prev_cell.pen()));
                 funs.push(Function::Print(prev_cell.char()));
+                for mark in prev_cell.combining() {
+                    funs.push(Function::Print(*mark));
+                }
             }
         }
 
