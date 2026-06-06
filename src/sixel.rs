@@ -34,6 +34,12 @@ pub struct Sixel {
 
 /// A decoded sixel image anchored to a terminal cell. The pixel data is shared
 /// (`Arc`) so the image can scroll and move between buffers cheaply.
+///
+/// When the terminal knows its cell pixel size, the image also tracks its cell
+/// footprint (`cols` x `rows`) and which of those cells have been overwritten by
+/// later cell content (the [`occluded`](Image::is_occluded) mask). A real
+/// terminal paints sixel pixels once and lets subsequent text overwrite them;
+/// the mask lets a renderer reproduce that by skipping occluded cells.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Image {
     /// Anchor cell column (top-left of the image), in view coordinates.
@@ -41,11 +47,15 @@ pub struct Image {
     /// Anchor cell row, in view coordinates.
     pub row: usize,
     data: Arc<Sixel>,
+    cols: usize,
+    rows: usize,
+    occluded: Vec<bool>,
 }
 
 impl Image {
     /// Create an image anchored at cell (`col`, `row`) from a row-major RGBA
-    /// buffer of `width * height` pixels.
+    /// buffer of `width * height` pixels. The cell footprint is unknown, so no
+    /// occlusion is tracked.
     pub fn new(col: usize, row: usize, width: usize, height: usize, pixels: Vec<RGBA8>) -> Self {
         Image {
             col,
@@ -55,14 +65,25 @@ impl Image {
                 height,
                 pixels,
             }),
+            cols: 0,
+            rows: 0,
+            occluded: Vec::new(),
         }
     }
 
-    pub(crate) fn from_sixel(col: usize, row: usize, sixel: Sixel) -> Self {
+    pub(crate) fn from_sixel(col: usize, row: usize, sixel: Sixel, cell_size: Option<(usize, usize)>) -> Self {
+        let (cols, rows) = match cell_size {
+            Some((cw, ch)) if cw > 0 && ch > 0 => (sixel.width.div_ceil(cw), sixel.height.div_ceil(ch)),
+            _ => (0, 0),
+        };
+
         Image {
             col,
             row,
             data: Arc::new(sixel),
+            cols,
+            rows,
+            occluded: vec![false; cols * rows],
         }
     }
 
@@ -80,6 +101,39 @@ impl Image {
     /// written by the sixel stream are transparent.
     pub fn pixels(&self) -> &[RGBA8] {
         &self.data.pixels
+    }
+
+    /// The image's cell footprint width, or `0` if the cell size is unknown.
+    pub fn cols(&self) -> usize {
+        self.cols
+    }
+
+    /// The image's cell footprint height, or `0` if the cell size is unknown.
+    pub fn rows(&self) -> usize {
+        self.rows
+    }
+
+    /// Whether the footprint cell at offset (`dcol`, `drow`) from the anchor has
+    /// been overwritten by later cell content (and so should hide the image
+    /// there). Always `false` when the cell size is unknown.
+    pub fn is_occluded(&self, dcol: usize, drow: usize) -> bool {
+        dcol < self.cols && drow < self.rows && self.occluded[drow * self.cols + dcol]
+    }
+
+    /// Mark the footprint cell containing view position (`col`, `row`) occluded,
+    /// because cell content was drawn there after the image was placed.
+    pub(crate) fn occlude(&mut self, col: usize, row: usize) {
+        if self.cols == 0
+            || col < self.col
+            || row < self.row
+            || col >= self.col + self.cols
+            || row >= self.row + self.rows
+        {
+            return;
+        }
+
+        let idx = (row - self.row) * self.cols + (col - self.col);
+        self.occluded[idx] = true;
     }
 }
 

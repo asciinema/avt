@@ -91,6 +91,7 @@ impl Vt {
 pub struct Builder {
     size: (usize, usize),
     scrollback_limit: Option<usize>,
+    cell_size: Option<(usize, usize)>,
 }
 
 impl Builder {
@@ -106,10 +107,20 @@ impl Builder {
         self
     }
 
+    /// The pixel size of a cell (width, height). When set, decoded sixel images
+    /// gain a cell footprint and track which cells later content overwrites, so
+    /// a renderer can occlude them like a real terminal does. Without it, images
+    /// carry no occlusion information.
+    pub fn cell_size(&mut self, width: usize, height: usize) -> &mut Self {
+        self.cell_size = Some((width, height));
+
+        self
+    }
+
     pub fn build(&self) -> Vt {
         Vt {
             parser: Parser::new(),
-            terminal: Terminal::new(self.size, self.scrollback_limit),
+            terminal: Terminal::new(self.size, self.scrollback_limit, self.cell_size),
         }
     }
 }
@@ -119,6 +130,7 @@ impl Default for Builder {
         Builder {
             size: (80, 24),
             scrollback_limit: None,
+            cell_size: None,
         }
     }
 }
@@ -213,6 +225,39 @@ mod tests {
             dirty.contains(&0),
             "expected the image's anchor row to be reported dirty, got {dirty:?}"
         );
+    }
+
+    #[test]
+    fn cell_written_over_image_after_placement_is_occluded() {
+        // cell_size 1x6 makes the two-column sixel span exactly two cells.
+        let mut vt = Vt::builder().size(10, 3).cell_size(1, 6).build();
+        // A two-column red sixel anchored at (0, 0): footprint 2x1 cells.
+        vt.feed_str("\u{1b}Pq#0;2;100;0;0~~\u{1b}\\");
+
+        let image = &vt.images()[0];
+        assert_eq!((image.cols(), image.rows()), (2, 1));
+        assert!(!image.is_occluded(0, 0));
+        assert!(!image.is_occluded(1, 0));
+
+        // Print a glyph over the image's second cell; it must occlude only that
+        // cell.
+        vt.feed_str("\u{1b}[1;2Hx");
+
+        let image = &vt.images()[0];
+        assert!(!image.is_occluded(0, 0), "untouched cell must still show");
+        assert!(image.is_occluded(1, 0), "overwritten cell must be occluded");
+    }
+
+    #[test]
+    fn images_track_no_occlusion_without_a_cell_size() {
+        // Without a cell size the footprint is unknown and nothing is tracked.
+        let mut vt = Vt::new(10, 3);
+        vt.feed_str("\u{1b}Pq#0;2;100;0;0~~\u{1b}\\");
+        vt.feed_str("\u{1b}[1;2Hx");
+
+        let image = &vt.images()[0];
+        assert_eq!((image.cols(), image.rows()), (0, 0));
+        assert!(!image.is_occluded(1, 0));
     }
 
     #[test]
