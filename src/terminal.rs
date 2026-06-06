@@ -333,7 +333,31 @@ impl Terminal {
             Xtwinops(op) => {
                 self.xtwinops(op);
             }
+
+            Sixel(data) => {
+                self.sixel(data);
+            }
         }
+    }
+
+    /// Decode a sixel DCS payload and anchor the image at the cursor cell.
+    fn sixel(&mut self, data: String) {
+        if let Some(sixel) = crate::sixel::decode(&data) {
+            let image = crate::sixel::Image::from_sixel(self.cursor.col, self.cursor.row, sixel);
+            self.buffer.add_image(image);
+
+            // The image paints from the cursor row downward; without the
+            // renderer's cell pixel height we can't know its exact row span, so
+            // mark every row it could cover (anchor row to the bottom) dirty.
+            // Otherwise a feed containing only a sixel DCS reports no changed
+            // rows and renderers that repaint just those rows never show it.
+            self.dirty_lines.extend(self.cursor.row..self.rows);
+        }
+    }
+
+    /// The sixel images currently placed in the active buffer.
+    pub fn images(&self) -> &[crate::sixel::Image] {
+        self.buffer.images()
     }
 
     pub fn cursor(&self) -> Cursor {
@@ -947,6 +971,7 @@ impl Terminal {
                     &self.pen,
                 );
 
+                self.buffer.clear_images();
                 self.dirty_lines.extend(0..self.rows);
             }
 

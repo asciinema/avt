@@ -5,6 +5,7 @@ use std::ops::{Index, IndexMut, Range};
 use crate::cell::Cell;
 use crate::line::Line;
 use crate::pen::Pen;
+use crate::sixel::Image;
 
 #[derive(Debug)]
 pub(crate) struct Buffer {
@@ -13,6 +14,9 @@ pub(crate) struct Buffer {
     pub rows: usize,
     scrollback_limit: Option<usize>,
     trim_needed: bool,
+    // Sixel images anchored to view rows. Kept here (not in Terminal) so buffer
+    // switching swaps them with the lines and scrolling adjusts them together.
+    images: Vec<Image>,
 }
 
 pub(crate) enum EraseMode {
@@ -58,7 +62,59 @@ impl Buffer {
             rows,
             scrollback_limit,
             trim_needed: false,
+            images: Vec::new(),
         }
+    }
+
+    pub fn images(&self) -> &[Image] {
+        &self.images
+    }
+
+    /// Anchor an image at a cell. An image already anchored to the same cell is
+    /// replaced, so an app repainting the same slot each frame stays clean.
+    pub fn add_image(&mut self, image: Image) {
+        self.images
+            .retain(|i| (i.col, i.row) != (image.col, image.row));
+
+        self.images.push(image);
+    }
+
+    pub fn clear_images(&mut self) {
+        self.images.clear();
+    }
+
+    /// Shift image anchors within a scroll region up by `n` rows, dropping any
+    /// that scroll past the region's top.
+    fn scroll_images_up(&mut self, range: &Range<usize>, n: usize) {
+        self.images.retain_mut(|image| {
+            if !range.contains(&image.row) {
+                return true;
+            }
+
+            if image.row >= range.start + n {
+                image.row -= n;
+                true
+            } else {
+                false
+            }
+        });
+    }
+
+    /// Shift image anchors within a scroll region down by `n` rows, dropping any
+    /// that scroll past the region's bottom.
+    fn scroll_images_down(&mut self, range: &Range<usize>, n: usize) {
+        self.images.retain_mut(|image| {
+            if !range.contains(&image.row) {
+                return true;
+            }
+
+            if image.row + n < range.end {
+                image.row += n;
+                true
+            } else {
+                false
+            }
+        });
     }
 
     pub fn text(&self) -> Vec<String> {
@@ -158,6 +214,7 @@ impl Buffer {
 
     pub fn scroll_up(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         n = n.min(range.end - range.start);
+        self.scroll_images_up(&range, n);
 
         if range.end - 1 < self.rows - 1 {
             self[range.end - 1].wrapped = false;
@@ -187,6 +244,7 @@ impl Buffer {
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         let (start, end) = (range.start, range.end);
         n = n.min(end - start);
+        self.scroll_images_down(&range, n);
         self[range].rotate_right(n);
         self.clear(start..start + n, pen);
 
@@ -205,6 +263,14 @@ impl Buffer {
     ) -> VisualPosition {
         let old_cols = self.cols;
         let mut old_rows = self.rows;
+
+        // A genuine resize reflows cells, which can move every anchor; rather
+        // than reflow image anchors, drop them. A same-size reflow (used on
+        // buffer switches) leaves cells in place, so images are kept.
+        if new_cols != old_cols || new_rows != old_rows {
+            self.images.clear();
+        }
+
         let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
 
         if new_cols != old_cols {
