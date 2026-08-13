@@ -33,20 +33,26 @@ like xterm, Gnome Terminal, WezTerm, Alacritty, iTerm, Ghostty, mosh etc.
 
 ## Development
 
-The recommended way to work on avt is the Nix dev shell, which provides the
-complete toolchain and just works:
+To work on avt, first download the source code:
+
+```sh
+git clone https://github.com/asciinema/avt
+cd avt
+```
+
+The recommended way to get the toolchain is the Nix dev shell, which provides
+everything needed and just works:
 
 ```sh
 nix develop
 ```
 
-If you don't use Nix, you need the Rust toolchain (1.86 or later) with Cargo.
+If you don't use Nix, you need the Rust toolchain (1.86 or later) with Cargo,
+installed via your system package manager or [rustup](https://rustup.rs/).
 
-To download the source code and build the library run:
+Then build the library with:
 
 ```sh
-git clone https://github.com/asciinema/avt
-cd avt
 cargo build
 ```
 
