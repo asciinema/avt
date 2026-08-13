@@ -31,19 +31,23 @@ avt doesn't try to 100% replicate any specific terminal variant like VT102 or VT
 instead it implements most control sequences supported by modern terminal emulators
 like xterm, Gnome Terminal, WezTerm, Alacritty, iTerm, Ghostty, mosh etc.
 
-## Building
+## Development
 
-Building avt from source requires the [Rust](https://www.rust-lang.org/)
-compiler (1.82 or later) and the [Cargo package
-manager](https://doc.rust-lang.org/cargo/). If they are not available via your
-system package manager then use [rustup](https://rustup.rs/).
+The recommended way to work on avt is the Nix dev shell, which provides the
+complete toolchain and just works:
+
+```sh
+nix develop
+```
+
+If you don't use Nix, you need the Rust toolchain (1.86 or later) with Cargo.
 
 To download the source code and build the library run:
 
 ```sh
 git clone https://github.com/asciinema/avt
 cd avt
-cargo build --release
+cargo build
 ```
 
 To run the test suite:
