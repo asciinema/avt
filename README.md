@@ -58,6 +58,9 @@ To run the benchmarks:
 cargo bench
 ```
 
+If you'd like to propose or submit any changes, please read the
+[contribution guidelines](CONTRIBUTING.md) first.
+
 ## Donations
 
 Sustainability of asciinema development relies on donations and sponsorships.
