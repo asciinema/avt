@@ -51,6 +51,13 @@ impl Vt {
         self.terminal.view()
     }
 
+    /// The sixel images currently placed in the active buffer, anchored to view
+    /// cells. Pixels are decoded RGBA; the renderer composites them over the
+    /// text grid.
+    pub fn images(&self) -> &[crate::Image] {
+        self.terminal.images()
+    }
+
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
         self.terminal.lines()
     }
@@ -84,6 +91,7 @@ impl Vt {
 pub struct Builder {
     size: (usize, usize),
     scrollback_limit: Option<usize>,
+    cell_size: Option<(usize, usize)>,
 }
 
 impl Builder {
@@ -99,10 +107,20 @@ impl Builder {
         self
     }
 
+    /// The pixel size of a cell (width, height). When set, decoded sixel images
+    /// gain a cell footprint and track which cells later content overwrites, so
+    /// a renderer can occlude them like a real terminal does. Without it, images
+    /// carry no occlusion information.
+    pub fn cell_size(&mut self, width: usize, height: usize) -> &mut Self {
+        self.cell_size = Some((width, height));
+
+        self
+    }
+
     pub fn build(&self) -> Vt {
         Vt {
             parser: Parser::new(),
-            terminal: Terminal::new(self.size, self.scrollback_limit),
+            terminal: Terminal::new(self.size, self.scrollback_limit, self.cell_size),
         }
     }
 }
@@ -112,6 +130,7 @@ impl Default for Builder {
         Builder {
             size: (80, 24),
             scrollback_limit: None,
+            cell_size: None,
         }
     }
 }
@@ -167,6 +186,134 @@ mod tests {
         assert_eq!(vt.view().count(), 2);
         assert!(vt.lines().count() >= 2);
         assert_eq!(vt.line(0).chars().take(2).collect::<String>(), "bb");
+    }
+
+    // A 1x6 opaque red sixel image (ESC P q <data> ST).
+    const RED_SIXEL: &str = "\u{1b}Pq#0;2;100;0;0~\u{1b}\\";
+
+    #[test]
+    fn feed_sixel_places_image_at_cursor() {
+        let mut vt = Vt::new(10, 3);
+        vt.feed_str("ab");
+        vt.feed_str(RED_SIXEL);
+
+        let images = vt.images();
+        assert_eq!(images.len(), 1);
+        // Anchored where the cursor sat (column 2, after "ab").
+        assert_eq!((images[0].col, images[0].row), (2, 0));
+        assert_eq!((images[0].width(), images[0].height()), (1, 6));
+        let px = images[0].pixels()[0];
+        assert_eq!((px.r, px.g, px.b, px.a), (255, 0, 0, 255));
+        // The DCS is invisible to the text grid.
+        assert_eq!(vt.text()[0].trim_end(), "ab");
+    }
+
+    #[test]
+    fn sixel_only_feed_marks_image_rows_dirty() {
+        let mut vt = Vt::new(10, 3);
+        // Drain the fresh terminal's initial dirty state so the next feed
+        // reports only what that feed changed.
+        let _ = vt.feed_str("").lines;
+        // A feed that is *only* a sixel DCS still changes the screen: the image
+        // becomes visible at the cursor row. A renderer that repaints just the
+        // returned changed rows must be told that row is dirty, or the image
+        // stays invisible until some unrelated text update dirties the screen.
+        let dirty = vt.feed_str(RED_SIXEL).lines.clone();
+
+        assert_eq!(vt.images().len(), 1);
+        assert!(
+            dirty.contains(&0),
+            "expected the image's anchor row to be reported dirty, got {dirty:?}"
+        );
+    }
+
+    #[test]
+    fn cell_written_over_image_after_placement_is_occluded() {
+        // cell_size 1x6 makes the two-column sixel span exactly two cells.
+        let mut vt = Vt::builder().size(10, 3).cell_size(1, 6).build();
+        // A two-column red sixel anchored at (0, 0): footprint 2x1 cells.
+        vt.feed_str("\u{1b}Pq#0;2;100;0;0~~\u{1b}\\");
+
+        let image = &vt.images()[0];
+        assert_eq!((image.cols(), image.rows()), (2, 1));
+        assert!(!image.is_occluded(0, 0));
+        assert!(!image.is_occluded(1, 0));
+
+        // Print a glyph over the image's second cell; it must occlude only that
+        // cell.
+        vt.feed_str("\u{1b}[1;2Hx");
+
+        let image = &vt.images()[0];
+        assert!(!image.is_occluded(0, 0), "untouched cell must still show");
+        assert!(image.is_occluded(1, 0), "overwritten cell must be occluded");
+    }
+
+    #[test]
+    fn images_track_no_occlusion_without_a_cell_size() {
+        // Without a cell size the footprint is unknown and nothing is tracked.
+        let mut vt = Vt::new(10, 3);
+        vt.feed_str("\u{1b}Pq#0;2;100;0;0~~\u{1b}\\");
+        vt.feed_str("\u{1b}[1;2Hx");
+
+        let image = &vt.images()[0];
+        assert_eq!((image.cols(), image.rows()), (0, 0));
+        assert!(!image.is_occluded(1, 0));
+    }
+
+    #[test]
+    fn sixel_split_across_feeds_is_captured() {
+        let mut vt = Vt::new(10, 3);
+        vt.feed_str("\u{1b}Pq#0;2;100;0;0");
+        assert!(vt.images().is_empty());
+
+        vt.feed_str("~\u{1b}\\");
+        assert_eq!(vt.images().len(), 1);
+    }
+
+    #[test]
+    fn decrqss_is_not_decoded_as_sixel() {
+        let mut vt = Vt::new(10, 3);
+        // DECRQSS request: ESC P $ q " p ST — a DCS with a `$` intermediate.
+        vt.feed_str("\u{1b}P$q\"p\u{1b}\\");
+        assert!(vt.images().is_empty());
+    }
+
+    #[test]
+    fn sixel_scrolls_with_content_then_drops_off_top() {
+        let mut vt = Vt::new(4, 2);
+        vt.feed_str("\r\n"); // cursor to the bottom row
+        vt.feed_str(RED_SIXEL);
+        assert_eq!(vt.images().len(), 1);
+        assert_eq!(vt.images()[0].row, 1);
+
+        vt.feed_str("\r\n"); // scroll up by one: row 1 -> 0
+        assert_eq!(vt.images()[0].row, 0);
+
+        vt.feed_str("\r\n"); // scrolls past the top: dropped
+        assert!(vt.images().is_empty());
+    }
+
+    #[test]
+    fn clearing_the_screen_drops_images() {
+        let mut vt = Vt::new(10, 3);
+        vt.feed_str(RED_SIXEL);
+        assert_eq!(vt.images().len(), 1);
+
+        vt.feed_str("\u{1b}[2J");
+        assert!(vt.images().is_empty());
+    }
+
+    #[test]
+    fn alternate_screen_has_separate_images() {
+        let mut vt = Vt::new(10, 3);
+        vt.feed_str(RED_SIXEL); // primary buffer image
+        assert_eq!(vt.images().len(), 1);
+
+        vt.feed_str("\u{1b}[?1049h"); // switch to alternate screen
+        assert!(vt.images().is_empty());
+
+        vt.feed_str("\u{1b}[?1049l"); // back to primary
+        assert_eq!(vt.images().len(), 1);
     }
 
     #[test]

@@ -40,6 +40,7 @@ pub struct Terminal {
     alternate_saved_ctx: SavedCtx,
     dirty_lines: DirtyLines,
     xtwinops: bool,
+    cell_size: Option<(usize, usize)>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -91,7 +92,11 @@ enum PrintResult {
 }
 
 impl Terminal {
-    pub fn new((cols, rows): (usize, usize), scrollback_limit: Option<usize>) -> Self {
+    pub fn new(
+        (cols, rows): (usize, usize),
+        scrollback_limit: Option<usize>,
+        cell_size: Option<(usize, usize)>,
+    ) -> Self {
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
         let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
         let dirty_lines = DirtyLines::new(rows);
@@ -119,6 +124,7 @@ impl Terminal {
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
             xtwinops: false,
+            cell_size,
         }
     }
 
@@ -333,7 +339,32 @@ impl Terminal {
             Xtwinops(op) => {
                 self.xtwinops(op);
             }
+
+            Sixel(data) => {
+                self.sixel(data);
+            }
         }
+    }
+
+    /// Decode a sixel DCS payload and anchor the image at the cursor cell.
+    fn sixel(&mut self, data: String) {
+        if let Some(sixel) = crate::sixel::decode(&data) {
+            let image =
+                crate::sixel::Image::from_sixel(self.cursor.col, self.cursor.row, sixel, self.cell_size);
+            self.buffer.add_image(image);
+
+            // The image paints from the cursor row downward; without the
+            // renderer's cell pixel height we can't know its exact row span, so
+            // mark every row it could cover (anchor row to the bottom) dirty.
+            // Otherwise a feed containing only a sixel DCS reports no changed
+            // rows and renderers that repaint just those rows never show it.
+            self.dirty_lines.extend(self.cursor.row..self.rows);
+        }
+    }
+
+    /// The sixel images currently placed in the active buffer.
+    pub fn images(&self) -> &[crate::sixel::Image] {
+        self.buffer.images()
     }
 
     pub fn cursor(&self) -> Cursor {
@@ -947,6 +978,7 @@ impl Terminal {
                     &self.pen,
                 );
 
+                self.buffer.clear_images();
                 self.dirty_lines.extend(0..self.rows);
             }
 
@@ -1793,7 +1825,7 @@ fn as_usize(value: u16, default: usize) -> usize {
 
 impl Default for Terminal {
     fn default() -> Self {
-        Self::new((80, 24), None)
+        Self::new((80, 24), None, None)
     }
 }
 
@@ -1824,7 +1856,7 @@ mod tests {
     }
 
     fn build_term(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Terminal {
-        let mut term = Terminal::new((cols, rows), None);
+        let mut term = Terminal::new((cols, rows), None, None);
         feed(&mut term, init);
         term.execute(Cup((cy + 1) as u16, (cx + 1) as u16));
 
@@ -1984,7 +2016,7 @@ mod tests {
 
     #[test]
     fn execute_cr() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "abc");
         term.execute(Cr);
@@ -2010,7 +2042,7 @@ mod tests {
 
     #[test]
     fn execute_bs() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "a");
         term.execute(Bs);
@@ -2042,7 +2074,7 @@ mod tests {
 
     #[test]
     fn execute_cup() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "abc\r\ndef");
         term.execute(Cup(1, 1));
@@ -2056,7 +2088,7 @@ mod tests {
 
     #[test]
     fn execute_cuu() {
-        let mut term = Terminal::new((8, 4), None);
+        let mut term = Terminal::new((8, 4), None, None);
 
         feed(&mut term, "abcd\n\n\n");
         term.execute(Cuu(0));
@@ -2070,7 +2102,7 @@ mod tests {
 
     #[test]
     fn execute_cpl() {
-        let mut term = Terminal::new((8, 4), None);
+        let mut term = Terminal::new((8, 4), None, None);
 
         feed(&mut term, "abcd\r\n\r\n\r\nef");
 
@@ -2087,7 +2119,7 @@ mod tests {
 
     #[test]
     fn execute_cnl() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "ab");
         term.execute(Cnl(0));
@@ -2101,7 +2133,7 @@ mod tests {
 
     #[test]
     fn execute_vpa() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "\r\n\r\naaa\r\nbbb");
         term.execute(Vpa(0));
@@ -2115,7 +2147,7 @@ mod tests {
 
     #[test]
     fn execute_cud() {
-        let mut term = Terminal::new((8, 4), None);
+        let mut term = Terminal::new((8, 4), None, None);
 
         feed(&mut term, "abcd");
         term.execute(Cud(0));
@@ -2129,7 +2161,7 @@ mod tests {
 
     #[test]
     fn execute_cuf() {
-        let mut term = Terminal::new((4, 1), None);
+        let mut term = Terminal::new((4, 1), None, None);
 
         term.execute(Cuf(2));
 
@@ -2155,7 +2187,7 @@ mod tests {
 
     #[test]
     fn execute_cha() {
-        let mut term = Terminal::new((8, 2), None);
+        let mut term = Terminal::new((8, 2), None, None);
 
         feed(&mut term, "abc");
         term.execute(Cha(0));
@@ -2173,7 +2205,7 @@ mod tests {
 
     #[test]
     fn execute_cub() {
-        let mut term = Terminal::new((8, 2), None);
+        let mut term = Terminal::new((8, 2), None, None);
 
         feed(&mut term, "abcd");
         term.execute(Cub(2));
@@ -2189,7 +2221,7 @@ mod tests {
 
         assert_eq!(text(&term), "|abcdef\n");
 
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "abcd");
         term.execute(Cub(0));
@@ -2199,7 +2231,7 @@ mod tests {
 
     #[test]
     fn execute_ht() {
-        let mut term = Terminal::new((20, 1), None);
+        let mut term = Terminal::new((20, 1), None, None);
 
         term.execute(Ht);
         assert_eq!(term.cursor(), (8, 0));
@@ -2213,7 +2245,7 @@ mod tests {
 
     #[test]
     fn execute_hts() {
-        let mut term = Terminal::new((20, 1), None);
+        let mut term = Terminal::new((20, 1), None, None);
 
         term.execute(Cuf(5));
         term.execute(Hts);
@@ -2353,7 +2385,7 @@ mod tests {
 
     #[test]
     fn execute_vpr() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "ab");
         term.execute(Vpr(0));
@@ -2413,7 +2445,7 @@ mod tests {
 
     #[test]
     fn execute_dl() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "abcdefghijklmn");
         term.execute(Cuu(2));
@@ -2422,7 +2454,7 @@ mod tests {
         assert_eq!(text(&term), "abcd\nij|kl\nmn\n");
         assert_eq!(wrapped(&term), vec![false, true, false, false]);
 
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "abcdefghijklmn");
         term.execute(Decstbm(1, 3));
@@ -2432,7 +2464,7 @@ mod tests {
         assert_eq!(text(&term), "abcd\n|ijkl\n\nmn");
         assert_eq!(wrapped(&term), vec![false, false, false, false]);
 
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "abcdefghijklmn");
         term.execute(Decstbm(1, 2));
@@ -2469,7 +2501,7 @@ mod tests {
 
         assert_eq!(text(&term), "  |\n");
 
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "abcdefghij");
         term.execute(Cuu(1));
@@ -2478,7 +2510,7 @@ mod tests {
         assert_eq!(text(&term), "abcd\nef|\nij");
         assert_eq!(wrapped(&term), vec![true, false, false]);
 
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "abcdefghij");
         term.execute(Cuu(1));
@@ -2487,7 +2519,7 @@ mod tests {
         assert_eq!(text(&term), "abcd\n  | h\nij");
         assert_eq!(wrapped(&term), vec![true, true, false]);
 
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "abcdefghij");
         term.execute(Cuu(1));
@@ -2632,7 +2664,7 @@ mod tests {
     #[test]
     fn execute_sc_rc_restores_pen_and_modes() {
         fn assert_save_restore(save: Function, restore: Function) {
-            let mut term = Terminal::new((4, 4), None);
+            let mut term = Terminal::new((4, 4), None, None);
 
             term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
             term.execute(Decstbm(2, 4));
@@ -2659,14 +2691,14 @@ mod tests {
 
     #[test]
     fn auto_wrap_mode() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         term.execute(Decset(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
         assert_eq!(text(&term), "abcd\nef|\n\n");
 
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
@@ -2676,7 +2708,7 @@ mod tests {
 
     #[test]
     fn insert_mode() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "abcd");
         term.execute(Cub(2));
@@ -2692,7 +2724,7 @@ mod tests {
 
     #[test]
     fn print_at_the_end_of_the_screen() {
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "xxxxxxxxxx");
         term.execute(Cup(50, 1));
@@ -2702,7 +2734,7 @@ mod tests {
 
         assert_eq!(text(&term), "xxxx\nxx\n\n\nyyyz\nzz|");
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "\nxxxxxxxxxx");
         term.execute(Decstbm(2, 4));
@@ -2713,7 +2745,7 @@ mod tests {
 
         assert_eq!(text(&term), "yyyz\nzz|xx\nxxxx\nxx\n\n");
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         term.execute(Decstbm(0, 3));
         feed(&mut term, "xxxxxxxxxx");
@@ -2727,7 +2759,7 @@ mod tests {
 
     #[test]
     fn wide_chars() {
-        let mut term = Terminal::new((20, 2), None);
+        let mut term = Terminal::new((20, 2), None, None);
 
         feed(&mut term, "ハローワールド");
         assert_eq!(text(&term), "ハローワールド|\n");
@@ -2739,7 +2771,7 @@ mod tests {
 
     #[test]
     fn print_wide_char_on_wide_tail_with_one_col_right_and_autowrap() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "Aハz");
         term.execute(Cub(1));
@@ -2768,7 +2800,7 @@ mod tests {
 
     #[test]
     fn print_wide_char_on_wide_tail_with_one_col_right_and_no_autowrap() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "Aハz");
@@ -2798,7 +2830,7 @@ mod tests {
 
     #[test]
     fn print_wide_char_in_occupied_last_column_preserves_cell_before_wrap() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "abcz");
         term.execute(Cup(1, 4));
@@ -2845,19 +2877,19 @@ mod tests {
 
     #[test]
     fn execute_su() {
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
         term.execute(Su(2));
         assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
         term.execute(sgr(SetBoldIntensity));
         term.execute(Su(2));
         assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
         assert!(term.view().last().unwrap()[0].pen().is_bold());
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
         term.execute(Decstbm(2, 5));
@@ -2866,7 +2898,7 @@ mod tests {
 
         assert_eq!(text(&term), "|aa\ndd\nee\n\n\nff");
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
         term.execute(Su(2));
@@ -2874,7 +2906,7 @@ mod tests {
         assert_eq!(text(&term), "bbbb\nbb\ncccc\ncc\n\n  |");
         assert_eq!(wrapped(&term), vec![true, false, true, false, false, false]);
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
         term.execute(Decstbm(2, 5));
@@ -2891,14 +2923,14 @@ mod tests {
 
     #[test]
     fn execute_sd() {
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
         term.execute(Sd(2));
 
         assert_eq!(text(&term), "\n\naa\nbb\ncc\ndd|");
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
         term.execute(Decstbm(2, 5));
@@ -2907,7 +2939,7 @@ mod tests {
 
         assert_eq!(text(&term), "|aa\n\n\nbb\ncc\nff");
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
         term.execute(Sd(2));
@@ -2915,7 +2947,7 @@ mod tests {
         assert_eq!(text(&term), "\n\naaaa\naa\nbbbb\nbb|");
         assert_eq!(wrapped(&term), vec![false, false, true, false, true, false]);
 
-        let mut term = Terminal::new((4, 6), None);
+        let mut term = Terminal::new((4, 6), None, None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
         term.execute(Decstbm(2, 5));
@@ -2952,7 +2984,7 @@ mod tests {
 
     #[test]
     fn execute_decaln() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         feed(&mut term, "ab\r\nc");
         term.execute(Cup(2, 3));
@@ -2964,7 +2996,7 @@ mod tests {
 
     #[test]
     fn resize_wider() {
-        let mut term = Terminal::new((6, 6), None);
+        let mut term = Terminal::new((6, 6), None, None);
 
         term.resize(7, 6);
 
@@ -2976,7 +3008,7 @@ mod tests {
         assert_eq!(text(&term), "|\n\n\n\n\n");
         assert!(!term.view().any(|l| l.wrapped));
 
-        let mut term = Terminal::new((6, 6), None);
+        let mut term = Terminal::new((6, 6), None, None);
 
         feed(&mut term, "000000111111222222333333444444555");
 
@@ -2993,7 +3025,7 @@ mod tests {
         assert_eq!(text(&term), "000000111111222\n222333333444444\n555|\n\n\n");
         assert_eq!(wrapped(&term), vec![true, true, false, false, false, false]);
 
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "000011\r\n22");
 
@@ -3008,7 +3040,7 @@ mod tests {
 
     #[test]
     fn resize_narrower() {
-        let mut term = Terminal::new((15, 6), None);
+        let mut term = Terminal::new((15, 6), None, None);
 
         term.resize(7, 6);
 
@@ -3020,7 +3052,7 @@ mod tests {
         assert_eq!(text(&term), "|\n\n\n\n\n");
         assert!(!term.view().any(|l| l.wrapped));
 
-        let mut term = Terminal::new((8, 2), None);
+        let mut term = Terminal::new((8, 2), None, None);
 
         feed(&mut term, "\nabcdef");
 
@@ -3031,7 +3063,7 @@ mod tests {
         assert_eq!(text(&term), "abcd\nef|");
         assert_eq!(wrapped(&term), vec![true, false]);
 
-        let mut term = Terminal::new((15, 6), None);
+        let mut term = Terminal::new((15, 6), None, None);
 
         feed(&mut term, "000000111111222222333333444444555");
 
@@ -3051,7 +3083,7 @@ mod tests {
 
     #[test]
     fn resize() {
-        let mut term = Terminal::new((8, 4), None);
+        let mut term = Terminal::new((8, 4), None, None);
         feed(&mut term, "abcdefgh\r\nijklmnop\r\nqrstuw");
         term.execute(Cup(4, 1));
         feed(&mut term, "AAA");
@@ -3089,7 +3121,7 @@ mod tests {
 
     #[test]
     fn resize_taller() {
-        let mut term = Terminal::new((6, 4), None);
+        let mut term = Terminal::new((6, 4), None, None);
         feed(&mut term, "AAA\n\rBBB\n\r");
 
         term.resize(6, 5);
@@ -3099,7 +3131,7 @@ mod tests {
 
     #[test]
     fn resize_shorter() {
-        let mut term = Terminal::new((6, 6), None);
+        let mut term = Terminal::new((6, 6), None, None);
 
         feed(&mut term, "AAA\n\rBBB\n\rCCC\n\r");
 
@@ -3118,7 +3150,7 @@ mod tests {
 
     #[test]
     fn resize_vs_buffer_switching() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         feed(&mut term, "aaa\n\rbbb\n\rc\n\rddd");
 
@@ -3162,7 +3194,7 @@ mod tests {
 
     #[test]
     fn execute_cursor_keys_mode() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         assert!(!term.cursor_keys_app_mode());
 
@@ -3175,7 +3207,7 @@ mod tests {
 
     #[test]
     fn execute_text_cursor_visibility_mode() {
-        let mut term = Terminal::new((4, 2), None);
+        let mut term = Terminal::new((4, 2), None, None);
 
         assert!(term.cursor.visible);
 
@@ -3188,7 +3220,7 @@ mod tests {
 
     #[test]
     fn execute_origin_mode() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         term.execute(Decstbm(2, 4));
         term.execute(Decset(dec_modes([DecMode::Origin])));
@@ -3204,7 +3236,7 @@ mod tests {
 
     #[test]
     fn execute_alt_screen_buffer_mode() {
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "ab\r\ncd");
 
@@ -3227,7 +3259,7 @@ mod tests {
 
     #[test]
     fn execute_save_cursor_mode() {
-        let mut term = Terminal::new((4, 4), None);
+        let mut term = Terminal::new((4, 4), None, None);
 
         term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         term.execute(Decstbm(2, 4));
@@ -3252,7 +3284,7 @@ mod tests {
 
     #[test]
     fn execute_decstr() {
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "ab");
         term.execute(Decset(dec_modes([DecMode::AltScreenBuffer])));
@@ -3307,7 +3339,7 @@ mod tests {
 
     #[test]
     fn execute_ris() {
-        let mut term = Terminal::new((4, 3), None);
+        let mut term = Terminal::new((4, 3), None, None);
 
         feed(&mut term, "ab\r\ncd");
         term.execute(sgr(SetBoldIntensity));
@@ -3330,7 +3362,7 @@ mod tests {
 
     #[test]
     fn resize_vs_tabs() {
-        let mut term = Terminal::new((6, 2), None);
+        let mut term = Terminal::new((6, 2), None, None);
 
         assert_eq!(term.tabs, vec![]);
 
@@ -3351,7 +3383,7 @@ mod tests {
     fn resize_vs_saved_ctx() {
         use DecMode::*;
 
-        let mut term = Terminal::new((20, 5), None);
+        let mut term = Terminal::new((20, 5), None, None);
 
         // move cursor forward by 15 cols
         term.execute(Cuf(15));

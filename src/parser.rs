@@ -13,6 +13,11 @@ pub struct Parser {
     params: [Param; PARAMS_LEN],
     cur_param: usize,
     intermediate: Option<char>,
+    // Sixel DCS capture: when a DCS with the `q` final byte and no intermediate
+    // is entered, its passthrough data is accumulated here and emitted as a
+    // Function::Sixel on the string terminator. Other DCS strings are ignored.
+    dcs_capture: bool,
+    dcs_data: String,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -86,6 +91,7 @@ pub enum Function {
     Vpa(u16),
     Vpr(u16),
     Xtwinops(XtwinopsOp),
+    Sixel(String),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -427,8 +433,11 @@ impl Parser {
             }
 
             (_, '\u{1b}') => {
+                // ESC begins a 7-bit string terminator (ESC \), ending a DCS.
+                let sixel = self.unhook();
                 self.state = Escape;
                 self.clear();
+                return sixel;
             }
 
             (Escape, '\u{5b}') => {
@@ -506,7 +515,13 @@ impl Parser {
             | (_, '\u{91}'..='\u{97}')
             | (_, '\u{99}')
             | (_, '\u{9a}') => {
+                let sixel = self.unhook();
                 self.state = Ground;
+
+                if sixel.is_some() {
+                    return sixel;
+                }
+
                 return self.execute(input);
             }
 
@@ -531,6 +546,10 @@ impl Parser {
 
             (DcsEntry | DcsParam | DcsIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = DcsPassthrough;
+                // Capture only sixel (final byte `q`, no intermediate), so a
+                // DECRQSS request (ESC P $ q ...) is not decoded as an image.
+                self.dcs_capture = input == 'q' && self.intermediate.is_none();
+                self.dcs_data.clear();
             }
 
             (DcsEntry | DcsParam, '\u{20}'..='\u{2f}') => {
@@ -575,7 +594,10 @@ impl Parser {
             }
 
             (_, '\u{9c}') => {
+                // 8-bit string terminator (ST), ending a DCS.
+                let sixel = self.unhook();
                 self.state = Ground;
+                return sixel;
             }
 
             (_, '\u{9d}') => {
@@ -656,6 +678,8 @@ impl Parser {
 
         self.cur_param = 0;
         self.intermediate = None;
+        self.dcs_capture = false;
+        self.dcs_data.clear();
     }
 
     fn collect(&mut self, input: char) {
@@ -828,7 +852,22 @@ impl Parser {
         }
     }
 
-    fn put(&mut self, _input: char) {}
+    fn put(&mut self, input: char) {
+        if self.dcs_capture {
+            self.dcs_data.push(input);
+        }
+    }
+
+    /// Finish a captured sixel DCS, emitting its data as a Function. Returns
+    /// None when the current/just-ended DCS was not a captured sixel.
+    fn unhook(&mut self) -> Option<Function> {
+        if self.dcs_capture {
+            self.dcs_capture = false;
+            Some(Function::Sixel(std::mem::take(&mut self.dcs_data)))
+        } else {
+            None
+        }
+    }
 
     fn osc_put(&mut self, _input: char) {}
 
@@ -1191,6 +1230,10 @@ fn dump_function(seq: &mut String, fun: &Function) {
                 't',
             );
         }
+
+        // Sixel images are not part of the serialized cell/cursor state, so the
+        // dump (used for state round-trips) does not re-emit them.
+        Sixel(_) => {}
     }
 }
 
