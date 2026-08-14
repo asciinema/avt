@@ -46,7 +46,7 @@ impl TextCollector {
         }
     }
 
-    pub fn feed_str(&mut self, s: &str) -> impl Iterator<Item = String> + '_ {
+    pub fn feed_str(&mut self, s: &str) -> impl Iterator<Item = String> + use<'_> {
         self.vt
             .feed_str(s)
             .scrollback
@@ -76,7 +76,7 @@ impl TextCollector {
 #[cfg(test)]
 mod tests {
     use super::TextUnwrapper;
-    use crate::{util::TextCollector, Line, Pen, Vt};
+    use crate::{Line, Pen, Vt, util::TextCollector};
 
     #[test]
     fn text_unwrapper() {

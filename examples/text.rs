@@ -1,5 +1,5 @@
-use avt::util::TextCollector;
 use avt::Vt;
+use avt::util::TextCollector;
 
 fn main() {
     let vt = Vt::builder().size(1000, 100).scrollback_limit(100).build();

@@ -1,5 +1,5 @@
 use avt::Vt;
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{fs, iter};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
@@ -72,7 +72,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-fn setup_feed(filename: &str) -> impl Fn() -> (Vt, Vec<String>) {
+fn setup_feed(filename: &str) -> impl Fn() -> (Vt, Vec<String>) + use<> {
     let filename = filename.to_owned();
 
     move || {
@@ -115,9 +115,7 @@ fn gen_newlines(scrollback_limit: usize) -> impl Fn() -> (Vt, Vec<String>) {
             .scrollback_limit(scrollback_limit)
             .build();
 
-        let chunks = iter::repeat(".\n".to_owned())
-            .take(100_000)
-            .collect::<Vec<_>>();
+        let chunks = iter::repeat_n(".\n".to_owned(), 100_000).collect::<Vec<_>>();
 
         (vt, chunks)
     }

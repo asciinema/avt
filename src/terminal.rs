@@ -1784,11 +1784,7 @@ fn as_u16(value: usize) -> u16 {
 }
 
 fn as_usize(value: u16, default: usize) -> usize {
-    if value == 0 {
-        default
-    } else {
-        value as usize
-    }
+    if value == 0 { default } else { value as usize }
 }
 
 impl Default for Terminal {
