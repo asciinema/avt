@@ -32,6 +32,7 @@ pub struct Terminal {
     insert_mode: bool,
     origin_mode: bool,
     auto_wrap_mode: bool,
+    reverse_wrap_mode: bool,
     new_line_mode: bool,
     cursor_keys_mode: CursorKeysMode,
     top_margin: usize,
@@ -40,6 +41,11 @@ pub struct Terminal {
     alternate_saved_ctx: SavedCtx,
     dirty_lines: DirtyLines,
     xtwinops: bool,
+    /// Last printable character emitted, used by REP (CSI Pn b).
+    /// Cleared by every non-print / non-REP function so a cursor
+    /// move between the print and REP makes REP a no-op (matching
+    /// the de-facto xterm behavior).
+    last_print_char: Option<char>,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -86,8 +92,15 @@ impl SavedCtx {
 }
 
 enum PrintResult {
+    /// Glyph landed at the current cell with `width` advance.
     Printed(usize),
-    NeedsRelocation,
+    /// Cursor was already past the last column when the print
+    /// started (the auto-wrap "pending-wrap" state).
+    Overshoot,
+    /// Cursor is still inside the screen but the glyph would
+    /// straddle the right edge — i.e. a wide glyph reaching the
+    /// last column.
+    WideAtEdge,
 }
 
 impl Terminal {
@@ -111,6 +124,7 @@ impl Terminal {
             insert_mode: false,
             origin_mode: false,
             auto_wrap_mode: true,
+            reverse_wrap_mode: false,
             new_line_mode: false,
             cursor_keys_mode: CursorKeysMode::Normal,
             top_margin: 0,
@@ -119,6 +133,7 @@ impl Terminal {
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
             xtwinops: false,
+            last_print_char: None,
         }
     }
 
@@ -132,6 +147,15 @@ impl Terminal {
 
     pub fn execute(&mut self, fun: Function) {
         use Function::*;
+
+        // REP repeats the last printable. Any other function — even
+        // a cursor move that doesn't visibly change buffer state —
+        // invalidates that history, so a `print "X"; cup ...; rep`
+        // sequence is a no-op rather than replaying whatever cell
+        // happens to be next to the new cursor position.
+        if !matches!(fun, Print(_) | Rep(_)) {
+            self.last_print_char = None;
+        }
 
         match fun {
             Bs => {
@@ -192,6 +216,14 @@ impl Terminal {
 
             Decaln => {
                 self.decaln();
+            }
+
+            Decdc(n) => {
+                self.decdc(n);
+            }
+
+            Decic(n) => {
+                self.decic(n);
             }
 
             Decrc => {
@@ -306,12 +338,20 @@ impl Terminal {
                 self.si();
             }
 
+            Sl(n) => {
+                self.sl(n);
+            }
+
             Sm(modes) => {
                 self.sm(modes);
             }
 
             So => {
                 self.so();
+            }
+
+            Sr(n) => {
+                self.sr(n);
             }
 
             Su(n) => {
@@ -608,6 +648,7 @@ impl Terminal {
         self.insert_mode = false;
         self.origin_mode = false;
         self.auto_wrap_mode = true;
+        self.reverse_wrap_mode = false;
         self.new_line_mode = false;
         self.cursor_keys_mode = CursorKeysMode::Normal;
         self.top_margin = 0;
@@ -685,6 +726,7 @@ impl Terminal {
         assert_eq!(self.insert_mode, other.insert_mode);
         assert_eq!(self.origin_mode, other.origin_mode);
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
+        assert_eq!(self.reverse_wrap_mode, other.reverse_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
         assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
         assert_eq!(self.top_margin, other.top_margin);
@@ -708,20 +750,59 @@ impl Terminal {
     fn print(&mut self, mut ch: char) {
         ch = self.charsets[self.active_charset].translate(ch);
 
-        match self.try_print(ch) {
-            PrintResult::Printed(width) => self.advance_cursor_after_print(width),
-            PrintResult::NeedsRelocation if self.auto_wrap_mode => {
-                self.wrap_and_print_at_line_start(ch)
-            }
-            PrintResult::NeedsRelocation => self.print_at_line_end(ch),
+        if is_combining_mark(ch) {
+            self.attach_combining(ch);
+            return;
         }
 
+        match self.try_print(ch) {
+            PrintResult::Printed(width) => self.advance_cursor_after_print(width),
+            PrintResult::Overshoot if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch),
+            PrintResult::Overshoot => self.print_at_line_end(ch),
+            PrintResult::WideAtEdge if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch),
+            // A wide glyph that doesn't fit while auto-wrap is off
+            // is silently discarded — xterm.js drops it and leaves
+            // the cursor anchored at the last column. Earlier
+            // versions of this emulator overwrote the previous cell
+            // with the wide glyph, which produced visible junk and
+            // moved the cursor into the overshoot column.
+            PrintResult::WideAtEdge => {}
+        }
+
+        self.last_print_char = Some(ch);
         self.dirty_lines.add(self.cursor.row);
+    }
+
+    /// Attach a zero-width combining mark to the most recently
+    /// written cell. The "most recent cell" is the one immediately
+    /// to the left of the cursor (or two left of it if the cursor
+    /// sits on the tail of a wide character), and the mark is
+    /// dropped entirely when no such cell exists — e.g. at column 0
+    /// of a fresh row, before the first printable.
+    fn attach_combining(&mut self, ch: char) {
+        if self.cursor.col == 0 {
+            // Combining marks before the first printable on a row
+            // have nothing to bind to; drop them. xterm.js follows
+            // the same convention.
+            return;
+        }
+
+        let row = self.cursor.row;
+        // When auto-wrap has parked the cursor past the last column
+        // the mark still belongs to the glyph in the last column.
+        let mut attach_col = self.cursor.col.min(self.cols) - 1;
+
+        if self.buffer[(attach_col, row)].occupancy() == Occupancy::WideTail && attach_col > 0 {
+            attach_col -= 1;
+        }
+
+        self.buffer.push_combining((attach_col, row), ch);
+        self.dirty_lines.add(row);
     }
 
     fn try_print(&mut self, ch: char) -> PrintResult {
         if self.cursor.col >= self.cols {
-            return PrintResult::NeedsRelocation;
+            return PrintResult::Overshoot;
         }
 
         if self.insert_mode {
@@ -734,16 +815,20 @@ impl Terminal {
             .print((self.cursor.col, self.cursor.row), ch, self.pen)
         {
             Some(width) => PrintResult::Printed(width),
-            None => PrintResult::NeedsRelocation,
+            None => PrintResult::WideAtEdge,
         }
     }
 
     fn advance_cursor_after_print(&mut self, width: usize) {
+        // Let the cursor sit at `cols` after a print that fills the
+        // last column. With auto-wrap on, the next printable advances
+        // via `wrap_and_print_at_line_start`; with auto-wrap off, the
+        // next printable is dispatched to `print_at_line_end`, which
+        // overwrites at `cols - 1` and leaves the cursor at `cols`.
+        // Either way, keeping the overshoot state visible matches the
+        // observable cursor position that interactive terminals (and
+        // xterm.js) report.
         self.cursor.col += width;
-
-        if self.cursor.col == self.cols && !self.auto_wrap_mode {
-            self.cursor.col = self.cols - 1;
-        }
     }
 
     fn wrap_and_print_at_line_start(&mut self, ch: char) {
@@ -774,10 +859,27 @@ impl Terminal {
             }
         }
 
-        self.cursor.col = self.cols - 1;
+        // Park the cursor in the "overshoot" position past the last
+        // column. With auto-wrap off, a subsequent print overwrites
+        // the same cell; toggling auto-wrap back on lets the next
+        // print wrap to a new row.
+        self.cursor.col = self.cols;
     }
 
     fn bs(&mut self) {
+        // XTREVWRAP (DEC private mode 45) makes BS at column 0 of a
+        // soft-wrapped continuation row hop back to the last column
+        // of the preceding row. Without it BS is clamped at col 0.
+        if self.cursor.col == 0
+            && self.reverse_wrap_mode
+            && self.cursor.row > 0
+            && self.buffer[self.cursor.row - 1].wrapped
+        {
+            self.cursor.row -= 1;
+            self.cursor.col = self.cols - 1;
+            return;
+        }
+
         if self.cursor.col == self.cols {
             self.move_cursor_to_rel_col(-2);
         } else {
@@ -838,6 +940,72 @@ impl Terminal {
         self.hard_reset();
     }
 
+    /// DECIC (CSI Pn ' }) — Insert `n` columns at the cursor column,
+    /// shifting cells to the right within each row of the active
+    /// scroll region. Columns shifted past the right edge are lost.
+    fn decic(&mut self, n: u16) {
+        self.insert_columns(self.cursor.col, n);
+    }
+
+    /// DECDC (CSI Pn ' ~) — Delete `n` columns at the cursor column,
+    /// shifting cells left within each row of the active scroll
+    /// region. The freed columns at the right edge are filled with
+    /// blanks using the active pen.
+    fn decdc(&mut self, n: u16) {
+        self.delete_columns(self.cursor.col, n);
+    }
+
+    /// SL (CSI Pn SP @) — Scroll left by `n` columns. Every row in
+    /// the active scroll region shifts left by `n`; the leftmost
+    /// columns are dropped and freed columns at the right edge are
+    /// blanked with the active pen. Equivalent to DECDC anchored at
+    /// column 0. The cursor does not move.
+    fn sl(&mut self, n: u16) {
+        self.delete_columns(0, n);
+    }
+
+    /// SR (CSI Pn SP A) — Scroll right by `n` columns. Every row in
+    /// the active scroll region shifts right by `n`; the rightmost
+    /// columns are dropped and freed columns at the left edge are
+    /// blanked with the active pen. Equivalent to DECIC anchored at
+    /// column 0. The cursor does not move.
+    fn sr(&mut self, n: u16) {
+        self.insert_columns(0, n);
+    }
+
+    fn insert_columns(&mut self, col: usize, n: u16) {
+        let n = as_usize(n, 1);
+        let cols_left = self.cols.saturating_sub(col);
+        let shift = n.min(cols_left);
+        if shift == 0 {
+            return;
+        }
+        let rows = self.top_margin..self.bottom_margin + 1;
+        for row in rows.clone() {
+            self.buffer.shift_right((col, row), shift, self.pen);
+            // shift_right rotates the cells in place; the freshly
+            // inserted columns still need to be blanked.
+            for c in col..col + shift {
+                self.buffer.print((c, row), ' ', self.pen);
+            }
+        }
+        self.dirty_lines.extend(rows);
+    }
+
+    fn delete_columns(&mut self, col: usize, n: u16) {
+        let n = as_usize(n, 1);
+        let cols_left = self.cols.saturating_sub(col);
+        let shift = n.min(cols_left);
+        if shift == 0 {
+            return;
+        }
+        let rows = self.top_margin..self.bottom_margin + 1;
+        for row in rows.clone() {
+            self.buffer.delete((col, row), shift, &self.pen);
+        }
+        self.dirty_lines.extend(rows);
+    }
+
     fn decaln(&mut self) {
         for row in 0..self.rows {
             for col in 0..self.cols {
@@ -846,6 +1014,10 @@ impl Terminal {
 
             self.dirty_lines.add(row);
         }
+
+        // DECALN homes the cursor as part of the alignment test.
+        self.cursor.col = 0;
+        self.cursor.row = 0;
     }
 
     fn gzd4(&mut self, charset: Charset) {
@@ -950,7 +1122,13 @@ impl Terminal {
                 self.dirty_lines.extend(0..self.rows);
             }
 
-            _ => {}
+            EdScope::SavedLines => {
+                // CSI 3 J: erase scrollback only. The visible view is
+                // untouched, the cursor doesn't move. Implementations
+                // vary on whether this is a no-op when scrollback is
+                // disabled; we drain whatever scrollback exists.
+                self.buffer.clear_scrollback();
+            }
         }
     }
 
@@ -1009,7 +1187,7 @@ impl Terminal {
         };
 
         self.buffer
-            .scroll_up(range.clone(), as_usize(n, 1), &self.pen);
+            .delete_lines(range.clone(), as_usize(n, 1), &self.pen);
 
         self.dirty_lines.extend(range);
     }
@@ -1029,7 +1207,14 @@ impl Terminal {
     }
 
     fn su(&mut self, n: u16) {
-        self.scroll_up_in_region(as_usize(n, 1));
+        // Explicit SU (CSI Pn S) discards lines that scroll off the
+        // top of the scroll region — they don't enter the scrollback
+        // buffer. Use the explicit-delete path; only natural overflow
+        // (LF / wrap at the bottom margin) preserves history.
+        let range = self.top_margin..self.bottom_margin + 1;
+        self.buffer
+            .delete_lines(range.clone(), as_usize(n, 1), &self.pen);
+        self.dirty_lines.extend(range);
     }
 
     fn sd(&mut self, n: u16) {
@@ -1069,19 +1254,11 @@ impl Terminal {
     }
 
     fn rep(&mut self, n: u16) {
-        if self.cursor.col > 0 {
+        if let Some(ch) = self.last_print_char {
             let n = as_usize(n, 1);
-            let row = self.cursor.row;
-            let mut col = self.cursor.col - 1;
 
-            while col > 0 && self.buffer[(col, row)].occupancy() == Occupancy::WideTail {
-                col -= 1;
-            }
-
-            let char = self.buffer[(col, row)].char();
-
-            for _n in 0..n {
-                self.print(char);
+            for _ in 0..n {
+                self.print(ch);
             }
         }
     }
@@ -1262,6 +1439,10 @@ impl Terminal {
                     self.auto_wrap_mode = true;
                 }
 
+                ReverseWrap => {
+                    self.reverse_wrap_mode = true;
+                }
+
                 TextCursorEnable => {
                     self.cursor.visible = true;
                 }
@@ -1300,6 +1481,10 @@ impl Terminal {
 
                 AutoWrap => {
                     self.auto_wrap_mode = false;
+                }
+
+                ReverseWrap => {
+                    self.reverse_wrap_mode = false;
                 }
 
                 TextCursorEnable => {
@@ -1512,19 +1697,27 @@ impl Terminal {
 
         if self.cursor.col >= self.cols {
             // move cursor past the right border by re-printing the character in
-            // the last column
-            let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
+            // the last column. Trailing combining marks on the trigger cell
+            // get re-emitted as their own Print functions so the round-trip
+            // doesn't strip them when the re-print clears the destination.
+            let last_cell = &self.buffer[(self.cols - 1, self.cursor.row)];
             let occupancy = last_cell.occupancy();
 
             if occupancy == Occupancy::Single {
                 funs.push(to_sgr(last_cell.pen()));
                 funs.push(Function::Print(last_cell.char()));
+                for mark in last_cell.combining() {
+                    funs.push(Function::Print(*mark));
+                }
             } else if occupancy == Occupancy::WideTail {
-                let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
+                let prev_cell = &self.buffer[(self.cols - 2, self.cursor.row)];
 
                 funs.push(Function::Cub(1));
                 funs.push(to_sgr(prev_cell.pen()));
                 funs.push(Function::Print(prev_cell.char()));
+                for mark in prev_cell.combining() {
+                    funs.push(Function::Print(*mark));
+                }
             }
         }
 
@@ -1568,6 +1761,12 @@ impl Terminal {
         if !self.auto_wrap_mode {
             // disable auto-wrap mode
             funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
+        }
+
+        // 12b. setup reverse-wrap mode
+
+        if self.reverse_wrap_mode {
+            funs.push(Function::Decset(DecModes::one(DecMode::ReverseWrap)));
         }
 
         // 13. setup new line mode
@@ -1712,10 +1911,25 @@ fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
     let mut i = 0;
 
     while i < cells.len() {
+        // Cells that carry combining marks are dumped individually
+        // — neither REP nor a plain run-length share applies once
+        // the trailing marks have to be re-emitted after each base.
+        if !cells[i].combining().is_empty() {
+            funs.push(Function::Print(cells[i].char()));
+            for mark in cells[i].combining() {
+                funs.push(Function::Print(*mark));
+            }
+            i += 1;
+            continue;
+        }
+
         let ch = cells[i].char();
         let mut run_len = 1;
 
-        while i + run_len < cells.len() && cells[i + run_len].char() == ch {
+        while i + run_len < cells.len()
+            && cells[i + run_len].char() == ch
+            && cells[i + run_len].combining().is_empty()
+        {
             run_len += 1;
         }
 
@@ -1789,6 +2003,17 @@ fn as_usize(value: u16, default: usize) -> usize {
     } else {
         value as usize
     }
+}
+
+/// True for Unicode characters with display width 0 — combining
+/// marks, variation selectors, zero-width joiners, etc. ASCII is
+/// short-circuited to false. These attach to the preceding cell
+/// rather than consuming a cell of their own.
+fn is_combining_mark(ch: char) -> bool {
+    if ch <= '\u{7e}' {
+        return false;
+    }
+    matches!(unicode_width::UnicodeWidthChar::width(ch), Some(0))
 }
 
 impl Default for Terminal {
@@ -2041,6 +2266,98 @@ mod tests {
     }
 
     #[test]
+    fn combining_mark_attaches_to_previous_cell() {
+        // U+0301 COMBINING ACUTE ACCENT has display width 0 — it
+        // should attach to the cell to its left without taking a
+        // column of its own.
+        let mut term = Terminal::new((10, 1), None);
+
+        feed(&mut term, "e\u{0301}X");
+
+        assert_eq!(term.cursor(), (2, 0));
+
+        let row = term.view().next().unwrap();
+        assert_eq!(row.text().trim_end(), "e\u{0301}X");
+        assert_eq!(row.cells()[0].combining(), &['\u{0301}'][..]);
+        // The second cell holds X with no marks of its own.
+        assert!(row.cells()[1].combining().is_empty());
+    }
+
+    #[test]
+    fn combining_mark_at_row_start_is_dropped() {
+        // With no preceding cell to bind to, the mark is silently
+        // discarded. This matches xterm.js.
+        let mut term = Terminal::new((10, 1), None);
+
+        feed(&mut term, "\u{0301}X");
+
+        assert_eq!(term.cursor(), (1, 0));
+        let row = term.view().next().unwrap();
+        assert_eq!(row.text().trim_end(), "X");
+    }
+
+    #[test]
+    fn combining_mark_attaches_to_wide_head_through_tail() {
+        // The cursor follows a wide glyph: cursor.col-1 is the
+        // wide-tail. The mark should still resolve to the head.
+        let mut term = Terminal::new((10, 1), None);
+
+        feed(&mut term, "ハ\u{0301}");
+
+        let row = term.view().next().unwrap();
+        assert_eq!(row.cells()[0].char(), 'ハ');
+        assert_eq!(row.cells()[0].combining(), &['\u{0301}'][..]);
+        // No combining mark sitting on the tail cell.
+        assert!(row.cells()[1].combining().is_empty());
+    }
+
+    #[test]
+    fn execute_bs_with_reverse_wrap() {
+        // DECSET 45 (XTREVWRAP) makes BS at column 0 cross over to
+        // the last column of the previous row, but only when the
+        // previous row is soft-wrapped (continued onto the current
+        // row). Hard line breaks block the rewind.
+        let mut term = Terminal::new((4, 3), None);
+
+        term.execute(Decset(dec_modes([DecMode::ReverseWrap])));
+
+        // Soft-wrapped row: fill row 0 and let auto-wrap push into
+        // row 1.
+        feed(&mut term, "abcdef");
+        assert_eq!(term.cursor(), (2, 1));
+
+        // BS at col 2 → col 1, normal step.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (1, 1));
+
+        // BS at col 1 → col 0, still inside the same row.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (0, 1));
+
+        // BS at col 0 with a soft-wrapped predecessor → last col of
+        // the previous row.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (3, 0));
+    }
+
+    #[test]
+    fn execute_bs_with_reverse_wrap_stops_at_hard_break() {
+        // Reverse-wrap should not cross hard line breaks (CR/LF).
+        let mut term = Terminal::new((4, 3), None);
+
+        term.execute(Decset(dec_modes([DecMode::ReverseWrap])));
+        feed(&mut term, "ab\r\ncd");
+        // Cursor sits at row 1, col 2. Walk it back to col 0.
+        term.execute(Bs);
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (0, 1));
+
+        // BS at col 0 with a hard-break predecessor stays put.
+        term.execute(Bs);
+        assert_eq!(term.cursor(), (0, 1));
+    }
+
+    #[test]
     fn execute_cup() {
         let mut term = Terminal::new((4, 2), None);
 
@@ -2264,6 +2581,7 @@ mod tests {
     fn execute_rep() {
         let mut term = build_term(20, 2, 0, 0, "");
 
+        // REP with no preceding printable is a no-op.
         term.execute(Rep(0));
 
         assert_eq!(text(&term), "|\n");
@@ -2277,10 +2595,40 @@ mod tests {
 
         assert_eq!(text(&term), "AAAAA|\n");
 
+        // A cursor move invalidates the REP history; the following
+        // REP is a no-op.
         term.execute(Cuf(5));
         term.execute(Rep(0));
 
-        assert_eq!(text(&term), "AAAAA      |\n");
+        assert_eq!(text(&term), "AAAAA     |\n");
+    }
+
+    #[test]
+    fn rep_is_noop_after_cursor_movement() {
+        // Print 'A', explicitly move the cursor, then REP. With the
+        // last-print history cleared by every non-print operation,
+        // REP repeats nothing — the cells past the new cursor
+        // position stay blank.
+        let mut term = build_term(10, 1, 0, 0, "");
+
+        term.execute(Print('A'));
+        term.execute(Cup(1, 4));
+        term.execute(Rep(3));
+
+        assert_eq!(text(&term), "A  |");
+    }
+
+    #[test]
+    fn rep_chains_consecutively() {
+        // Two REPs in a row both repeat the last printable. Only a
+        // non-print/non-REP function would clear the history.
+        let mut term = build_term(10, 1, 0, 0, "");
+
+        term.execute(Print('A'));
+        term.execute(Rep(2));
+        term.execute(Rep(2));
+
+        assert_eq!(text(&term), "AAAAA|");
     }
 
     #[test]
@@ -2299,9 +2647,10 @@ mod tests {
 
         term.execute(Print('ハ'));
         term.execute(Cub(1));
+        // Cursor moved → REP has nothing to repeat.
         term.execute(Rep(3));
 
-        assert_eq!(text(&term), " ハハハ|\n");
+        assert_eq!(text(&term), "|ハ\n");
     }
 
     #[test]
@@ -2444,6 +2793,50 @@ mod tests {
     }
 
     #[test]
+    fn dl_at_top_row_does_not_grow_scrollback() {
+        // DL discards the deleted line — it must not be pushed into
+        // the scrollback buffer even when the deletion happens at
+        // the top of the viewport and the full row range is involved.
+        let mut term = Terminal::new((4, 3), Some(20));
+        feed(&mut term, "AAA\r\nBBB\r\nCCC");
+
+        let scrollback_before = term.lines().count() - term.size().1;
+        assert_eq!(scrollback_before, 0, "preconditions");
+
+        term.execute(Cup(1, 1));
+        term.execute(Dl(1));
+
+        // BBB shifted up, CCC shifted up, last row blank. AAA gone.
+        let visible: Vec<String> = term
+            .view()
+            .map(|l| l.text().trim_end().to_owned())
+            .collect();
+        assert_eq!(visible, vec!["BBB", "CCC", ""]);
+        assert_eq!(term.lines().count(), 3);
+    }
+
+    #[test]
+    fn su_does_not_grow_scrollback() {
+        // SU is an explicit scroll, not a natural overflow — it
+        // should drop the lines that leave the top of the scroll
+        // region, never preserving them in the scrollback buffer.
+        let mut term = Terminal::new((4, 3), Some(20));
+        feed(&mut term, "AAA\r\nBBB\r\nCCC");
+
+        let scrollback_before = term.lines().count() - term.size().1;
+        assert_eq!(scrollback_before, 0, "preconditions");
+
+        term.execute(Su(2));
+
+        let visible: Vec<String> = term
+            .view()
+            .map(|l| l.text().trim_end().to_owned())
+            .collect();
+        assert_eq!(visible, vec!["CCC", "", ""]);
+        assert_eq!(term.lines().count(), 3);
+    }
+
+    #[test]
     fn execute_el() {
         let mut term = build_term(4, 2, 2, 0, "abcd");
 
@@ -2546,6 +2939,38 @@ mod tests {
     }
 
     #[test]
+    fn execute_ed_saved_lines() {
+        // Build a buffer with scrollback: 2-row view + scrollback
+        // capacity. Feed 5 lines so 3 spill into scrollback.
+        let mut term = Terminal::new((4, 2), Some(10));
+        feed(&mut term, "L0\r\nL1\r\nL2\r\nL3\r\nL4");
+
+        assert!(term.lines().count() > 2, "expected scrollback to exist");
+        let view_before: Vec<String> = term.view().map(|l| l.text()).collect();
+
+        term.execute(Ed(EdScope::SavedLines));
+
+        // Scrollback drained, view intact, cursor unchanged.
+        assert_eq!(term.lines().count(), 2);
+        let view_after: Vec<String> = term.view().map(|l| l.text()).collect();
+        assert_eq!(view_after, view_before);
+        assert_eq!(term.cursor(), (2, 1));
+    }
+
+    #[test]
+    fn execute_ed_saved_lines_no_scrollback() {
+        // No scrollback buffered → ED 3 is a no-op for state but
+        // must not panic / corrupt anything.
+        let mut term = Terminal::new((4, 3), Some(10));
+        feed(&mut term, "abc");
+
+        term.execute(Ed(EdScope::SavedLines));
+
+        assert_eq!(text(&term), "abc|\n\n");
+        assert_eq!(term.lines().count(), 3);
+    }
+
+    #[test]
     fn execute_dch() {
         let mut term = build_term(8, 2, 3, 0, "abcdefghijkl");
 
@@ -2566,6 +2991,88 @@ mod tests {
         term.execute(Dch(10));
 
         assert_eq!(text(&term), "abc    |\nijkl");
+    }
+
+    #[test]
+    fn execute_decic() {
+        // DECIC: insert columns at the cursor column in every row of
+        // the active scroll region, shifting existing cells right.
+        // Columns past the right margin are dropped.
+        let mut term = build_term(8, 2, 2, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Decic(3));
+
+        assert_eq!(text(&term), "ab|   cde\nIJ   KLM");
+    }
+
+    #[test]
+    fn execute_decic_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Decic(0));
+
+        assert_eq!(text(&term), "| abcdefg");
+    }
+
+    #[test]
+    fn execute_decdc() {
+        // DECDC: delete columns at the cursor column in every row of
+        // the active scroll region, shifting existing cells left.
+        // Freed cells at the right edge are blanked.
+        let mut term = build_term(8, 2, 2, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Decdc(3));
+
+        assert_eq!(text(&term), "ab|fgh\nIJNOP");
+    }
+
+    #[test]
+    fn execute_decdc_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Decdc(0));
+
+        assert_eq!(text(&term), "|bcdefgh");
+    }
+
+    #[test]
+    fn execute_sl() {
+        // SL shifts every row left, regardless of cursor column.
+        let mut term = build_term(8, 2, 5, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Sl(3));
+
+        // The cursor row text trims trailing spaces past the cursor;
+        // the second row is also shifted because SL operates over
+        // the whole scroll region.
+        assert_eq!(text(&term), "defgh|\nLMNOP");
+    }
+
+    #[test]
+    fn execute_sl_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Sl(0));
+
+        assert_eq!(text(&term), "|bcdefgh");
+    }
+
+    #[test]
+    fn execute_sr() {
+        let mut term = build_term(8, 2, 5, 0, "abcdefghIJKLMNOP");
+
+        term.execute(Sr(3));
+
+        assert_eq!(text(&term), "   ab|cde\n   IJKLM");
+    }
+
+    #[test]
+    fn execute_sr_default_param_is_one() {
+        let mut term = build_term(8, 1, 0, 0, "abcdefgh");
+
+        term.execute(Sr(0));
+
+        assert_eq!(text(&term), "| abcdefg");
     }
 
     #[test]
@@ -2658,6 +3165,25 @@ mod tests {
     }
 
     #[test]
+    fn auto_wrap_re_enabled_after_overshoot_wraps_next_print() {
+        // Fill the row with auto-wrap off, leaving the cursor in
+        // the overshoot position past the last column; re-enable
+        // auto-wrap; verify the next printable wraps to a new row.
+        let mut term = Terminal::new((4, 4), None);
+
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "abcd");
+
+        assert_eq!(term.cursor(), (4, 0));
+
+        term.execute(Decset(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "e");
+
+        assert_eq!(term.cursor(), (1, 1));
+        assert_eq!(text(&term), "abcd\ne|\n\n");
+    }
+
+    #[test]
     fn auto_wrap_mode() {
         let mut term = Terminal::new((4, 4), None);
 
@@ -2671,7 +3197,12 @@ mod tests {
         term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
-        assert_eq!(text(&term), "abc|f\n\n\n");
+        // Auto-wrap off: after filling the row, every subsequent
+        // printable overwrites the last column. The cursor parks one
+        // past the last column (the "overshoot" state) so flipping
+        // auto-wrap back on lets the next character wrap to a new
+        // row.
+        assert_eq!(text(&term), "abcf|\n\n\n");
     }
 
     #[test]
@@ -2767,6 +3298,24 @@ mod tests {
     }
 
     #[test]
+    fn print_wide_char_at_last_column_no_autowrap_drops_glyph() {
+        // 5-column row, auto-wrap off. After "ABCD" the cursor sits
+        // at the last column (col 4), with that cell still blank —
+        // we haven't yet entered the pending-wrap state. A wide
+        // glyph that would straddle the right edge is dropped and
+        // the cursor stays anchored.
+        let mut term = Terminal::new((5, 1), None);
+        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        feed(&mut term, "ABCD");
+        assert_eq!(term.cursor(), (4, 0));
+
+        term.execute(Print('你'));
+
+        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(text(&term), "ABCD|");
+    }
+
+    #[test]
     fn print_wide_char_on_wide_tail_with_one_col_right_and_no_autowrap() {
         let mut term = Terminal::new((4, 2), None);
 
@@ -2775,8 +3324,12 @@ mod tests {
         term.execute(Cub(1));
         term.execute(Print('界'));
 
-        assert_eq!(term.cursor(), (3, 0));
-        assert_eq!(text(&term), "A |界\n");
+        // Auto-wrap off: 界 doesn't fit at col 3 (a single col left),
+        // so it gets placed one column back, overwriting the
+        // wide-tail of ハ. The cursor parks in the overshoot
+        // position past the last column.
+        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(text(&term), "A 界|\n");
         assert_eq!(wrapped(&term), vec![false, false]);
 
         let row0 = term.view().next().unwrap();
@@ -2958,8 +3511,10 @@ mod tests {
         term.execute(Cup(2, 3));
         term.execute(Decaln);
 
-        assert_eq!(term.cursor(), (2, 1));
-        assert_eq!(text(&term), "EEEE\nEE|EE");
+        // Per VT100: DECALN fills the screen with the test pattern
+        // AND homes the cursor as part of the alignment check.
+        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(text(&term), "|EEEE\nEEEE");
     }
 
     #[test]

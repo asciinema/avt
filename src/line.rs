@@ -212,7 +212,7 @@ impl Line {
                 self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
             }
 
-            self.cells.extend(&other[0..needed]);
+            self.cells.extend(other[0..needed].iter().cloned());
             let mut cells = other.cells;
             cells.rotate_left(needed);
             cells.truncate(cells.len() - needed);
@@ -226,7 +226,7 @@ impl Line {
             );
         }
 
-        self.cells.extend(&other[..]);
+        self.cells.extend(other[..].iter().cloned());
 
         if !other.wrapped {
             self.wrapped = false;
@@ -312,12 +312,13 @@ impl Line {
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        self.cells.iter().filter_map(|c| {
-            if c.occupancy() != Occupancy::WideTail {
+        self.cells.iter().flat_map(|c| {
+            let base = if c.occupancy() != Occupancy::WideTail {
                 Some(c.char())
             } else {
                 None
-            }
+            };
+            base.into_iter().chain(c.combining().iter().copied())
         })
     }
 
@@ -392,16 +393,16 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for
     fn next(&mut self) -> Option<Self::Item> {
         for cell in self.iter.by_ref() {
             if self.cells.is_empty() {
-                self.cells.push(*cell);
+                self.cells.push(cell.clone());
                 continue;
             }
 
             if (self.predicate)(self.cells.last().unwrap(), cell) {
                 let cells = std::mem::take(&mut self.cells);
-                self.cells.push(*cell);
+                self.cells.push(cell.clone());
                 return Some(cells);
             } else {
-                self.cells.push(*cell);
+                self.cells.push(cell.clone());
             }
         }
 

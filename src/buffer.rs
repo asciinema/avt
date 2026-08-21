@@ -85,6 +85,14 @@ impl Buffer {
         self[row].print(col, ch, pen)
     }
 
+    /// Append a zero-width combining mark to the cell at `(col,
+    /// row)`. Caller is responsible for choosing the right anchor
+    /// column when the cursor sits on a wide-tail or in the
+    /// overshoot position.
+    pub fn push_combining(&mut self, (col, row): VisualPosition, ch: char) {
+        self[row].cells[col].push_combining(ch);
+    }
+
     pub fn wrap(&mut self, row: usize) {
         self[row].wrapped = true;
     }
@@ -182,6 +190,27 @@ impl Buffer {
         }
 
         self.trim_needed = true;
+    }
+
+    /// Delete `n` lines starting at `range.start`, shifting the
+    /// remaining lines in `range` up and clearing the trailing `n`
+    /// rows. Unlike [`Buffer::scroll_up`], deleted lines are not
+    /// pushed into the scrollback — this matches how DL (CSI Pn M)
+    /// and SU (CSI Pn S) discard content rather than preserve it.
+    pub fn delete_lines(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
+        n = n.min(range.end - range.start);
+
+        if range.end - 1 < self.rows - 1 {
+            self[range.end - 1].wrapped = false;
+        }
+
+        if range.start > 0 {
+            self[range.start - 1].wrapped = false;
+        }
+
+        let end = range.end;
+        self[range].rotate_left(n);
+        self.clear((end - n)..end, pen);
     }
 
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
@@ -353,6 +382,14 @@ impl Buffer {
         let line = Line::blank(cols, *pen);
         let filler = std::iter::repeat_n(line, n);
         self.lines.extend(filler);
+    }
+
+    /// Drop all scrollback lines, keeping the visible view intact.
+    pub fn clear_scrollback(&mut self) {
+        let offset = self.view_offset();
+        if offset > 0 {
+            self.lines.drain(..offset);
+        }
     }
 
     fn trim_scrollback(&mut self) -> Option<impl Iterator<Item = Line> + '_> {

@@ -1,7 +1,16 @@
 use crate::pen::Pen;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Cell(char, Occupancy, Pen);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cell {
+    ch: char,
+    occupancy: Occupancy,
+    pen: Pen,
+    /// Zero-width combining marks attached to this cell's base
+    /// character. They render after the base, never get their own
+    /// column. Empty for the overwhelming majority of cells, which
+    /// is why this lives behind an allocation rather than inline.
+    combining: Vec<char>,
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub(crate) enum Occupancy {
@@ -22,37 +31,54 @@ impl Occupancy {
 
 impl Cell {
     pub(crate) fn new(ch: char, occupancy: Occupancy, pen: Pen) -> Self {
-        Cell(ch, occupancy, pen)
+        Cell {
+            ch,
+            occupancy,
+            pen,
+            combining: Vec::new(),
+        }
     }
 
     pub(crate) fn blank(pen: Pen) -> Self {
-        Cell(' ', Occupancy::Single, pen)
+        Self::new(' ', Occupancy::Single, pen)
     }
 
     pub fn is_default(&self) -> bool {
-        self.0 == ' ' && self.1 == Occupancy::Single && self.2.is_default()
+        self.ch == ' '
+            && self.occupancy == Occupancy::Single
+            && self.pen.is_default()
+            && self.combining.is_empty()
     }
 
     pub fn char(&self) -> char {
-        self.0
+        self.ch
+    }
+
+    pub fn combining(&self) -> &[char] {
+        &self.combining
     }
 
     pub(crate) fn occupancy(&self) -> Occupancy {
-        self.1
+        self.occupancy
     }
 
     pub fn width(&self) -> u8 {
-        self.1.width()
+        self.occupancy.width()
     }
 
     pub fn pen(&self) -> &Pen {
-        &self.2
+        &self.pen
     }
 
     pub(crate) fn set(&mut self, ch: char, occupancy: Occupancy, pen: Pen) {
-        self.0 = ch;
-        self.1 = occupancy;
-        self.2 = pen;
+        self.ch = ch;
+        self.occupancy = occupancy;
+        self.pen = pen;
+        self.combining.clear();
+    }
+
+    pub(crate) fn push_combining(&mut self, ch: char) {
+        self.combining.push(ch);
     }
 }
 

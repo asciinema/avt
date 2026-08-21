@@ -14,4 +14,5 @@ pub use charset::Charset;
 pub use color::Color;
 pub use line::Line;
 pub use pen::Pen;
+pub use terminal::BufferType;
 pub use vt::Vt;

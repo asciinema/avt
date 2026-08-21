@@ -51,6 +51,8 @@ pub enum Function {
     Cuu(u16),
     Dch(u16),
     Decaln,
+    Decdc(u16),
+    Decic(u16),
     Decrc,
     Decrst(DecModes),
     Decsc,
@@ -79,8 +81,10 @@ pub enum Function {
     Sd(u16),
     Sgr(SgrOps),
     Si,
+    Sl(u16),
     Sm(AnsiModes),
     So,
+    Sr(u16),
     Su(u16),
     Tbc(TbcScope),
     Vpa(u16),
@@ -109,6 +113,7 @@ pub enum DecMode {
     Origin = 6,                       // DECOM
     AutoWrap = 7,                     // DECAWM
     TextCursorEnable = 25,            // DECTCEM
+    ReverseWrap = 45,                 // XTREVWRAP
     AltScreenBuffer = 1047,           // xterm
     SaveCursor = 1048,                // xterm
     SaveCursorAltScreenBuffer = 1049, // xterm
@@ -816,6 +821,14 @@ impl Parser {
 
             (Some('!'), 'p') => Some(Decstr),
 
+            (Some('\''), '}') => Some(Decic(ps[0].as_u16())),
+
+            (Some('\''), '~') => Some(Decdc(ps[0].as_u16())),
+
+            (Some(' '), '@') => Some(Sl(ps[0].as_u16())),
+
+            (Some(' '), 'A') => Some(Sr(ps[0].as_u16())),
+
             (Some('?'), 'h') => Some(Decset(DecModes::collect(
                 ps[..=self.cur_param].iter().filter_map(dec_mode),
             ))),
@@ -999,6 +1012,8 @@ fn dump_function(seq: &mut String, fun: &Function) {
         Cuu(n) => push_csi(seq, None, &[n.to_string()], 'A'),
         Dch(n) => push_csi(seq, None, &[n.to_string()], 'P'),
         Decaln => push_esc(seq, Some('#'), '8'),
+        Decdc(n) => push_csi(seq, Some('\''), &[n.to_string()], '~'),
+        Decic(n) => push_csi(seq, Some('\''), &[n.to_string()], '}'),
         Decrc => push_esc(seq, None, '8'),
 
         Decrst(modes) => {
@@ -1010,6 +1025,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
                     Origin => 6,
                     AutoWrap => 7,
                     TextCursorEnable => 25,
+                    ReverseWrap => 45,
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
@@ -1031,6 +1047,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
                     Origin => 6,
                     AutoWrap => 7,
                     TextCursorEnable => 25,
+                    ReverseWrap => 45,
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
@@ -1168,7 +1185,9 @@ fn dump_function(seq: &mut String, fun: &Function) {
             push_csi(seq, None, &params, 'h');
         }
 
+        Sl(n) => push_csi(seq, Some(' '), &[n.to_string()], '@'),
         So => seq.push('\u{0e}'),
+        Sr(n) => push_csi(seq, Some(' '), &[n.to_string()], 'A'),
         Su(n) => push_csi(seq, None, &[n.to_string()], 'S'),
 
         Tbc(scope) => {
@@ -1208,8 +1227,23 @@ fn push_csi(seq: &mut String, intermediate: Option<char>, params: &[String], fin
     seq.push('\u{1b}');
     seq.push('[');
 
-    if let Some(intermediate) = intermediate {
-        seq.push(intermediate);
+    // Private-mode prefixes (`<` `=` `>` `?`, i.e. 0x3c..=0x3f) and
+    // every other intermediate byte sit on different sides of the
+    // parameter run in ECMA-48:
+    //
+    //   - private prefix: immediately after CSI, before any param
+    //   - intermediate byte (0x20..=0x2f): after params, before the
+    //     final character
+    //
+    // The parser's state machine reflects that split (`CsiParam`
+    // after a private prefix accepts params; `CsiIntermediate`
+    // discards them via `CsiIgnore`). Emit in the form the parser
+    // round-trips cleanly.
+    let private = intermediate.filter(|c| matches!(*c, '\u{3c}'..='\u{3f}'));
+    let after_params = intermediate.filter(|c| !matches!(*c, '\u{3c}'..='\u{3f}'));
+
+    if let Some(c) = private {
+        seq.push(c);
     }
 
     if let Some((first, rest)) = params.split_first() {
@@ -1219,6 +1253,10 @@ fn push_csi(seq: &mut String, intermediate: Option<char>, params: &[String], fin
             seq.push(';');
             seq.push_str(param);
         }
+    }
+
+    if let Some(c) = after_params {
+        seq.push(c);
     }
 
     seq.push(final_char);
@@ -1487,6 +1525,7 @@ fn dec_mode(param: &Param) -> Option<DecMode> {
         6 => Some(Origin),
         7 => Some(AutoWrap),
         25 => Some(TextCursorEnable),
+        45 => Some(ReverseWrap),
         47 => Some(AltScreenBuffer), // legacy variant of 1047
         1047 => Some(AltScreenBuffer),
         1048 => Some(SaveCursor),
@@ -1806,6 +1845,14 @@ mod tests {
         assert_eq!(parse("\x1b[s"), [Scosc]);
         assert_eq!(parse("\x1b[u"), [Scorc]);
         assert_eq!(parse("\x1b[!p"), [Decstr]);
+        assert_eq!(parse("\x1b['}"), [Decic(0)]);
+        assert_eq!(parse("\x1b[2'}"), [Decic(2)]);
+        assert_eq!(parse("\x1b['~"), [Decdc(0)]);
+        assert_eq!(parse("\x1b[3'~"), [Decdc(3)]);
+        assert_eq!(parse("\x1b[ @"), [Sl(0)]);
+        assert_eq!(parse("\x1b[4 @"), [Sl(4)]);
+        assert_eq!(parse("\x1b[ A"), [Sr(0)]);
+        assert_eq!(parse("\x1b[5 A"), [Sr(5)]);
 
         // DEC private modes.
         assert_eq!(parse("\x1b[?7h"), [Decset(dec_modes([DecMode::AutoWrap]))]);
@@ -2078,6 +2125,8 @@ mod tests {
             Cuu(1),
             Dch(18),
             Decaln,
+            Decdc(3),
+            Decic(2),
             Decrc,
             Decrst(dec_modes([])),
             Decrst(dec_modes([
@@ -2153,9 +2202,11 @@ mod tests {
                 ResetBackgroundColor,
             ])),
             Si,
+            Sl(7),
             Sm(ansi_modes([])),
             Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])),
             So,
+            Sr(8),
             Su(19),
             Tbc(TbcScope::CurrentColumn),
             Tbc(TbcScope::All),
