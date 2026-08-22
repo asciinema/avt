@@ -266,6 +266,8 @@ impl Terminal {
                 self.nel();
             }
 
+            Osc(_) => {}
+
             Print(ch) => {
                 self.print(ch);
             }

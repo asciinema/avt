@@ -6,6 +6,7 @@ use crate::color::Color;
 use std::fmt::Display;
 
 const PARAMS_LEN: usize = 32;
+const OSC_BUFFER_LIMIT: usize = 1024;
 
 #[derive(Debug, Default)]
 pub struct Parser {
@@ -13,6 +14,7 @@ pub struct Parser {
     params: [Param; PARAMS_LEN],
     cur_param: usize,
     intermediate: Option<char>,
+    osc_buffer: String,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -34,7 +36,7 @@ pub enum State {
     SosPmApcString,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Function {
     Bs,
     Cbt(u16),
@@ -69,6 +71,7 @@ pub enum Function {
     Il(u16),
     Lf,
     Nel,
+    Osc(Osc),
     Print(char),
     Rep(u16),
     Ri,
@@ -88,6 +91,23 @@ pub enum Function {
     Xtwinops(XtwinopsOp),
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum Osc {
+    ShellIntegration(ShellIntegration),
+}
+
+#[derive(Debug, PartialEq, Clone, Copy)]
+pub enum ShellIntegration {
+    /// A (FTCS_PROMPT): prompt rendering begins.
+    PromptStart,
+    /// B (FTCS_COMMAND_START): editable command input begins.
+    CommandStart,
+    /// C (FTCS_COMMAND_EXECUTED): input is submitted, output begins.
+    CommandExecuted,
+    /// D (FTCS_COMMAND_FINISHED): execution ends, or input is cancelled.
+    CommandFinished { exit_status: Option<u8> },
+}
+
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum AnsiMode {
@@ -95,7 +115,7 @@ pub enum AnsiMode {
     NewLine = 20, // LNM
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CtcOp {
     Set,
     ClearCurrentColumn,
@@ -114,7 +134,7 @@ pub enum DecMode {
     SaveCursorAltScreenBuffer = 1049, // xterm
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum EdScope {
     Below,
     Above,
@@ -122,7 +142,7 @@ pub enum EdScope {
     SavedLines,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum ElScope {
     ToRight,
     ToLeft,
@@ -151,13 +171,13 @@ pub enum SgrOp {
     ResetBackgroundColor,      // 49
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TbcScope {
     CurrentColumn,
     All,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum XtwinopsOp {
     Resize(u16, u16),
 }
@@ -207,7 +227,8 @@ impl SgrOps {
         self.len() == 0
     }
 
-    pub(crate) fn as_slice(&self) -> &[SgrOp] {
+    /// The decoded graphics-rendition operations, in execution order.
+    pub fn as_slice(&self) -> &[SgrOp] {
         match &self.0 {
             SgrOpsStorage::Inline { ops, len } => &ops[..*len as usize],
             SgrOpsStorage::Heap(v) => v.as_slice(),
@@ -288,7 +309,8 @@ impl AnsiModes {
         v
     }
 
-    pub(crate) fn as_slice(&self) -> &[AnsiMode] {
+    /// The decoded ANSI modes, in execution order.
+    pub fn as_slice(&self) -> &[AnsiMode] {
         match &self.0 {
             AnsiModesStorage::Inline { modes, len } => &modes[..*len as usize],
             AnsiModesStorage::Heap(v) => v.as_slice(),
@@ -366,7 +388,8 @@ impl DecModes {
         v
     }
 
-    pub(crate) fn as_slice(&self) -> &[DecMode] {
+    /// The decoded DEC modes, in execution order.
+    pub fn as_slice(&self) -> &[DecMode] {
         match &self.0 {
             DecModesStorage::Inline { modes, len } => &modes[..*len as usize],
             DecModesStorage::Heap(v) => v.as_slice(),
@@ -427,8 +450,11 @@ impl Parser {
             }
 
             (_, '\u{1b}') => {
+                let exit_fn = self.exit_state();
                 self.state = Escape;
                 self.clear();
+
+                return exit_fn;
             }
 
             (Escape, '\u{5b}') => {
@@ -493,11 +519,20 @@ impl Parser {
 
             (Escape, '\u{5d}') => {
                 self.state = OscString;
+                self.osc_buffer.clear();
             }
 
             (OscString, '\u{07}') => {
                 // 0x07 is xterm non-ANSI variant of transition to ground
+                let exit_fn = self.exit_state();
                 self.state = Ground;
+
+                return exit_fn;
+            }
+
+            (OscString, '\u{18}') | (OscString, '\u{1a}') => {
+                self.state = Ground;
+                self.osc_buffer.clear();
             }
 
             (_, '\u{18}')
@@ -575,11 +610,15 @@ impl Parser {
             }
 
             (_, '\u{9c}') => {
+                let exit_fn = self.exit_state();
                 self.state = Ground;
+
+                return exit_fn;
             }
 
             (_, '\u{9d}') => {
                 self.state = OscString;
+                self.osc_buffer.clear();
             }
 
             (_, '\u{90}') => {
@@ -830,7 +869,25 @@ impl Parser {
 
     fn put(&mut self, _input: char) {}
 
-    fn osc_put(&mut self, _input: char) {}
+    fn osc_put(&mut self, input: char) {
+        if self.osc_buffer.len() + input.len_utf8() <= OSC_BUFFER_LIMIT {
+            self.osc_buffer.push(input);
+        }
+    }
+
+    fn exit_state(&mut self) -> Option<Function> {
+        match self.state {
+            State::OscString => self.osc_dispatch(),
+            _ => None,
+        }
+    }
+
+    fn osc_dispatch(&mut self) -> Option<Function> {
+        let operation = parse_osc(&self.osc_buffer);
+        self.osc_buffer.clear();
+
+        operation
+    }
 
     pub(crate) fn dump(&self) -> String {
         use State::*;
@@ -912,6 +969,7 @@ impl Parser {
 
             OscString => {
                 seq.push('\u{9d}');
+                seq.push_str(&self.osc_buffer);
             }
 
             SosPmApcString => {
@@ -923,7 +981,7 @@ impl Parser {
     }
 
     #[cfg(test)]
-    pub fn assert_eq(&self, other: &Parser) {
+    pub(crate) fn assert_eq(&self, other: &Parser) {
         use State::*;
 
         assert_eq!(self.state, other.state);
@@ -939,6 +997,10 @@ impl Parser {
             || self.state == DcsParam
         {
             assert_eq!(self.intermediate, other.intermediate);
+        }
+
+        if self.state == OscString {
+            assert_eq!(self.osc_buffer, other.osc_buffer);
         }
     }
 }
@@ -1094,6 +1156,31 @@ fn dump_function(seq: &mut String, fun: &Function) {
         Il(n) => push_csi(seq, None, &[n.to_string()], 'L'),
         Lf => seq.push('\n'),
         Nel => push_esc(seq, None, 'E'),
+
+        Osc(osc) => match osc {
+            self::Osc::ShellIntegration(kind) => {
+                let payload = match kind {
+                    ShellIntegration::PromptStart => "133;A",
+                    ShellIntegration::CommandStart => "133;B",
+                    ShellIntegration::CommandExecuted => "133;C",
+                    ShellIntegration::CommandFinished { .. } => "133;D",
+                };
+
+                seq.push('\u{9d}');
+                seq.push_str(payload);
+
+                if let ShellIntegration::CommandFinished {
+                    exit_status: Some(status),
+                } = kind
+                {
+                    seq.push(';');
+                    seq.push_str(&status.to_string());
+                }
+
+                seq.push('\u{9c}');
+            }
+        },
+
         Print(ch) => seq.push(*ch),
         Rep(n) => push_csi(seq, None, &[n.to_string()], 'b'),
         Ri => push_esc(seq, None, 'M'),
@@ -1224,6 +1311,39 @@ fn push_csi(seq: &mut String, intermediate: Option<char>, params: &[String], fin
     seq.push(final_char);
 }
 
+fn parse_osc(payload: &str) -> Option<Function> {
+    let mut parts = payload.splitn(2, ';');
+    let num = parts.next()?;
+
+    match num {
+        "133" => {
+            let rest = parts.next().unwrap_or("");
+            let mut params = rest.split(';');
+            let subtype = params.next()?;
+
+            let kind = match subtype {
+                "A" => ShellIntegration::PromptStart,
+                "B" => ShellIntegration::CommandStart,
+                "C" => ShellIntegration::CommandExecuted,
+
+                "D" => ShellIntegration::CommandFinished {
+                    // Missing, malformed, and out-of-range statuses are unknown.
+                    exit_status: params
+                        .next()
+                        .filter(|s| !s.is_empty() && s.bytes().all(|b| b.is_ascii_digit()))
+                        .and_then(|s| s.parse().ok()),
+                },
+
+                _ => return None,
+            };
+
+            Some(Function::Osc(Osc::ShellIntegration(kind)))
+        }
+
+        _ => None,
+    }
+}
+
 fn ansi_mode(param: &Param) -> Option<AnsiMode> {
     use AnsiMode::*;
 
@@ -1238,7 +1358,7 @@ struct SgrOpsDecoder<'a> {
     ps: &'a [Param],
 }
 
-impl<'a> Iterator for SgrOpsDecoder<'a> {
+impl Iterator for SgrOpsDecoder<'_> {
     type Item = SgrOp;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -2026,6 +2146,185 @@ mod tests {
     }
 
     #[test]
+    fn parse_osc_shell_integration() {
+        use super::Osc;
+        use super::ShellIntegration::*;
+
+        // BEL termination
+        assert_eq!(
+            parse("\x1b]133;A\x07"),
+            [Osc(Osc::ShellIntegration(PromptStart))]
+        );
+
+        assert_eq!(
+            parse("\x1b]133;C\x07"),
+            [Osc(Osc::ShellIntegration(CommandExecuted))]
+        );
+
+        assert_eq!(
+            parse("\x1b]133;D\x07"),
+            [Osc(Osc::ShellIntegration(CommandFinished {
+                exit_status: None
+            }))]
+        );
+
+        // ST termination (ESC \)
+        assert_eq!(
+            parse("\x1b]133;A\x1b\\"),
+            [Osc(Osc::ShellIntegration(PromptStart))]
+        );
+
+        assert_eq!(
+            parse("\x1b]133;C\x1b\\"),
+            [Osc(Osc::ShellIntegration(CommandExecuted))]
+        );
+
+        // C1 ST termination
+        assert_eq!(
+            parse("\x1b]133;A\u{9c}"),
+            [Osc(Osc::ShellIntegration(PromptStart))]
+        );
+
+        // OSC introduced via C1 OSC (0x9d)
+        assert_eq!(
+            parse("\u{9d}133;A\u{9c}"),
+            [Osc(Osc::ShellIntegration(PromptStart))]
+        );
+
+        // Extra parameters tail is ignored
+        assert_eq!(
+            parse("\x1b]133;A;aid=12345;cl=m\x07"),
+            [Osc(Osc::ShellIntegration(PromptStart))]
+        );
+
+        assert_eq!(
+            parse("\x1b]133;D;0\x07"),
+            [Osc(Osc::ShellIntegration(CommandFinished {
+                exit_status: Some(0)
+            }))]
+        );
+
+        assert_eq!(
+            parse("\x1b]133;B\x07"),
+            [Osc(Osc::ShellIntegration(CommandStart))]
+        );
+
+        for (status, expected) in [
+            ("255", Some(255)),
+            ("1;extra=x", Some(1)),
+            ("", None),
+            ("256", None),
+            ("-1", None),
+            ("+0", None),
+            ("oops", None),
+        ] {
+            assert_eq!(
+                parse(&format!("\x1b]133;D;{status}\x07")),
+                [Osc(Osc::ShellIntegration(CommandFinished {
+                    exit_status: expected
+                }))]
+            );
+        }
+
+        // Unknown subtypes produce no function
+        assert_eq!(parse("\x1b]133;Z\x07"), []);
+        assert_eq!(parse("\x1b]133\x07"), []);
+
+        // Unsupported OSC commands are ignored.
+        assert_eq!(parse("\x1b]0;title\x07"), []);
+        assert_eq!(parse("\x1b]title\x07"), []);
+    }
+
+    #[test]
+    fn all_shell_markers_accept_bel_and_st() {
+        use super::ShellIntegration::*;
+
+        for (payload, marker) in [
+            ("A", PromptStart),
+            ("B", CommandStart),
+            ("C", CommandExecuted),
+            ("D", CommandFinished { exit_status: None }),
+            (
+                "D;255",
+                CommandFinished {
+                    exit_status: Some(255),
+                },
+            ),
+        ] {
+            for intro in ["\x1b]", "\u{9d}"] {
+                for end in ["\x07", "\x1b\\", "\u{9c}"] {
+                    assert_eq!(
+                        parse(&format!("{intro}133;{payload}{end}")),
+                        [Osc(super::Osc::ShellIntegration(marker))]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn osc_payload_dispatches_on_esc_before_entering_escape() {
+        let mut parser = Parser::new();
+
+        feed(&mut parser, "\x1b]133;A");
+        assert_eq!(parser.state, State::OscString);
+
+        // ESC should dispatch the OSC and then enter Escape
+        let out = parser.feed('\x1b');
+
+        assert_eq!(
+            out,
+            Some(Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::PromptStart
+            )))
+        );
+
+        assert_eq!(parser.state, State::Escape);
+
+        // Following \ ends the ST sequence with no further function emitted
+        assert_eq!(parser.feed('\\'), None);
+        assert_eq!(parser.state, State::Ground);
+    }
+
+    #[test]
+    fn osc_cancelled_by_can_or_sub_emits_nothing() {
+        for cancel in ['\u{18}', '\u{1a}'] {
+            let mut parser = Parser::new();
+            feed(&mut parser, "\x1b]133;D;42");
+            assert_eq!(parser.feed(cancel), None);
+            assert_eq!(parser.state, State::Ground);
+            // The parser remains usable after cancellation.
+            feed(&mut parser, "\x1b]133;B");
+
+            assert_eq!(
+                parser.feed('\x07'),
+                Some(Osc(super::Osc::ShellIntegration(
+                    super::ShellIntegration::CommandStart
+                )))
+            );
+        }
+    }
+
+    #[test]
+    fn osc_split_across_feeds_dispatches() {
+        let mut parser = Parser::new();
+
+        for ch in "\x1b]13".chars() {
+            assert_eq!(parser.feed(ch), None);
+        }
+        for ch in "3;A".chars() {
+            assert_eq!(parser.feed(ch), None);
+        }
+
+        assert_eq!(
+            parser.feed('\x07'),
+            Some(Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::PromptStart
+            )))
+        );
+    }
+
+    #[test]
     fn parse_unicode() {
         assert_eq!(parse("日"), [Print('日')]);
         assert_eq!(parse("\x1b[日A"), [Print('A')]);
@@ -2121,6 +2420,23 @@ mod tests {
             Il(16),
             Lf,
             Nel,
+            Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::PromptStart,
+            )),
+            Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::CommandStart,
+            )),
+            Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::CommandExecuted,
+            )),
+            Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::CommandFinished { exit_status: None },
+            )),
+            Osc(super::Osc::ShellIntegration(
+                super::ShellIntegration::CommandFinished {
+                    exit_status: Some(255),
+                },
+            )),
             Print('A'),
             Print('日'),
             Rep(11),
