@@ -36,8 +36,8 @@ pub struct Terminal {
     cursor_keys_mode: CursorKeysMode,
     top_margin: usize,
     bottom_margin: usize,
-    saved_ctx: SavedCtx,
-    alternate_saved_ctx: SavedCtx,
+    saved_ctx: SavedCursorState,
+    alternate_saved_ctx: SavedCursorState,
     dirty_lines: DirtyLines,
     xtwinops: bool,
 }
@@ -55,7 +55,7 @@ pub(crate) enum CursorKeysMode {
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) struct SavedCtx {
+pub(crate) struct SavedCursorState {
     pub cursor_col: usize,
     pub cursor_row: usize,
     pub pen: Pen,
@@ -63,9 +63,9 @@ pub(crate) struct SavedCtx {
     pub auto_wrap_mode: bool,
 }
 
-impl Default for SavedCtx {
+impl Default for SavedCursorState {
     fn default() -> Self {
-        SavedCtx {
+        SavedCursorState {
             cursor_col: 0,
             cursor_row: 0,
             pen: Pen::default(),
@@ -75,7 +75,7 @@ impl Default for SavedCtx {
     }
 }
 
-impl SavedCtx {
+impl SavedCursorState {
     fn is_default(&self) -> bool {
         self.cursor_col == 0
             && self.cursor_row == 0
@@ -115,8 +115,8 @@ impl Terminal {
             cursor_keys_mode: CursorKeysMode::Normal,
             top_margin: 0,
             bottom_margin: (rows - 1),
-            saved_ctx: SavedCtx::default(),
-            alternate_saved_ctx: SavedCtx::default(),
+            saved_ctx: SavedCursorState::default(),
+            alternate_saved_ctx: SavedCursorState::default(),
             dirty_lines,
             xtwinops: false,
         }
@@ -592,7 +592,7 @@ impl Terminal {
         self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
-        self.saved_ctx = SavedCtx::default();
+        self.saved_ctx = SavedCursorState::default();
     }
 
     fn hard_reset(&mut self) {
@@ -614,8 +614,8 @@ impl Terminal {
         self.cursor_keys_mode = CursorKeysMode::Normal;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
-        self.saved_ctx = SavedCtx::default();
-        self.alternate_saved_ctx = SavedCtx::default();
+        self.saved_ctx = SavedCursorState::default();
+        self.alternate_saved_ctx = SavedCursorState::default();
         self.dirty_lines = DirtyLines::new(self.rows);
     }
 
@@ -1327,10 +1327,11 @@ impl Terminal {
     }
 
     pub fn dump(&self) -> Vec<Function> {
-        let (primary_ctx, alternate_ctx): (&SavedCtx, &SavedCtx) = match self.active_buffer_type {
-            BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
-            BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx),
-        };
+        let (primary_ctx, alternate_ctx): (&SavedCursorState, &SavedCursorState) =
+            match self.active_buffer_type {
+                BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
+                BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx),
+            };
 
         // 1. dump primary screen buffer
 
@@ -3299,7 +3300,7 @@ mod tests {
         assert_eq!(term.bottom_margin, 2);
         assert_eq!(term.charsets, [Charset::Ascii, Charset::Ascii]);
         assert_eq!(term.active_charset, 0);
-        assert_eq!(term.saved_ctx, super::SavedCtx::default());
+        assert_eq!(term.saved_ctx, super::SavedCursorState::default());
         assert_eq!(term.pen, crate::pen::Pen::default());
     }
 
