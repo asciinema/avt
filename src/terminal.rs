@@ -76,6 +76,36 @@ impl Default for SavedCursorState {
 }
 
 impl SavedCursorState {
+    fn dump(&self, funs: &mut Vec<Function>) {
+        if self.is_default() {
+            return;
+        }
+
+        if !self.auto_wrap_mode {
+            funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
+        }
+
+        if self.origin_mode {
+            funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
+        }
+
+        funs.push(Function::Cup(
+            as_u16(self.cursor_row + 1),
+            as_u16(self.cursor_col + 1),
+        ));
+
+        funs.push(to_sgr(&self.pen));
+        funs.push(Function::Decsc);
+
+        if !self.auto_wrap_mode {
+            funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
+        }
+
+        if self.origin_mode {
+            funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
+        }
+    }
+
     fn is_default(&self) -> bool {
         self.cursor_col == 0
             && self.cursor_row == 0
@@ -1351,43 +1381,11 @@ impl Terminal {
             }
         }
 
-        // 3. configure saved context for primary screen
+        // 3. configure the primary saved cursor while its buffer is active
 
-        if !primary_ctx.is_default() {
-            if !primary_ctx.auto_wrap_mode {
-                // disable auto-wrap mode
-                funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
-            }
+        primary_ctx.dump(&mut funs);
 
-            if primary_ctx.origin_mode {
-                // enable origin mode
-                funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
-            }
-
-            // fix cursor in target position
-            funs.push(Function::Cup(
-                as_u16(primary_ctx.cursor_row + 1),
-                as_u16(primary_ctx.cursor_col + 1),
-            ));
-
-            // configure pen
-            funs.push(to_sgr(&primary_ctx.pen));
-
-            // save cursor
-            funs.push(Function::Decsc);
-
-            if !primary_ctx.auto_wrap_mode {
-                // re-enable auto-wrap mode
-                funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
-            }
-
-            if primary_ctx.origin_mode {
-                // re-disable origin mode
-                funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
-            }
-        }
-
-        // prevent pen bleed into alt screen buffer
+        // Reset the pen before switching: the alternate buffer is created with it.
         funs.push(to_sgr(&Pen::default()));
 
         // 4. dump alternate screen buffer
@@ -1405,41 +1403,9 @@ impl Terminal {
             dump_buffer(self.alternate_buffer(), &mut funs);
         }
 
-        // 5. configure saved context for alternate screen
+        // 5. configure the alternate saved cursor while its buffer is active
 
-        if !alternate_ctx.is_default() {
-            if !alternate_ctx.auto_wrap_mode {
-                // disable auto-wrap mode
-                funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
-            }
-
-            if alternate_ctx.origin_mode {
-                // enable origin mode
-                funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
-            }
-
-            // fix cursor in target position
-            funs.push(Function::Cup(
-                as_u16(alternate_ctx.cursor_row + 1),
-                as_u16(alternate_ctx.cursor_col + 1),
-            ));
-
-            // configure pen
-            funs.push(to_sgr(&alternate_ctx.pen));
-
-            // save cursor
-            funs.push(Function::Decsc);
-
-            if !alternate_ctx.auto_wrap_mode {
-                // re-enable auto-wrap mode
-                funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
-            }
-
-            if alternate_ctx.origin_mode {
-                // re-disable origin mode
-                funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
-            }
-        }
+        alternate_ctx.dump(&mut funs);
 
         // 6. ensure the right buffer is active
 
@@ -1451,14 +1417,13 @@ impl Terminal {
         // 7. setup origin mode
 
         if self.origin_mode {
-            // enable origin mode
-            // note: this resets cursor position - must be done before fixing cursor
+            // Enable origin mode before restoring the cursor: this moves it home.
             funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
         }
 
         // 8. setup margins
 
-        // note: this resets cursor position - must be done before fixing cursor
+        // Setting margins moves the cursor home, so restore its position afterward.
         if self.top_margin > 0 || self.bottom_margin < self.rows - 1 {
             funs.push(Function::Decstbm(
                 as_u16(self.top_margin + 1),
@@ -1473,8 +1438,8 @@ impl Terminal {
 
         if self.origin_mode {
             if row < self.top_margin || row > self.bottom_margin {
-                // bring cursor outside scroll region by restoring saved cursor
-                // and moving it to desired position via CSI A/B/C/D
+                // CUP is constrained by origin mode. Restore the saved cursor,
+                // then use relative movement to reach a position outside the margins.
 
                 funs.push(Function::Scorc);
 
@@ -1514,8 +1479,7 @@ impl Terminal {
         }
 
         if self.cursor.col >= self.cols {
-            // move cursor past the right border by re-printing the character in
-            // the last column
+            // Restore pending wrap by reprinting the character at the right edge.
             let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
             let occupancy = last_cell.occupancy();
 
@@ -1539,8 +1503,8 @@ impl Terminal {
             funs.push(Function::Decrst(DecModes::one(DecMode::TextCursorEnable)));
         }
 
-        // Following 3 steps must happen after ALL prints as they alter print behaviour,
-        // including the "move cursor past the right border one" above.
+        // Restore charset, insert mode, and auto-wrap only after all printing,
+        // including the character reprinted above to restore pending wrap.
 
         // 10. setup charset
 
