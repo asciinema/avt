@@ -6,6 +6,13 @@ authors = ["Marcin Kulik <m@ku1ik.com>"]
 repository = "https://github.com/asciinema/avt"
 description = "asciinema virtual terminal"
 license = "Apache-2.0"
+exclude = [
+    "/.github/**",
+    "/.gitignore",
+    "/flake.lock",
+    "/flake.nix",
+    "/fuzz.sh",
+]
 
 # MSRV
 rust-version = "1.86.0"
