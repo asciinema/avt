@@ -214,6 +214,86 @@ mod tests {
     }
 
     #[test]
+    fn alt_saved_cursor_persists_across_sessions() {
+        let mut vt = Vt::new(8, 4);
+
+        vt.feed_str("\x1b[?1047h");
+        vt.feed_str("\x1b[2;3H\x1b7");
+        vt.feed_str("\x1b[?1047l");
+        vt.feed_str("\x1b[?1047h");
+        vt.feed_str("\x1b8");
+
+        assert_eq!(vt.cursor(), (2, 1));
+    }
+
+    #[test]
+    fn alternate_buffer_starts_blank_on_each_entry() {
+        let mut vt = Vt::new(8, 2);
+
+        vt.feed_str("\x1b[?1047h");
+        vt.feed_str("hello");
+        vt.feed_str("\x1b[?1047l");
+        vt.feed_str("\x1b[41m\x1b[?1047h");
+
+        assert_eq!(vt.line(0).text().trim_end(), "");
+
+        let pen = *vt.line(0).cells()[0].pen();
+
+        assert_eq!(pen.background(), Some(crate::Color::Indexed(1)));
+    }
+
+    #[test]
+    fn repeated_alt_buffer_set_does_not_recreate_it() {
+        let mut vt = Vt::new(8, 2);
+
+        vt.feed_str("\x1b[?1047h");
+        vt.feed_str("hello");
+        vt.feed_str("\x1b[?1047h");
+
+        assert_eq!(vt.line(0).text().trim_end(), "hello");
+    }
+
+    #[test]
+    fn alt_scrolling_emits_no_evicted_lines() {
+        let mut vt = Vt::builder().size(4, 2).scrollback_limit(5).build();
+        vt.feed_str("\x1b[?1047h");
+        let evicted = vt.feed_str("a\r\nb\r\nc\r\nd\r\ne\r\n").scrollback.count();
+
+        assert_eq!(evicted, 0);
+        assert_eq!(vt.lines().count(), 2);
+    }
+
+    #[test]
+    fn primary_reflows_after_resize_while_alternate_active() {
+        let mut vt = Vt::new(4, 2);
+
+        vt.feed_str("abcd");
+        vt.feed_str("\x1b[?1047h");
+        vt.resize(2, 2);
+        vt.feed_str("\x1b[?1047l");
+
+        assert_eq!(vt.line(0).text(), "ab");
+        assert_eq!(vt.line(1).text(), "cd");
+    }
+
+    #[test]
+    fn dump_restores_saved_cursors_in_both_buffers() {
+        let mut vt1 = Vt::new(8, 4);
+        let mut vt2 = Vt::new(8, 4);
+
+        vt1.feed_str("\x1b[3;4H\x1b7");
+        vt1.feed_str("\x1b[?1047h");
+        vt1.feed_str("\x1b[2;2H\x1b7");
+
+        vt2.feed_str(&vt1.dump());
+        assert_vts_eq(&vt1, &vt2);
+        vt1.feed_str("\x1b8");
+        vt2.feed_str("\x1b8");
+
+        assert_eq!(vt1.cursor(), vt2.cursor());
+    }
+
+    #[test]
     fn dump_initial() {
         let vt1 = Vt::new(10, 4);
         let mut vt2 = Vt::new(10, 4);

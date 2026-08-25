@@ -14,15 +14,14 @@ use crate::parser::{
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use std::cmp::Ordering;
-use std::mem;
 
 #[derive(Debug)]
 pub struct Terminal {
     cols: usize,
     rows: usize,
-    buffer: Buffer,
-    other_buffer: Buffer,
-    active_buffer_type: BufferType,
+    primary_buffer: Buffer,
+    alternate_buffer: Buffer,
+    active: BufferType,
     scrollback_limit: Option<usize>,
     cursor: Cursor,
     pen: Pen,
@@ -36,8 +35,8 @@ pub struct Terminal {
     cursor_keys_mode: CursorKeysMode,
     top_margin: usize,
     bottom_margin: usize,
-    saved_ctx: SavedCursorState,
-    alternate_saved_ctx: SavedCursorState,
+    primary_saved_cursor: SavedCursorState,
+    alternate_saved_cursor: SavedCursorState,
     dirty_lines: DirtyLines,
     xtwinops: bool,
 }
@@ -54,7 +53,7 @@ pub(crate) enum CursorKeysMode {
     Application,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, Copy, Clone, PartialEq)]
 pub(crate) struct SavedCursorState {
     pub cursor_col: usize,
     pub cursor_row: usize,
@@ -129,9 +128,9 @@ impl Terminal {
         Terminal {
             cols,
             rows,
-            buffer: primary_buffer,
-            other_buffer: alternate_buffer,
-            active_buffer_type: BufferType::Primary,
+            primary_buffer,
+            alternate_buffer,
+            active: BufferType::Primary,
             scrollback_limit,
             tabs: Tabs::new(cols),
             cursor: Cursor::default(),
@@ -145,8 +144,8 @@ impl Terminal {
             cursor_keys_mode: CursorKeysMode::Normal,
             top_margin: 0,
             bottom_margin: (rows - 1),
-            saved_ctx: SavedCursorState::default(),
-            alternate_saved_ctx: SavedCursorState::default(),
+            primary_saved_cursor: SavedCursorState::default(),
+            alternate_saved_cursor: SavedCursorState::default(),
             dirty_lines,
             xtwinops: false,
         }
@@ -157,7 +156,45 @@ impl Terminal {
     }
 
     pub fn active_buffer_type(&self) -> BufferType {
-        self.active_buffer_type
+        self.active
+    }
+
+    #[inline(always)]
+    fn active_buffer(&self) -> &Buffer {
+        match self.active {
+            BufferType::Primary => &self.primary_buffer,
+            BufferType::Alternate => &self.alternate_buffer,
+        }
+    }
+
+    #[inline(always)]
+    fn active_buffer_mut(&mut self) -> &mut Buffer {
+        match self.active {
+            BufferType::Primary => &mut self.primary_buffer,
+            BufferType::Alternate => &mut self.alternate_buffer,
+        }
+    }
+
+    #[inline(always)]
+    fn active_saved_cursor(&self) -> &SavedCursorState {
+        match self.active {
+            BufferType::Primary => &self.primary_saved_cursor,
+            BufferType::Alternate => &self.alternate_saved_cursor,
+        }
+    }
+
+    #[inline(always)]
+    fn active_saved_cursor_mut(&mut self) -> &mut SavedCursorState {
+        match self.active {
+            BufferType::Primary => &mut self.primary_saved_cursor,
+            BufferType::Alternate => &mut self.alternate_saved_cursor,
+        }
+    }
+
+    fn erase_at_cursor(&mut self, mode: EraseMode) {
+        let pos = (self.cursor.col, self.cursor.row);
+        let pen = self.pen;
+        self.active_buffer_mut().erase(pos, mode, &pen);
     }
 
     pub fn execute(&mut self, fun: Function) {
@@ -373,13 +410,13 @@ impl Terminal {
     }
 
     pub fn gc(&mut self) -> Box<dyn Iterator<Item = Line> + '_> {
-        let lines = self.buffer.gc();
+        if self.active == BufferType::Alternate {
+            drop(self.alternate_buffer.gc());
 
-        if self.active_buffer_type == BufferType::Alternate {
             return Box::new(std::iter::empty());
         }
 
-        match lines {
+        match self.primary_buffer.gc() {
             Some(iter) => Box::new(iter),
             None => Box::new(std::iter::empty()),
         }
@@ -395,19 +432,25 @@ impl Terminal {
     // cursor
 
     fn save_cursor(&mut self) {
-        self.saved_ctx.cursor_col = self.cursor.col.min(self.cols - 1);
-        self.saved_ctx.cursor_row = self.cursor.row;
-        self.saved_ctx.pen = self.pen;
-        self.saved_ctx.origin_mode = self.origin_mode;
-        self.saved_ctx.auto_wrap_mode = self.auto_wrap_mode;
+        let state = SavedCursorState {
+            cursor_col: self.cursor.col.min(self.cols - 1),
+            cursor_row: self.cursor.row,
+            pen: self.pen,
+            origin_mode: self.origin_mode,
+            auto_wrap_mode: self.auto_wrap_mode,
+        };
+
+        *self.active_saved_cursor_mut() = state;
     }
 
     fn restore_cursor(&mut self) {
-        self.cursor.col = self.saved_ctx.cursor_col;
-        self.cursor.row = self.saved_ctx.cursor_row;
-        self.pen = self.saved_ctx.pen;
-        self.origin_mode = self.saved_ctx.origin_mode;
-        self.auto_wrap_mode = self.saved_ctx.auto_wrap_mode;
+        let state = *self.active_saved_cursor();
+
+        self.cursor.col = state.cursor_col;
+        self.cursor.row = state.cursor_row;
+        self.pen = state.pen;
+        self.origin_mode = state.origin_mode;
+        self.auto_wrap_mode = state.auto_wrap_mode;
     }
 
     fn move_cursor_to_col(&mut self, col: usize) {
@@ -505,13 +548,15 @@ impl Terminal {
 
     fn scroll_up_in_region(&mut self, n: usize) {
         let range = self.top_margin..self.bottom_margin + 1;
-        self.buffer.scroll_up(range.clone(), n, &self.pen);
+        let pen = self.pen;
+        self.active_buffer_mut().scroll_up(range.clone(), n, &pen);
         self.dirty_lines.extend(range);
     }
 
     fn scroll_down_in_region(&mut self, n: usize) {
         let range = self.top_margin..self.bottom_margin + 1;
-        self.buffer.scroll_down(range.clone(), n, &self.pen);
+        let pen = self.pen;
+        self.active_buffer_mut().scroll_down(range.clone(), n, &pen);
         self.dirty_lines.extend(range);
     }
 
@@ -534,20 +579,16 @@ impl Terminal {
     // buffer switching
 
     fn switch_to_alternate_buffer(&mut self) {
-        if let BufferType::Primary = self.active_buffer_type {
-            self.active_buffer_type = BufferType::Alternate;
-            mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
-            mem::swap(&mut self.buffer, &mut self.other_buffer);
-            self.buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
+        if let BufferType::Primary = self.active {
+            self.active = BufferType::Alternate;
+            self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
             self.dirty_lines.extend(0..self.rows);
         }
     }
 
     fn switch_to_primary_buffer(&mut self) {
-        if let BufferType::Alternate = self.active_buffer_type {
-            self.active_buffer_type = BufferType::Primary;
-            mem::swap(&mut self.saved_ctx, &mut self.alternate_saved_ctx);
-            mem::swap(&mut self.buffer, &mut self.other_buffer);
+        if let BufferType::Alternate = self.active {
+            self.active = BufferType::Primary;
             self.dirty_lines.extend(0..self.rows);
         }
     }
@@ -595,19 +636,23 @@ impl Terminal {
     }
 
     fn reflow(&mut self) {
-        (self.cursor.col, self.cursor.row) =
-            self.buffer
-                .resize(self.cols, self.rows, (self.cursor.col, self.cursor.row));
+        let cols = self.cols;
+        let rows = self.rows;
+        let cursor = (self.cursor.col, self.cursor.row);
 
-        self.dirty_lines.resize(self.rows);
-        self.dirty_lines.extend(0..self.rows);
+        (self.cursor.col, self.cursor.row) = self.active_buffer_mut().resize(cols, rows, cursor);
 
-        if self.saved_ctx.cursor_col >= self.cols {
-            self.saved_ctx.cursor_col = self.cols - 1;
+        self.dirty_lines.resize(rows);
+        self.dirty_lines.extend(0..rows);
+
+        let saved = self.active_saved_cursor_mut();
+
+        if saved.cursor_col >= cols {
+            saved.cursor_col = cols - 1;
         }
 
-        if self.saved_ctx.cursor_row >= self.rows {
-            self.saved_ctx.cursor_row = self.rows - 1;
+        if saved.cursor_row >= rows {
+            saved.cursor_row = rows - 1;
         }
     }
 
@@ -622,16 +667,16 @@ impl Terminal {
         self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
-        self.saved_ctx = SavedCursorState::default();
+        *self.active_saved_cursor_mut() = SavedCursorState::default();
     }
 
     fn hard_reset(&mut self) {
         let primary_buffer = Buffer::new(self.cols, self.rows, self.scrollback_limit, None);
         let alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), None);
 
-        self.buffer = primary_buffer;
-        self.other_buffer = alternate_buffer;
-        self.active_buffer_type = BufferType::Primary;
+        self.primary_buffer = primary_buffer;
+        self.alternate_buffer = alternate_buffer;
+        self.active = BufferType::Primary;
         self.tabs = Tabs::new(self.cols);
         self.cursor = Cursor::default();
         self.pen = Pen::default();
@@ -644,41 +689,25 @@ impl Terminal {
         self.cursor_keys_mode = CursorKeysMode::Normal;
         self.top_margin = 0;
         self.bottom_margin = self.rows - 1;
-        self.saved_ctx = SavedCursorState::default();
-        self.alternate_saved_ctx = SavedCursorState::default();
+        self.primary_saved_cursor = SavedCursorState::default();
+        self.alternate_saved_cursor = SavedCursorState::default();
         self.dirty_lines = DirtyLines::new(self.rows);
     }
 
-    fn primary_buffer(&self) -> &Buffer {
-        if self.active_buffer_type == BufferType::Primary {
-            &self.buffer
-        } else {
-            &self.other_buffer
-        }
-    }
-
-    fn alternate_buffer(&self) -> &Buffer {
-        if self.active_buffer_type == BufferType::Alternate {
-            &self.buffer
-        } else {
-            &self.other_buffer
-        }
-    }
-
     pub fn view(&self) -> impl Iterator<Item = &Line> {
-        self.buffer.view()
+        self.active_buffer().view()
     }
 
     pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.buffer.lines()
+        self.active_buffer().lines()
     }
 
     pub fn line(&self, n: usize) -> &Line {
-        &self.buffer[n]
+        &self.active_buffer()[n]
     }
 
     pub fn text(&self) -> Vec<String> {
-        self.primary_buffer().text()
+        self.primary_buffer.text()
     }
 
     pub fn cursor_keys_app_mode(&self) -> bool {
@@ -708,7 +737,7 @@ impl Terminal {
 
     #[cfg(test)]
     pub fn assert_eq(&self, other: &Terminal) {
-        assert_eq!(self.active_buffer_type, other.active_buffer_type);
+        assert_eq!(self.active, other.active);
         assert_eq!(self.cursor, other.cursor);
         assert_eq!(self.pen, other.pen);
         assert_eq!(self.charsets, other.charsets);
@@ -721,18 +750,18 @@ impl Terminal {
         assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
-        assert_eq!(self.saved_ctx, other.saved_ctx);
-        assert_eq!(self.alternate_saved_ctx, other.alternate_saved_ctx);
+        assert_eq!(self.primary_saved_cursor, other.primary_saved_cursor);
+        assert_eq!(self.alternate_saved_cursor, other.alternate_saved_cursor);
 
         assert_eq!(
-            self.primary_buffer().view().collect::<Vec<_>>(),
-            other.primary_buffer().view().collect::<Vec<_>>()
+            self.primary_buffer.view().collect::<Vec<_>>(),
+            other.primary_buffer.view().collect::<Vec<_>>()
         );
 
-        if self.active_buffer_type == BufferType::Alternate {
+        if self.active == BufferType::Alternate {
             assert_eq!(
-                self.alternate_buffer().view().collect::<Vec<_>>(),
-                other.alternate_buffer().view().collect::<Vec<_>>()
+                self.alternate_buffer.view().collect::<Vec<_>>(),
+                other.alternate_buffer.view().collect::<Vec<_>>()
             );
         }
     }
@@ -756,15 +785,14 @@ impl Terminal {
             return PrintResult::NeedsRelocation;
         }
 
+        let pos = (self.cursor.col, self.cursor.row);
+        let pen = self.pen;
+
         if self.insert_mode {
-            self.buffer
-                .shift_right((self.cursor.col, self.cursor.row), 1, self.pen);
+            self.active_buffer_mut().shift_right(pos, 1, pen);
         }
 
-        match self
-            .buffer
-            .print((self.cursor.col, self.cursor.row), ch, self.pen)
-        {
+        match self.active_buffer_mut().print(pos, ch, pen) {
             Some(width) => PrintResult::Printed(width),
             None => PrintResult::NeedsRelocation,
         }
@@ -779,15 +807,20 @@ impl Terminal {
     }
 
     fn wrap_and_print_at_line_start(&mut self, ch: char) {
-        if self.cursor.row == self.bottom_margin {
-            self.buffer.wrap(self.cursor.row);
+        let row = self.cursor.row;
+
+        if row == self.bottom_margin {
+            self.active_buffer_mut().wrap(row);
             self.scroll_up_in_region(1);
-        } else if self.cursor.row < self.rows - 1 {
-            self.buffer.wrap(self.cursor.row);
+        } else if row < self.rows - 1 {
+            self.active_buffer_mut().wrap(row);
             self.cursor.row += 1;
         }
 
-        if let Some(width) = self.buffer.print((0, self.cursor.row), ch, self.pen) {
+        let pos = (0, self.cursor.row);
+        let pen = self.pen;
+
+        if let Some(width) = self.active_buffer_mut().print(pos, ch, pen) {
             self.cursor.col = width;
         } else {
             self.cursor.col = 0;
@@ -796,13 +829,17 @@ impl Terminal {
 
     fn print_at_line_end(&mut self, ch: char) {
         let row = self.cursor.row;
+        let pen = self.pen;
 
         if self.cursor.col > 0 {
             let col = self.cursor.col - 1;
-            let printed = self.buffer.print((col, row), ch, self.pen).is_some();
+            let printed = self
+                .active_buffer_mut()
+                .print((col, row), ch, pen)
+                .is_some();
 
             if !printed && col > 0 {
-                self.buffer.print((col - 1, row), ch, self.pen);
+                self.active_buffer_mut().print((col - 1, row), ch, pen);
             }
         }
 
@@ -873,7 +910,8 @@ impl Terminal {
     fn decaln(&mut self) {
         for row in 0..self.rows {
             for col in 0..self.cols {
-                self.buffer.print((col, row), '\u{45}', Pen::default());
+                self.active_buffer_mut()
+                    .print((col, row), '\u{45}', Pen::default());
             }
 
             self.dirty_lines.add(row);
@@ -895,11 +933,14 @@ impl Terminal {
 
         let n = as_usize(n, 1).min(self.cols - self.cursor.col);
 
-        self.buffer
-            .shift_right((self.cursor.col, self.cursor.row), n, self.pen);
+        let pos = (self.cursor.col, self.cursor.row);
+        let row = self.cursor.row;
+        let pen = self.pen;
 
-        for col in self.cursor.col..self.cursor.col + n {
-            self.buffer.print((col, self.cursor.row), ' ', self.pen);
+        self.active_buffer_mut().shift_right(pos, n, pen);
+
+        for col in pos.0..pos.0 + n {
+            self.active_buffer_mut().print((col, row), ' ', pen);
         }
 
         self.dirty_lines.add(self.cursor.row);
@@ -953,31 +994,19 @@ impl Terminal {
     fn ed(&mut self, scope: EdScope) {
         match scope {
             EdScope::Below => {
-                self.buffer.erase(
-                    (self.cursor.col, self.cursor.row),
-                    EraseMode::FromCursorToEndOfView,
-                    &self.pen,
-                );
+                self.erase_at_cursor(EraseMode::FromCursorToEndOfView);
 
                 self.dirty_lines.extend(self.cursor.row..self.rows);
             }
 
             EdScope::Above => {
-                self.buffer.erase(
-                    (self.cursor.col, self.cursor.row),
-                    EraseMode::FromStartOfViewToCursor,
-                    &self.pen,
-                );
+                self.erase_at_cursor(EraseMode::FromStartOfViewToCursor);
 
                 self.dirty_lines.extend(0..self.cursor.row + 1);
             }
 
             EdScope::All => {
-                self.buffer.erase(
-                    (self.cursor.col, self.cursor.row),
-                    EraseMode::WholeView,
-                    &self.pen,
-                );
+                self.erase_at_cursor(EraseMode::WholeView);
 
                 self.dirty_lines.extend(0..self.rows);
             }
@@ -989,31 +1018,19 @@ impl Terminal {
     fn el(&mut self, scope: ElScope) {
         match scope {
             ElScope::ToRight => {
-                self.buffer.erase(
-                    (self.cursor.col, self.cursor.row),
-                    EraseMode::FromCursorToEndOfLine,
-                    &self.pen,
-                );
+                self.erase_at_cursor(EraseMode::FromCursorToEndOfLine);
 
                 self.dirty_lines.add(self.cursor.row);
             }
 
             ElScope::ToLeft => {
-                self.buffer.erase(
-                    (self.cursor.col, self.cursor.row),
-                    EraseMode::FromStartOfLineToCursor,
-                    &self.pen,
-                );
+                self.erase_at_cursor(EraseMode::FromStartOfLineToCursor);
 
                 self.dirty_lines.add(self.cursor.row);
             }
 
             ElScope::All => {
-                self.buffer.erase(
-                    (self.cursor.col, self.cursor.row),
-                    EraseMode::WholeLine,
-                    &self.pen,
-                );
+                self.erase_at_cursor(EraseMode::WholeLine);
 
                 self.dirty_lines.add(self.cursor.row);
             }
@@ -1027,8 +1044,10 @@ impl Terminal {
             self.cursor.row..self.rows
         };
 
-        self.buffer
-            .scroll_down(range.clone(), as_usize(n, 1), &self.pen);
+        let pen = self.pen;
+
+        self.active_buffer_mut()
+            .scroll_down(range.clone(), as_usize(n, 1), &pen);
 
         self.dirty_lines.extend(range);
     }
@@ -1040,8 +1059,10 @@ impl Terminal {
             self.cursor.row..self.rows
         };
 
-        self.buffer
-            .scroll_up(range.clone(), as_usize(n, 1), &self.pen);
+        let pen = self.pen;
+
+        self.active_buffer_mut()
+            .scroll_up(range.clone(), as_usize(n, 1), &pen);
 
         self.dirty_lines.extend(range);
     }
@@ -1051,11 +1072,10 @@ impl Terminal {
             self.move_cursor_to_col(self.cols - 1);
         }
 
-        self.buffer.delete(
-            (self.cursor.col, self.cursor.row),
-            as_usize(n, 1),
-            &self.pen,
-        );
+        let pos = (self.cursor.col, self.cursor.row);
+        let pen = self.pen;
+
+        self.active_buffer_mut().delete(pos, as_usize(n, 1), &pen);
 
         self.dirty_lines.add(self.cursor.row);
     }
@@ -1087,11 +1107,7 @@ impl Terminal {
     fn ech(&mut self, n: u16) {
         let n = as_usize(n, 1);
 
-        self.buffer.erase(
-            (self.cursor.col, self.cursor.row),
-            EraseMode::NextChars(n),
-            &self.pen,
-        );
+        self.erase_at_cursor(EraseMode::NextChars(n));
 
         self.dirty_lines.add(self.cursor.row);
     }
@@ -1106,11 +1122,11 @@ impl Terminal {
             let row = self.cursor.row;
             let mut col = self.cursor.col - 1;
 
-            while col > 0 && self.buffer[(col, row)].occupancy() == Occupancy::WideTail {
+            while col > 0 && self.active_buffer()[(col, row)].occupancy() == Occupancy::WideTail {
                 col -= 1;
             }
 
-            let char = self.buffer[(col, row)].char();
+            let char = self.active_buffer()[(col, row)].char();
 
             for _n in 0..n {
                 self.print(char);
@@ -1357,16 +1373,13 @@ impl Terminal {
     }
 
     pub fn dump(&self) -> Vec<Function> {
-        let (primary_ctx, alternate_ctx): (&SavedCursorState, &SavedCursorState) =
-            match self.active_buffer_type {
-                BufferType::Primary => (&self.saved_ctx, &self.alternate_saved_ctx),
-                BufferType::Alternate => (&self.alternate_saved_ctx, &self.saved_ctx),
-            };
+        let primary_ctx = &self.primary_saved_cursor;
+        let alternate_ctx = &self.alternate_saved_cursor;
 
         // 1. dump primary screen buffer
 
         let mut funs = Vec::new();
-        dump_buffer(self.primary_buffer(), &mut funs);
+        dump_buffer(&self.primary_buffer, &mut funs);
 
         // 2. setup tab stops
 
@@ -1391,16 +1404,16 @@ impl Terminal {
         // 4. dump alternate screen buffer
 
         // switch to alternate screen
-        if self.active_buffer_type == BufferType::Alternate || !alternate_ctx.is_default() {
+        if self.active == BufferType::Alternate || !alternate_ctx.is_default() {
             funs.push(Function::Decset(DecModes::one(DecMode::AltScreenBuffer)));
         }
 
-        if self.active_buffer_type == BufferType::Alternate {
+        if self.active == BufferType::Alternate {
             // move cursor home
             funs.push(Function::Cup(1, 1));
 
             // dump alternate buffer
-            dump_buffer(self.alternate_buffer(), &mut funs);
+            dump_buffer(&self.alternate_buffer, &mut funs);
         }
 
         // 5. configure the alternate saved cursor while its buffer is active
@@ -1409,7 +1422,7 @@ impl Terminal {
 
         // 6. ensure the right buffer is active
 
-        if self.active_buffer_type == BufferType::Primary && !alternate_ctx.is_default() {
+        if self.active == BufferType::Primary && !alternate_ctx.is_default() {
             // switch back to primary screen
             funs.push(Function::Decrst(DecModes::one(DecMode::AltScreenBuffer)));
         }
@@ -1443,28 +1456,28 @@ impl Terminal {
 
                 funs.push(Function::Scorc);
 
-                match col.cmp(&self.saved_ctx.cursor_col) {
+                match col.cmp(&self.active_saved_cursor().cursor_col) {
                     Ordering::Less => {
-                        let n = self.saved_ctx.cursor_col - col;
+                        let n = self.active_saved_cursor().cursor_col - col;
                         funs.push(Function::Cub(as_u16(n)));
                     }
 
                     Ordering::Greater => {
-                        let n = col - self.saved_ctx.cursor_col;
+                        let n = col - self.active_saved_cursor().cursor_col;
                         funs.push(Function::Cuf(as_u16(n)));
                     }
 
                     Ordering::Equal => (),
                 }
 
-                match row.cmp(&self.saved_ctx.cursor_row) {
+                match row.cmp(&self.active_saved_cursor().cursor_row) {
                     Ordering::Less => {
-                        let n = self.saved_ctx.cursor_row - row;
+                        let n = self.active_saved_cursor().cursor_row - row;
                         funs.push(Function::Cuu(as_u16(n)));
                     }
 
                     Ordering::Greater => {
-                        let n = row - self.saved_ctx.cursor_row;
+                        let n = row - self.active_saved_cursor().cursor_row;
                         funs.push(Function::Cud(as_u16(n)));
                     }
 
@@ -1480,14 +1493,14 @@ impl Terminal {
 
         if self.cursor.col >= self.cols {
             // Restore pending wrap by reprinting the character at the right edge.
-            let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
+            let last_cell = self.active_buffer()[(self.cols - 1, self.cursor.row)];
             let occupancy = last_cell.occupancy();
 
             if occupancy == Occupancy::Single {
                 funs.push(to_sgr(last_cell.pen()));
                 funs.push(Function::Print(last_cell.char()));
             } else if occupancy == Occupancy::WideTail {
-                let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
+                let prev_cell = self.active_buffer()[(self.cols - 2, self.cursor.row)];
 
                 funs.push(Function::Cub(1));
                 funs.push(to_sgr(prev_cell.pen()));
@@ -3245,8 +3258,8 @@ mod tests {
         assert_eq!(term.bottom_margin, 2);
         assert_eq!(term.charsets, [Charset::Ascii, Charset::Drawing]);
         assert_eq!(term.active_charset, 1);
-        assert_eq!(term.saved_ctx.cursor_col, 2);
-        assert_eq!(term.saved_ctx.cursor_row, 2);
+        assert_eq!(term.alternate_saved_cursor.cursor_col, 2);
+        assert_eq!(term.alternate_saved_cursor.cursor_row, 2);
         assert_eq!(term.pen.intensity, Intensity::Bold);
 
         term.execute(Decstr);
@@ -3264,7 +3277,12 @@ mod tests {
         assert_eq!(term.bottom_margin, 2);
         assert_eq!(term.charsets, [Charset::Ascii, Charset::Ascii]);
         assert_eq!(term.active_charset, 0);
-        assert_eq!(term.saved_ctx, super::SavedCursorState::default());
+
+        assert_eq!(
+            term.alternate_saved_cursor,
+            super::SavedCursorState::default()
+        );
+
         assert_eq!(term.pen, crate::pen::Pen::default());
     }
 
@@ -3324,7 +3342,7 @@ mod tests {
         // save cursor
         term.execute(Decsc);
 
-        assert_eq!(term.saved_ctx.cursor_col, 15);
+        assert_eq!(term.primary_saved_cursor.cursor_col, 15);
 
         // switch to alternate buffer
         term.execute(Decset(dec_modes([AltScreenBuffer])));
@@ -3332,11 +3350,11 @@ mod tests {
         // save cursor
         term.execute(Decsc);
 
-        assert_eq!(term.saved_ctx.cursor_col, 15);
+        assert_eq!(term.alternate_saved_cursor.cursor_col, 15);
 
         // resize to 10x5
         term.resize(10, 5);
 
-        assert_eq!(term.saved_ctx.cursor_col, 9);
+        assert_eq!(term.alternate_saved_cursor.cursor_col, 9);
     }
 }
