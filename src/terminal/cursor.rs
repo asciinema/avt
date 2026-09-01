@@ -15,18 +15,12 @@ impl Default for Cursor {
     }
 }
 
-impl From<Cursor> for Option<(usize, usize)> {
-    fn from(cursor: Cursor) -> Self {
-        if cursor.visible {
-            Some((cursor.col, cursor.row))
+impl Cursor {
+    pub fn position(self) -> Option<(usize, usize)> {
+        if self.visible {
+            Some((self.col, self.row))
         } else {
             None
         }
-    }
-}
-
-impl PartialEq<(usize, usize)> for Cursor {
-    fn eq(&self, (other_col, other_row): &(usize, usize)) -> bool {
-        *other_col == self.col && *other_row == self.row
     }
 }

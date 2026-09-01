@@ -1,13 +1,13 @@
-use avt::Vt;
+use avt::Terminal;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{fs, iter};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
-    c.bench_function("vt: feed mixed in bulk", |b| {
+    c.bench_function("terminal: feed mixed in bulk", |b| {
         b.iter_batched(setup_feed("mixed.txt"), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("vt: feed mixed in chunks", |b| {
+    c.bench_function("terminal: feed mixed in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("mixed.txt")),
             run_feed,
@@ -15,11 +15,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("vt: feed cacademo in bulk", |b| {
+    c.bench_function("terminal: feed cacademo in bulk", |b| {
         b.iter_batched(setup_feed("cacademo.txt"), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("vt: feed cacademo in chunks", |b| {
+    c.bench_function("terminal: feed cacademo in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("cacademo.txt")),
             run_feed,
@@ -27,11 +27,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("vt: feed licenses in bulk", |b| {
+    c.bench_function("terminal: feed licenses in bulk", |b| {
         b.iter_batched(setup_feed("licenses.txt"), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("vt: feed licenses in chunks", |b| {
+    c.bench_function("terminal: feed licenses in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("licenses.txt")),
             run_feed,
@@ -39,7 +39,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("vt: feed licenses-lolcat in bulk", |b| {
+    c.bench_function("terminal: feed licenses-lolcat in bulk", |b| {
         b.iter_batched(
             setup_feed("licenses-lolcat.txt"),
             run_feed,
@@ -47,7 +47,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("vt: feed licenses-lolcat in chunks", |b| {
+    c.bench_function("terminal: feed licenses-lolcat in chunks", |b| {
         b.iter_batched(
             chunk(setup_feed("licenses-lolcat.txt")),
             run_feed,
@@ -55,43 +55,43 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         )
     });
 
-    c.bench_function("vt: feed newlines - scrollback limit = 0", |b| {
+    c.bench_function("terminal: feed newlines - scrollback limit = 0", |b| {
         b.iter_batched(gen_newlines(0), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("vt: feed newlines - scrollback limit = 100", |b| {
+    c.bench_function("terminal: feed newlines - scrollback limit = 100", |b| {
         b.iter_batched(gen_newlines(100), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("vt: feed newlines - scrollback limit = 1000", |b| {
+    c.bench_function("terminal: feed newlines - scrollback limit = 1000", |b| {
         b.iter_batched(gen_newlines(1000), run_feed, BatchSize::SmallInput)
     });
 
-    c.bench_function("vt: dump", |b| {
+    c.bench_function("terminal: dump", |b| {
         b.iter_batched(setup_dump, run_dump, BatchSize::SmallInput)
     });
 }
 
-fn setup_feed(filename: &str) -> impl Fn() -> (Vt, Vec<String>) + use<> {
+fn setup_feed(filename: &str) -> impl Fn() -> (Terminal, Vec<String>) + use<> {
     let filename = filename.to_owned();
 
     move || {
-        let vt = Vt::builder().size(100, 24).scrollback_limit(1000).build();
+        let vt = Terminal::with_scrollback(100, 24, Some(1000)).unwrap();
         let text = sample_text(&filename);
 
         (vt, vec![text])
     }
 }
 
-fn run_feed((mut vt, chunks): (Vt, Vec<String>)) -> (Vt, Vec<String>) {
+fn run_feed((mut vt, chunks): (Terminal, Vec<String>)) -> (Terminal, Vec<String>) {
     for text in &chunks {
-        vt.feed_str(text);
+        vt.feed(text);
     }
 
     (vt, chunks)
 }
 
-fn chunk(f: impl Fn() -> (Vt, Vec<String>)) -> impl Fn() -> (Vt, Vec<String>) {
+fn chunk(f: impl Fn() -> (Terminal, Vec<String>)) -> impl Fn() -> (Terminal, Vec<String>) {
     move || {
         let (vt, text) = f();
 
@@ -108,12 +108,9 @@ fn chunk(f: impl Fn() -> (Vt, Vec<String>)) -> impl Fn() -> (Vt, Vec<String>) {
     }
 }
 
-fn gen_newlines(scrollback_limit: usize) -> impl Fn() -> (Vt, Vec<String>) {
+fn gen_newlines(scrollback_limit: usize) -> impl Fn() -> (Terminal, Vec<String>) {
     move || {
-        let vt = Vt::builder()
-            .size(100, 24)
-            .scrollback_limit(scrollback_limit)
-            .build();
+        let vt = Terminal::with_scrollback(100, 24, Some(scrollback_limit)).unwrap();
 
         let chunks = iter::repeat_n(".\n".to_owned(), 100_000).collect::<Vec<_>>();
 
@@ -125,16 +122,16 @@ fn sample_text(filename: &str) -> String {
     fs::read_to_string(format!("benches/data/{filename}")).unwrap()
 }
 
-fn setup_dump() -> Vt {
-    let mut vt = Vt::new(100, 40);
+fn setup_dump() -> Terminal {
+    let mut vt = Terminal::new(100, 40).unwrap();
     let text = &sample_text("mixed.txt")[0..128 * 1024];
-    vt.feed_str(text);
+    vt.feed(text);
 
     vt
 }
 
-fn run_dump(vt: Vt) -> Vt {
-    vt.dump();
+fn run_dump(vt: Terminal) -> Terminal {
+    std::hint::black_box(vt.dump());
 
     vt
 }

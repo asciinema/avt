@@ -29,7 +29,7 @@ impl Cell {
         Cell(' ', Occupancy::Single, pen)
     }
 
-    pub fn is_default(&self) -> bool {
+    pub(crate) fn is_default(&self) -> bool {
         self.0 == ' ' && self.1 == Occupancy::Single && self.2.is_default()
     }
 

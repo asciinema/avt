@@ -316,7 +316,7 @@ impl Buffer {
         (rel_col, (rel_row as isize - rel_row_offset as isize))
     }
 
-    pub fn view(&self) -> impl Iterator<Item = &Line> {
+    pub fn view(&self) -> impl ExactSizeIterator<Item = &Line> {
         self.lines.iter().skip(self.view_offset())
     }
 
@@ -328,13 +328,19 @@ impl Buffer {
         self.lines.len() - self.rows
     }
 
-    pub fn gc(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
+    pub fn pop_evicted(&mut self) -> Option<Line> {
         if self.trim_needed {
+            if self
+                .scrollback_limit
+                .is_some_and(|limit| self.lines.len() - self.rows > limit)
+            {
+                return self.lines.pop_front();
+            }
+
             self.trim_needed = false;
-            self.trim_scrollback()
-        } else {
-            None
         }
+
+        None
     }
 
     fn clear(&mut self, range: Range<usize>, pen: &Pen) {
@@ -353,20 +359,6 @@ impl Buffer {
         let line = Line::blank(cols, *pen);
         let filler = std::iter::repeat_n(line, n);
         self.lines.extend(filler);
-    }
-
-    fn trim_scrollback(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
-        if let Some(limit) = &self.scrollback_limit {
-            let line_count = self.lines.len();
-            let scrollback_size = line_count - self.rows;
-
-            if scrollback_size > *limit {
-                let excess = scrollback_size - limit;
-                return Some(self.lines.drain(..excess));
-            }
-        }
-
-        None
     }
 
     #[cfg(test)]
@@ -603,7 +595,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc();
+        while buf.pop_evicted().is_some() {}
 
         assert_eq!(buf.lines.len(), 7);
 
@@ -615,7 +607,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc();
+        while buf.pop_evicted().is_some() {}
 
         assert_eq!(buf.lines.len(), 10);
     }

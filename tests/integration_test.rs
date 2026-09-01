@@ -1,12 +1,11 @@
-use avt::Vt;
+use avt::Terminal;
 use rand::RngExt;
 
 #[test]
-fn feed_str() {
+fn integration_test_random_input_does_not_panic() {
     let mut bytes = [0u8; 1024 * 512];
     rand::rng().fill(&mut bytes[..]);
-    let mut vt = Vt::new(10, 4);
-    let str = String::from_utf8_lossy(&bytes);
-    vt.feed_str(&str);
-    // no assertions - just check it doesn't panic on random input
+    let mut vt = Terminal::new(10, 4).unwrap();
+    let text = String::from_utf8_lossy(&bytes);
+    vt.feed(text.as_ref());
 }

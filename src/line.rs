@@ -299,6 +299,11 @@ impl Line {
         &self.cells
     }
 
+    /// Whether this row continues onto the next row through a soft wrap.
+    pub fn is_wrapped(&self) -> bool {
+        self.wrapped
+    }
+
     pub fn chunks<'a>(
         &'a self,
         predicate: impl Fn(&Cell, &Cell) -> bool + 'a,

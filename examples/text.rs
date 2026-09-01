@@ -1,25 +1,22 @@
-use avt::Vt;
-use avt::util::TextCollector;
+use avt::{Terminal, Transcript};
 
-fn main() {
-    let vt = Vt::builder().size(1000, 100).scrollback_limit(100).build();
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::io::stdin();
     let mut buf = String::new();
-    let mut collector = TextCollector::new(vt);
+    let mut terminal = Terminal::with_scrollback(1000, 100, Some(100))?;
+    let mut transcript = Transcript::new();
 
-    while let Ok(n) = input.read_line(&mut buf) {
-        if n == 0 {
-            break;
-        };
-
-        for line in collector.feed_str(&buf) {
+    while input.read_line(&mut buf)? != 0 {
+        for line in terminal.feed_with(&buf, &mut transcript) {
             println!("{}", line);
         }
 
         buf.clear();
     }
 
-    for line in collector.flush() {
+    for line in transcript.finish(&terminal) {
         println!("{}", line);
     }
+
+    Ok(())
 }

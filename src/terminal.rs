@@ -1,27 +1,26 @@
 mod cursor;
-mod dirty_lines;
 
 pub use self::cursor::Cursor;
-use self::dirty_lines::DirtyLines;
+use crate::Observer;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
     AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, EdScope, ElScope, Function, SgrOp, SgrOps,
-    TbcScope, XtwinopsOp,
+    TbcScope,
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use std::cmp::Ordering;
 
 #[derive(Debug)]
-pub struct Terminal {
+pub(crate) struct Engine {
     cols: usize,
     rows: usize,
     primary_buffer: Buffer,
     alternate_buffer: Buffer,
-    active: BufferType,
+    active: ScreenKind,
     scrollback_limit: Option<usize>,
     cursor: Cursor,
     pen: Pen,
@@ -37,12 +36,11 @@ pub struct Terminal {
     bottom_margin: usize,
     primary_saved_cursor: SavedCursorState,
     alternate_saved_cursor: SavedCursorState,
-    dirty_lines: DirtyLines,
-    xtwinops: bool,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq)]
-pub enum BufferType {
+/// Identifies the primary or alternate screen.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum ScreenKind {
     Primary,
     Alternate,
 }
@@ -119,18 +117,48 @@ enum PrintResult {
     NeedsRelocation,
 }
 
-impl Terminal {
+/// Borrowed read-only view of a terminal screen, including visible rows and
+/// any retained scrollback. Copy; methods take self and return data bound to
+/// the underlying buffer lifetime.
+#[derive(Debug, Clone, Copy)]
+pub struct Screen<'a> {
+    buffer: &'a Buffer,
+}
+
+impl<'a> Screen<'a> {
+    pub fn visible_lines(self) -> impl ExactSizeIterator<Item = &'a Line> {
+        self.buffer.view()
+    }
+
+    /// All lines: scrollback followed by the visible ones.
+    pub fn all_lines(self) -> impl Iterator<Item = &'a Line> {
+        self.buffer.lines()
+    }
+
+    pub fn line(self, n: usize) -> Option<&'a Line> {
+        self.buffer.view().nth(n)
+    }
+
+    /// Logical text lines: scrollback included, soft-wrapped rows joined,
+    /// trailing whitespace trimmed.
+    pub fn text(self) -> Vec<String> {
+        self.buffer.text()
+    }
+}
+
+impl Engine {
     pub fn new((cols, rows): (usize, usize), scrollback_limit: Option<usize>) -> Self {
+        assert!(cols > 0 && rows > 0, "terminal size must be at least 1x1");
+
         let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
         let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
-        let dirty_lines = DirtyLines::new(rows);
 
-        Terminal {
+        Engine {
             cols,
             rows,
             primary_buffer,
             alternate_buffer,
-            active: BufferType::Primary,
+            active: ScreenKind::Primary,
             scrollback_limit,
             tabs: Tabs::new(cols),
             cursor: Cursor::default(),
@@ -146,8 +174,6 @@ impl Terminal {
             bottom_margin: (rows - 1),
             primary_saved_cursor: SavedCursorState::default(),
             alternate_saved_cursor: SavedCursorState::default(),
-            dirty_lines,
-            xtwinops: false,
         }
     }
 
@@ -155,39 +181,39 @@ impl Terminal {
         (self.cols, self.rows)
     }
 
-    pub fn active_buffer_type(&self) -> BufferType {
+    pub fn active_screen_kind(&self) -> ScreenKind {
         self.active
     }
 
     #[inline(always)]
     fn active_buffer(&self) -> &Buffer {
         match self.active {
-            BufferType::Primary => &self.primary_buffer,
-            BufferType::Alternate => &self.alternate_buffer,
+            ScreenKind::Primary => &self.primary_buffer,
+            ScreenKind::Alternate => &self.alternate_buffer,
         }
     }
 
     #[inline(always)]
     fn active_buffer_mut(&mut self) -> &mut Buffer {
         match self.active {
-            BufferType::Primary => &mut self.primary_buffer,
-            BufferType::Alternate => &mut self.alternate_buffer,
+            ScreenKind::Primary => &mut self.primary_buffer,
+            ScreenKind::Alternate => &mut self.alternate_buffer,
         }
     }
 
     #[inline(always)]
     fn active_saved_cursor(&self) -> &SavedCursorState {
         match self.active {
-            BufferType::Primary => &self.primary_saved_cursor,
-            BufferType::Alternate => &self.alternate_saved_cursor,
+            ScreenKind::Primary => &self.primary_saved_cursor,
+            ScreenKind::Alternate => &self.alternate_saved_cursor,
         }
     }
 
     #[inline(always)]
     fn active_saved_cursor_mut(&mut self) -> &mut SavedCursorState {
         match self.active {
-            BufferType::Primary => &mut self.primary_saved_cursor,
-            BufferType::Alternate => &mut self.alternate_saved_cursor,
+            ScreenKind::Primary => &mut self.primary_saved_cursor,
+            ScreenKind::Alternate => &mut self.alternate_saved_cursor,
         }
     }
 
@@ -197,10 +223,10 @@ impl Terminal {
         self.active_buffer_mut().erase(pos, mode, &pen);
     }
 
-    pub fn execute(&mut self, fun: Function) {
+    pub fn execute_with(&mut self, function: &Function, observer: &mut impl Observer) {
         use Function::*;
 
-        match fun {
+        match *function {
             Bs => {
                 self.bs();
             }
@@ -229,7 +255,7 @@ impl Terminal {
                 self.cr();
             }
 
-            Ctc(mode) => {
+            Ctc(ref mode) => {
                 self.ctc(mode);
             }
 
@@ -254,27 +280,27 @@ impl Terminal {
             }
 
             Dch(n) => {
-                self.dch(n);
+                self.dch(n, observer);
             }
 
             Decaln => {
-                self.decaln();
+                self.decaln(observer);
             }
 
             Decrc => {
                 self.rc();
             }
 
-            Decrst(modes) => {
-                self.decrst(modes);
+            Decrst(ref modes) => {
+                self.decrst(modes, observer);
             }
 
             Decsc => {
                 self.sc();
             }
 
-            Decset(modes) => {
-                self.decset(modes);
+            Decset(ref modes) => {
+                self.decset(modes, observer);
             }
 
             Decstbm(top, bottom) => {
@@ -286,19 +312,19 @@ impl Terminal {
             }
 
             Dl(n) => {
-                self.dl(n);
+                self.dl(n, observer);
             }
 
             Ech(n) => {
-                self.ech(n);
+                self.ech(n, observer);
             }
 
-            Ed(mode) => {
-                self.ed(mode);
+            Ed(ref mode) => {
+                self.ed(mode, observer);
             }
 
-            El(mode) => {
-                self.el(mode);
+            El(ref mode) => {
+                self.el(mode, observer);
             }
 
             G1d4(charset) => {
@@ -318,40 +344,40 @@ impl Terminal {
             }
 
             Ich(n) => {
-                self.ich(n);
+                self.ich(n, observer);
             }
 
             Il(n) => {
-                self.il(n);
+                self.il(n, observer);
             }
 
             Lf => {
-                self.lf();
+                self.lf(observer);
             }
 
             Nel => {
-                self.nel();
+                self.nel(observer);
             }
 
             Osc(_) => {}
 
             Print(ch) => {
-                self.print(ch);
+                self.print(ch, observer);
             }
 
             Rep(n) => {
-                self.rep(n);
+                self.rep(n, observer);
             }
 
             Ri => {
-                self.ri();
+                self.ri(observer);
             }
 
             Ris => {
-                self.ris();
+                self.ris(observer);
             }
 
-            Rm(modes) => {
+            Rm(ref modes) => {
                 self.rm(modes);
             }
 
@@ -364,10 +390,10 @@ impl Terminal {
             }
 
             Sd(n) => {
-                self.sd(n);
+                self.sd(n, observer);
             }
 
-            Sgr(params) => {
+            Sgr(ref params) => {
                 self.sgr(params);
             }
 
@@ -375,7 +401,7 @@ impl Terminal {
                 self.si();
             }
 
-            Sm(modes) => {
+            Sm(ref modes) => {
                 self.sm(modes);
             }
 
@@ -384,10 +410,10 @@ impl Terminal {
             }
 
             Su(n) => {
-                self.su(n);
+                self.su(n, observer);
             }
 
-            Tbc(mode) => {
+            Tbc(ref mode) => {
                 self.tbc(mode);
             }
 
@@ -399,9 +425,7 @@ impl Terminal {
                 self.vpr(n);
             }
 
-            Xtwinops(op) => {
-                self.xtwinops(op);
-            }
+            Xtwinops(_) => {}
         }
     }
 
@@ -409,24 +433,14 @@ impl Terminal {
         self.cursor
     }
 
-    pub fn gc(&mut self) -> Box<dyn Iterator<Item = Line> + '_> {
-        if self.active == BufferType::Alternate {
-            drop(self.alternate_buffer.gc());
+    pub fn pop_evicted(&mut self) -> Option<Line> {
+        if self.active == ScreenKind::Alternate {
+            while self.alternate_buffer.pop_evicted().is_some() {}
 
-            return Box::new(std::iter::empty());
+            return None;
         }
 
-        match self.primary_buffer.gc() {
-            Some(iter) => Box::new(iter),
-            None => Box::new(std::iter::empty()),
-        }
-    }
-
-    pub fn changes(&mut self) -> Vec<usize> {
-        let changes = self.dirty_lines.to_vec();
-        self.dirty_lines.clear();
-
-        changes
+        self.primary_buffer.pop_evicted()
     }
 
     // cursor
@@ -500,9 +514,9 @@ impl Terminal {
         self.move_cursor_to_col(prev_tab);
     }
 
-    fn move_cursor_down_with_scroll(&mut self) {
+    fn move_cursor_down_with_scroll(&mut self, observer: &mut impl Observer) {
         if self.cursor.row == self.bottom_margin {
-            self.scroll_up_in_region(1);
+            self.scroll_up_in_region(1, observer);
         } else if self.cursor.row < self.rows - 1 {
             self.do_move_cursor_to_row(self.cursor.row + 1);
         }
@@ -546,18 +560,18 @@ impl Terminal {
         }
     }
 
-    fn scroll_up_in_region(&mut self, n: usize) {
+    fn scroll_up_in_region(&mut self, n: usize, observer: &mut impl Observer) {
         let range = self.top_margin..self.bottom_margin + 1;
         let pen = self.pen;
         self.active_buffer_mut().scroll_up(range.clone(), n, &pen);
-        self.dirty_lines.extend(range);
+        observer.dirty(range);
     }
 
-    fn scroll_down_in_region(&mut self, n: usize) {
+    fn scroll_down_in_region(&mut self, n: usize, observer: &mut impl Observer) {
         let range = self.top_margin..self.bottom_margin + 1;
         let pen = self.pen;
         self.active_buffer_mut().scroll_down(range.clone(), n, &pen);
-        self.dirty_lines.extend(range);
+        observer.dirty(range);
     }
 
     // tabs
@@ -578,72 +592,57 @@ impl Terminal {
 
     // buffer switching
 
-    fn switch_to_alternate_buffer(&mut self) {
-        if let BufferType::Primary = self.active {
-            self.active = BufferType::Alternate;
+    fn switch_to_alternate_buffer(&mut self, observer: &mut impl Observer) {
+        if let ScreenKind::Primary = self.active {
+            self.active = ScreenKind::Alternate;
             self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
-            self.dirty_lines.extend(0..self.rows);
+            observer.dirty(0..self.rows);
         }
     }
 
-    fn switch_to_primary_buffer(&mut self) {
-        if let BufferType::Alternate = self.active {
-            self.active = BufferType::Primary;
-            self.dirty_lines.extend(0..self.rows);
+    fn switch_to_primary_buffer(&mut self, observer: &mut impl Observer) {
+        if let ScreenKind::Alternate = self.active {
+            self.active = ScreenKind::Primary;
+            observer.dirty(0..self.rows);
         }
     }
 
     // resizing
 
-    pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
-        let mut resized: bool = false;
+    pub fn resize_with(&mut self, cols: usize, rows: usize, observer: &mut impl Observer) {
+        let cols = cols.max(1);
+        let rows = rows.max(1);
+        let resized = (cols, rows) != self.size();
 
         match cols.cmp(&self.cols) {
-            std::cmp::Ordering::Less => {
-                self.tabs.contract(cols);
-                resized = true;
-            }
-
-            std::cmp::Ordering::Equal => {}
-
-            std::cmp::Ordering::Greater => {
-                self.tabs.expand(self.cols, cols);
-                resized = true;
-            }
+            Ordering::Less => self.tabs.contract(cols),
+            Ordering::Equal => {}
+            Ordering::Greater => self.tabs.expand(self.cols, cols),
         }
 
-        match rows.cmp(&self.rows) {
-            std::cmp::Ordering::Less => {
-                self.top_margin = 0;
-                self.bottom_margin = rows - 1;
-                resized = true;
-            }
-
-            std::cmp::Ordering::Equal => {}
-
-            std::cmp::Ordering::Greater => {
-                self.top_margin = 0;
-                self.bottom_margin = rows - 1;
-                resized = true;
-            }
+        if rows != self.rows {
+            self.top_margin = 0;
+            self.bottom_margin = rows - 1;
         }
 
         self.cols = cols;
         self.rows = rows;
-        self.reflow();
 
-        resized
+        if resized {
+            observer.resized(cols, rows);
+        }
+
+        self.reflow(observer);
     }
 
-    fn reflow(&mut self) {
+    fn reflow(&mut self, observer: &mut impl Observer) {
         let cols = self.cols;
         let rows = self.rows;
         let cursor = (self.cursor.col, self.cursor.row);
 
         (self.cursor.col, self.cursor.row) = self.active_buffer_mut().resize(cols, rows, cursor);
 
-        self.dirty_lines.resize(rows);
-        self.dirty_lines.extend(0..rows);
+        observer.dirty(0..rows);
 
         let saved = self.active_saved_cursor_mut();
 
@@ -670,44 +669,21 @@ impl Terminal {
         *self.active_saved_cursor_mut() = SavedCursorState::default();
     }
 
-    fn hard_reset(&mut self) {
-        let primary_buffer = Buffer::new(self.cols, self.rows, self.scrollback_limit, None);
-        let alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), None);
-
-        self.primary_buffer = primary_buffer;
-        self.alternate_buffer = alternate_buffer;
-        self.active = BufferType::Primary;
-        self.tabs = Tabs::new(self.cols);
-        self.cursor = Cursor::default();
-        self.pen = Pen::default();
-        self.charsets = [Charset::Ascii, Charset::Ascii];
-        self.active_charset = 0;
-        self.insert_mode = false;
-        self.origin_mode = false;
-        self.auto_wrap_mode = true;
-        self.new_line_mode = false;
-        self.cursor_keys_mode = CursorKeysMode::Normal;
-        self.top_margin = 0;
-        self.bottom_margin = self.rows - 1;
-        self.primary_saved_cursor = SavedCursorState::default();
-        self.alternate_saved_cursor = SavedCursorState::default();
-        self.dirty_lines = DirtyLines::new(self.rows);
+    fn hard_reset(&mut self, observer: &mut impl Observer) {
+        *self = Self::new(self.size(), self.scrollback_limit);
+        observer.dirty(0..self.rows);
     }
 
-    pub fn view(&self) -> impl Iterator<Item = &Line> {
-        self.active_buffer().view()
+    pub fn active_screen(&self) -> Screen<'_> {
+        Screen {
+            buffer: self.active_buffer(),
+        }
     }
 
-    pub fn lines(&self) -> impl Iterator<Item = &Line> {
-        self.active_buffer().lines()
-    }
-
-    pub fn line(&self, n: usize) -> &Line {
-        &self.active_buffer()[n]
-    }
-
-    pub fn text(&self) -> Vec<String> {
-        self.primary_buffer.text()
+    pub fn primary_screen(&self) -> Screen<'_> {
+        Screen {
+            buffer: &self.primary_buffer,
+        }
     }
 
     pub fn cursor_keys_app_mode(&self) -> bool {
@@ -715,13 +691,17 @@ impl Terminal {
     }
 
     #[cfg(test)]
-    pub fn verify(&self) {
+    pub(crate) fn verify(&self) {
         assert!(self.cursor.row < self.rows);
         assert!(self.cursor.col <= self.cols);
-        assert!(self.lines().all(|line| line.len() == self.cols));
-        assert!(!self.lines().last().unwrap().wrapped);
+        assert!(
+            self.active_buffer()
+                .lines()
+                .all(|line| line.len() == self.cols)
+        );
+        assert!(!self.active_buffer().lines().last().unwrap().wrapped);
 
-        for line in self.lines() {
+        for line in self.active_buffer().lines() {
             for i in 0..self.cols {
                 let occupancy = line[i].occupancy();
 
@@ -736,7 +716,7 @@ impl Terminal {
     }
 
     #[cfg(test)]
-    pub fn assert_eq(&self, other: &Terminal) {
+    pub(crate) fn assert_eq(&self, other: &Engine) {
         assert_eq!(self.active, other.active);
         assert_eq!(self.cursor, other.cursor);
         assert_eq!(self.pen, other.pen);
@@ -758,7 +738,7 @@ impl Terminal {
             other.primary_buffer.view().collect::<Vec<_>>()
         );
 
-        if self.active == BufferType::Alternate {
+        if self.active == ScreenKind::Alternate {
             assert_eq!(
                 self.alternate_buffer.view().collect::<Vec<_>>(),
                 other.alternate_buffer.view().collect::<Vec<_>>()
@@ -766,18 +746,20 @@ impl Terminal {
         }
     }
 
-    fn print(&mut self, mut ch: char) {
+    fn print(&mut self, mut ch: char, observer: &mut impl Observer) {
         ch = self.charsets[self.active_charset].translate(ch);
 
         match self.try_print(ch) {
             PrintResult::Printed(width) => self.advance_cursor_after_print(width),
+
             PrintResult::NeedsRelocation if self.auto_wrap_mode => {
-                self.wrap_and_print_at_line_start(ch)
+                self.wrap_and_print_at_line_start(ch, observer)
             }
+
             PrintResult::NeedsRelocation => self.print_at_line_end(ch),
         }
 
-        self.dirty_lines.add(self.cursor.row);
+        observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
     fn try_print(&mut self, ch: char) -> PrintResult {
@@ -806,12 +788,12 @@ impl Terminal {
         }
     }
 
-    fn wrap_and_print_at_line_start(&mut self, ch: char) {
+    fn wrap_and_print_at_line_start(&mut self, ch: char, observer: &mut impl Observer) {
         let row = self.cursor.row;
 
         if row == self.bottom_margin {
             self.active_buffer_mut().wrap(row);
-            self.scroll_up_in_region(1);
+            self.scroll_up_in_region(1, observer);
         } else if row < self.rows - 1 {
             self.active_buffer_mut().wrap(row);
             self.cursor.row += 1;
@@ -858,8 +840,8 @@ impl Terminal {
         self.move_cursor_to_next_tab(1);
     }
 
-    fn lf(&mut self) {
-        self.move_cursor_down_with_scroll();
+    fn lf(&mut self, observer: &mut impl Observer) {
+        self.move_cursor_down_with_scroll(observer);
 
         if self.new_line_mode {
             self.cursor.col = 0;
@@ -878,8 +860,8 @@ impl Terminal {
         self.active_charset = 0;
     }
 
-    fn nel(&mut self) {
-        self.move_cursor_down_with_scroll();
+    fn nel(&mut self, observer: &mut impl Observer) {
+        self.move_cursor_down_with_scroll(observer);
         self.cursor.col = 0;
     }
 
@@ -887,9 +869,9 @@ impl Terminal {
         self.set_tab();
     }
 
-    fn ri(&mut self) {
+    fn ri(&mut self, observer: &mut impl Observer) {
         if self.cursor.row == self.top_margin {
-            self.scroll_down_in_region(1);
+            self.scroll_down_in_region(1, observer);
         } else if self.cursor.row > 0 {
             self.move_cursor_to_row(self.cursor.row - 1);
         }
@@ -903,18 +885,18 @@ impl Terminal {
         self.restore_cursor();
     }
 
-    fn ris(&mut self) {
-        self.hard_reset();
+    fn ris(&mut self, observer: &mut impl Observer) {
+        self.hard_reset(observer);
     }
 
-    fn decaln(&mut self) {
+    fn decaln(&mut self, observer: &mut impl Observer) {
         for row in 0..self.rows {
             for col in 0..self.cols {
                 self.active_buffer_mut()
                     .print((col, row), '\u{45}', Pen::default());
             }
 
-            self.dirty_lines.add(row);
+            observer.dirty(row..row + 1);
         }
     }
 
@@ -926,7 +908,7 @@ impl Terminal {
         self.charsets[1] = charset;
     }
 
-    fn ich(&mut self, n: u16) {
+    fn ich(&mut self, n: u16, observer: &mut impl Observer) {
         if self.cursor.col == self.cols {
             self.cursor.col = self.cols - 1;
         }
@@ -943,7 +925,7 @@ impl Terminal {
             self.active_buffer_mut().print((col, row), ' ', pen);
         }
 
-        self.dirty_lines.add(self.cursor.row);
+        observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
     fn cuu(&mut self, n: u16) {
@@ -991,53 +973,53 @@ impl Terminal {
         self.move_cursor_to_next_tab(as_usize(n, 1));
     }
 
-    fn ed(&mut self, scope: EdScope) {
+    fn ed(&mut self, scope: &EdScope, observer: &mut impl Observer) {
         match scope {
             EdScope::Below => {
                 self.erase_at_cursor(EraseMode::FromCursorToEndOfView);
 
-                self.dirty_lines.extend(self.cursor.row..self.rows);
+                observer.dirty(self.cursor.row..self.rows);
             }
 
             EdScope::Above => {
                 self.erase_at_cursor(EraseMode::FromStartOfViewToCursor);
 
-                self.dirty_lines.extend(0..self.cursor.row + 1);
+                observer.dirty(0..self.cursor.row + 1);
             }
 
             EdScope::All => {
                 self.erase_at_cursor(EraseMode::WholeView);
 
-                self.dirty_lines.extend(0..self.rows);
+                observer.dirty(0..self.rows);
             }
 
             _ => {}
         }
     }
 
-    fn el(&mut self, scope: ElScope) {
+    fn el(&mut self, scope: &ElScope, observer: &mut impl Observer) {
         match scope {
             ElScope::ToRight => {
                 self.erase_at_cursor(EraseMode::FromCursorToEndOfLine);
 
-                self.dirty_lines.add(self.cursor.row);
+                observer.dirty(self.cursor.row..self.cursor.row + 1);
             }
 
             ElScope::ToLeft => {
                 self.erase_at_cursor(EraseMode::FromStartOfLineToCursor);
 
-                self.dirty_lines.add(self.cursor.row);
+                observer.dirty(self.cursor.row..self.cursor.row + 1);
             }
 
             ElScope::All => {
                 self.erase_at_cursor(EraseMode::WholeLine);
 
-                self.dirty_lines.add(self.cursor.row);
+                observer.dirty(self.cursor.row..self.cursor.row + 1);
             }
         }
     }
 
-    fn il(&mut self, n: u16) {
+    fn il(&mut self, n: u16, observer: &mut impl Observer) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -1049,10 +1031,10 @@ impl Terminal {
         self.active_buffer_mut()
             .scroll_down(range.clone(), as_usize(n, 1), &pen);
 
-        self.dirty_lines.extend(range);
+        observer.dirty(range);
     }
 
-    fn dl(&mut self, n: u16) {
+    fn dl(&mut self, n: u16, observer: &mut impl Observer) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -1064,10 +1046,10 @@ impl Terminal {
         self.active_buffer_mut()
             .scroll_up(range.clone(), as_usize(n, 1), &pen);
 
-        self.dirty_lines.extend(range);
+        observer.dirty(range);
     }
 
-    fn dch(&mut self, n: u16) {
+    fn dch(&mut self, n: u16, observer: &mut impl Observer) {
         if self.cursor.col >= self.cols {
             self.move_cursor_to_col(self.cols - 1);
         }
@@ -1077,18 +1059,18 @@ impl Terminal {
 
         self.active_buffer_mut().delete(pos, as_usize(n, 1), &pen);
 
-        self.dirty_lines.add(self.cursor.row);
+        observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
-    fn su(&mut self, n: u16) {
-        self.scroll_up_in_region(as_usize(n, 1));
+    fn su(&mut self, n: u16, observer: &mut impl Observer) {
+        self.scroll_up_in_region(as_usize(n, 1), observer);
     }
 
-    fn sd(&mut self, n: u16) {
-        self.scroll_down_in_region(as_usize(n, 1));
+    fn sd(&mut self, n: u16, observer: &mut impl Observer) {
+        self.scroll_down_in_region(as_usize(n, 1), observer);
     }
 
-    fn ctc(&mut self, op: CtcOp) {
+    fn ctc(&mut self, op: &CtcOp) {
         match op {
             CtcOp::Set => {
                 self.set_tab();
@@ -1104,19 +1086,19 @@ impl Terminal {
         }
     }
 
-    fn ech(&mut self, n: u16) {
+    fn ech(&mut self, n: u16, observer: &mut impl Observer) {
         let n = as_usize(n, 1);
 
         self.erase_at_cursor(EraseMode::NextChars(n));
 
-        self.dirty_lines.add(self.cursor.row);
+        observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
     fn cbt(&mut self, n: u16) {
         self.move_cursor_to_prev_tab(as_usize(n, 1));
     }
 
-    fn rep(&mut self, n: u16) {
+    fn rep(&mut self, n: u16, observer: &mut impl Observer) {
         if self.cursor.col > 0 {
             let n = as_usize(n, 1);
             let row = self.cursor.row;
@@ -1129,7 +1111,7 @@ impl Terminal {
             let char = self.active_buffer()[(col, row)].char();
 
             for _n in 0..n {
-                self.print(char);
+                self.print(char, observer);
             }
         }
     }
@@ -1142,7 +1124,7 @@ impl Terminal {
         self.cursor_down(as_usize(n, 1));
     }
 
-    fn tbc(&mut self, scope: TbcScope) {
+    fn tbc(&mut self, scope: &TbcScope) {
         match scope {
             TbcScope::CurrentColumn => {
                 self.clear_tab();
@@ -1154,7 +1136,7 @@ impl Terminal {
         }
     }
 
-    fn sm(&mut self, modes: AnsiModes) {
+    fn sm(&mut self, modes: &AnsiModes) {
         use AnsiMode::*;
 
         for &mode in modes.as_slice() {
@@ -1170,7 +1152,7 @@ impl Terminal {
         }
     }
 
-    fn rm(&mut self, modes: AnsiModes) {
+    fn rm(&mut self, modes: &AnsiModes) {
         use AnsiMode::*;
 
         for &mode in modes.as_slice() {
@@ -1186,7 +1168,7 @@ impl Terminal {
         }
     }
 
-    fn sgr(&mut self, ops: SgrOps) {
+    fn sgr(&mut self, ops: &SgrOps) {
         use SgrOp::*;
 
         for &op in ops.as_slice() {
@@ -1278,21 +1260,11 @@ impl Terminal {
         self.move_cursor_home();
     }
 
-    fn xtwinops(&mut self, op: XtwinopsOp) {
-        if self.xtwinops {
-            let XtwinopsOp::Resize(cols, rows) = op;
-            let cols = as_usize(cols, self.cols);
-            let rows = as_usize(rows, self.rows);
-
-            self.resize(cols, rows);
-        }
-    }
-
     fn decstr(&mut self) {
         self.soft_reset();
     }
 
-    fn decset(&mut self, modes: DecModes) {
+    fn decset(&mut self, modes: &DecModes, observer: &mut impl Observer) {
         use DecMode::*;
 
         for &mode in modes.as_slice() {
@@ -1315,8 +1287,8 @@ impl Terminal {
                 }
 
                 AltScreenBuffer => {
-                    self.switch_to_alternate_buffer();
-                    self.reflow();
+                    self.switch_to_alternate_buffer(observer);
+                    self.reflow(observer);
                 }
 
                 SaveCursor => {
@@ -1325,14 +1297,14 @@ impl Terminal {
 
                 SaveCursorAltScreenBuffer => {
                     self.save_cursor();
-                    self.switch_to_alternate_buffer();
-                    self.reflow();
+                    self.switch_to_alternate_buffer(observer);
+                    self.reflow(observer);
                 }
             }
         }
     }
 
-    fn decrst(&mut self, modes: DecModes) {
+    fn decrst(&mut self, modes: &DecModes, observer: &mut impl Observer) {
         use DecMode::*;
 
         for &mode in modes.as_slice() {
@@ -1355,8 +1327,8 @@ impl Terminal {
                 }
 
                 AltScreenBuffer => {
-                    self.switch_to_primary_buffer();
-                    self.reflow();
+                    self.switch_to_primary_buffer(observer);
+                    self.reflow(observer);
                 }
 
                 SaveCursor => {
@@ -1364,9 +1336,9 @@ impl Terminal {
                 }
 
                 SaveCursorAltScreenBuffer => {
-                    self.switch_to_primary_buffer();
+                    self.switch_to_primary_buffer(observer);
                     self.restore_cursor();
-                    self.reflow();
+                    self.reflow(observer);
                 }
             }
         }
@@ -1404,11 +1376,11 @@ impl Terminal {
         // 4. dump alternate screen buffer
 
         // switch to alternate screen
-        if self.active == BufferType::Alternate || !alternate_ctx.is_default() {
+        if self.active == ScreenKind::Alternate || !alternate_ctx.is_default() {
             funs.push(Function::Decset(DecModes::one(DecMode::AltScreenBuffer)));
         }
 
-        if self.active == BufferType::Alternate {
+        if self.active == ScreenKind::Alternate {
             // move cursor home
             funs.push(Function::Cup(1, 1));
 
@@ -1422,7 +1394,7 @@ impl Terminal {
 
         // 6. ensure the right buffer is active
 
-        if self.active == BufferType::Primary && !alternate_ctx.is_default() {
+        if self.active == ScreenKind::Primary && !alternate_ctx.is_default() {
             // switch back to primary screen
             funs.push(Function::Decrst(DecModes::one(DecMode::AltScreenBuffer)));
         }
@@ -1767,7 +1739,7 @@ fn as_usize(value: u16, default: usize) -> usize {
     if value == 0 { default } else { value as usize }
 }
 
-impl Default for Terminal {
+impl Default for Engine {
     fn default() -> Self {
         Self::new((80, 24), None)
     }
@@ -1775,7 +1747,7 @@ impl Default for Terminal {
 
 #[cfg(test)]
 mod tests {
-    use super::{BufferType, Occupancy, Terminal};
+    use super::{Engine as Terminal, Occupancy, ScreenKind};
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
@@ -1787,6 +1759,16 @@ mod tests {
     use Function::*;
     use SgrOp::*;
 
+    impl Terminal {
+        fn execute(&mut self, function: &Function) {
+            self.execute_with(function, &mut ());
+        }
+
+        fn resize(&mut self, cols: usize, rows: usize) {
+            self.resize_with(cols, rows, &mut ());
+        }
+    }
+
     fn feed(term: &mut Terminal, input: &str) {
         for ch in input.chars() {
             let fun = match ch {
@@ -1795,14 +1777,14 @@ mod tests {
                 _ => Print(ch),
             };
 
-            term.execute(fun);
+            term.execute(&fun);
         }
     }
 
     fn build_term(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Terminal {
         let mut term = Terminal::new((cols, rows), None);
         feed(&mut term, init);
-        term.execute(Cup((cy + 1) as u16, (cx + 1) as u16));
+        term.execute(&Cup((cy + 1) as u16, (cx + 1) as u16));
 
         term
     }
@@ -1810,7 +1792,7 @@ mod tests {
     fn text(term: &Terminal) -> String {
         let cursor = term.cursor();
 
-        buffer_text(term.view(), cursor.col, cursor.row)
+        buffer_text(term.active_screen().visible_lines(), cursor.col, cursor.row)
     }
 
     fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(
@@ -1859,7 +1841,10 @@ mod tests {
     }
 
     fn wrapped(term: &Terminal) -> Vec<bool> {
-        term.view().map(|l| l.wrapped).collect()
+        term.active_screen()
+            .visible_lines()
+            .map(|l| l.wrapped)
+            .collect()
     }
 
     fn ansi_modes<const N: usize>(modes: [AnsiMode; N]) -> AnsiModes {
@@ -1884,51 +1869,51 @@ mod tests {
     fn execute_sgr() {
         let mut term = Terminal::default();
 
-        term.execute(sgr(SetBoldIntensity));
+        term.execute(&sgr(SetBoldIntensity));
 
         assert!(term.pen.intensity == Intensity::Bold);
 
-        term.execute(sgr(SetFaintIntensity));
+        term.execute(&sgr(SetFaintIntensity));
 
         assert_eq!(term.pen.intensity, Intensity::Faint);
 
-        term.execute(sgr(SetItalic));
+        term.execute(&sgr(SetItalic));
 
         assert!(term.pen.is_italic());
 
-        term.execute(sgr(SetUnderline));
+        term.execute(&sgr(SetUnderline));
 
         assert!(term.pen.is_underline());
 
-        term.execute(sgr(SetBlink));
+        term.execute(&sgr(SetBlink));
 
         assert!(term.pen.is_blink());
 
-        term.execute(sgr(SetInverse));
+        term.execute(&sgr(SetInverse));
 
         assert!(term.pen.is_inverse());
 
-        term.execute(sgr(SetStrikethrough));
+        term.execute(&sgr(SetStrikethrough));
 
         assert!(term.pen.is_strikethrough());
 
-        term.execute(sgr(SetForegroundColor(Color::Indexed(1))));
+        term.execute(&sgr(SetForegroundColor(Color::Indexed(1))));
 
         assert_eq!(term.pen.foreground, Some(Color::Indexed(1)));
 
-        term.execute(sgr(SetBackgroundColor(Color::Indexed(2))));
+        term.execute(&sgr(SetBackgroundColor(Color::Indexed(2))));
 
         assert_eq!(term.pen.background, Some(Color::Indexed(2)));
 
-        term.execute(sgr(ResetForegroundColor));
+        term.execute(&sgr(ResetForegroundColor));
 
         assert_eq!(term.pen.foreground, None);
 
-        term.execute(sgr(ResetBackgroundColor));
+        term.execute(&sgr(ResetBackgroundColor));
 
         assert_eq!(term.pen.background, None);
 
-        term.execute(Sgr(SgrOps::from(vec![
+        term.execute(&Sgr(SgrOps::from(vec![
             SetBoldIntensity,
             SetForegroundColor(Color::Indexed(1)),
             SetBackgroundColor(Color::Indexed(2)),
@@ -1946,15 +1931,15 @@ mod tests {
     fn execute_lf() {
         let mut term = build_term(8, 2, 3, 0, "abc");
 
-        term.execute(Lf);
+        term.execute(&Lf);
 
-        assert_eq!(term.cursor(), (3, 1));
+        assert_eq!(term.cursor().position().unwrap(), (3, 1));
         assert_eq!(text(&term), "abc\n   |");
 
-        term.execute(Print('d'));
-        term.execute(Lf);
+        term.execute(&Print('d'));
+        term.execute(&Lf);
 
-        assert_eq!(term.cursor(), (4, 1));
+        assert_eq!(term.cursor().position().unwrap(), (4, 1));
         assert_eq!(text(&term), "   d\n    |");
     }
 
@@ -1963,10 +1948,10 @@ mod tests {
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "abc");
-        term.execute(Cr);
-        term.execute(Print('d'));
+        term.execute(&Cr);
+        term.execute(&Print('d'));
 
-        assert_eq!(term.cursor(), (1, 0));
+        assert_eq!(term.cursor().position().unwrap(), (1, 0));
         assert_eq!(text(&term), "d|bc\n");
     }
 
@@ -1974,12 +1959,12 @@ mod tests {
     fn execute_nel() {
         let mut term = build_term(8, 2, 3, 0, "abc");
 
-        term.execute(Nel);
+        term.execute(&Nel);
 
-        assert_eq!(term.cursor(), (0, 1));
+        assert_eq!(term.cursor().position().unwrap(), (0, 1));
         assert_eq!(text(&term), "abc\n|");
 
-        term.execute(Print('d'));
+        term.execute(&Print('d'));
 
         assert_eq!(text(&term), "abc\nd|");
     }
@@ -1989,29 +1974,29 @@ mod tests {
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "a");
-        term.execute(Bs);
+        term.execute(&Bs);
 
         assert_eq!(text(&term), "|a\n");
 
-        term.execute(Bs);
+        term.execute(&Bs);
 
         assert_eq!(text(&term), "|a\n");
 
         feed(&mut term, "abcd");
-        term.execute(Bs);
+        term.execute(&Bs);
 
         assert_eq!(text(&term), "ab|cd\n");
 
         feed(&mut term, "cdef");
-        term.execute(Bs);
+        term.execute(&Bs);
 
         assert_eq!(text(&term), "abcd\ne|f");
 
-        term.execute(Bs);
+        term.execute(&Bs);
 
         assert_eq!(text(&term), "abcd\n|ef");
 
-        term.execute(Bs);
+        term.execute(&Bs);
 
         assert_eq!(text(&term), "abcd\n|ef");
     }
@@ -2021,13 +2006,13 @@ mod tests {
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "abc\r\ndef");
-        term.execute(Cup(1, 1));
+        term.execute(&Cup(1, 1));
 
-        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(term.cursor().position().unwrap(), (0, 0));
 
-        term.execute(Cup(10, 10));
+        term.execute(&Cup(10, 10));
 
-        assert_eq!(term.cursor(), (3, 1));
+        assert_eq!(term.cursor().position().unwrap(), (3, 1));
     }
 
     #[test]
@@ -2035,13 +2020,13 @@ mod tests {
         let mut term = Terminal::new((8, 4), None);
 
         feed(&mut term, "abcd\n\n\n");
-        term.execute(Cuu(0));
+        term.execute(&Cuu(0));
 
-        assert_eq!(term.cursor(), (4, 2));
+        assert_eq!(term.cursor().position().unwrap(), (4, 2));
 
-        term.execute(Cuu(2));
+        term.execute(&Cuu(2));
 
-        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(term.cursor().position().unwrap(), (4, 0));
     }
 
     #[test]
@@ -2050,15 +2035,15 @@ mod tests {
 
         feed(&mut term, "abcd\r\n\r\n\r\nef");
 
-        assert_eq!(term.cursor(), (2, 3));
+        assert_eq!(term.cursor().position().unwrap(), (2, 3));
 
-        term.execute(Cpl(0));
+        term.execute(&Cpl(0));
 
-        assert_eq!(term.cursor(), (0, 2));
+        assert_eq!(term.cursor().position().unwrap(), (0, 2));
 
-        term.execute(Cpl(2));
+        term.execute(&Cpl(2));
 
-        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(term.cursor().position().unwrap(), (0, 0));
     }
 
     #[test]
@@ -2066,13 +2051,13 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "ab");
-        term.execute(Cnl(0));
+        term.execute(&Cnl(0));
 
-        assert_eq!(term.cursor(), (0, 1));
+        assert_eq!(term.cursor().position().unwrap(), (0, 1));
 
-        term.execute(Cnl(3));
+        term.execute(&Cnl(3));
 
-        assert_eq!(term.cursor(), (0, 3));
+        assert_eq!(term.cursor().position().unwrap(), (0, 3));
     }
 
     #[test]
@@ -2080,13 +2065,13 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "\r\n\r\naaa\r\nbbb");
-        term.execute(Vpa(0));
+        term.execute(&Vpa(0));
 
-        assert_eq!(term.cursor(), (3, 0));
+        assert_eq!(term.cursor().position().unwrap(), (3, 0));
 
-        term.execute(Vpa(10));
+        term.execute(&Vpa(10));
 
-        assert_eq!(term.cursor(), (3, 3));
+        assert_eq!(term.cursor().position().unwrap(), (3, 3));
     }
 
     #[test]
@@ -2094,11 +2079,11 @@ mod tests {
         let mut term = Terminal::new((8, 4), None);
 
         feed(&mut term, "abcd");
-        term.execute(Cud(0));
+        term.execute(&Cud(0));
 
         assert_eq!(text(&term), "abcd\n    |\n\n");
 
-        term.execute(Cud(2));
+        term.execute(&Cud(2));
 
         assert_eq!(text(&term), "abcd\n\n\n    |");
     }
@@ -2107,24 +2092,24 @@ mod tests {
     fn execute_cuf() {
         let mut term = Terminal::new((4, 1), None);
 
-        term.execute(Cuf(2));
+        term.execute(&Cuf(2));
 
         assert_eq!(text(&term), "  |");
 
-        term.execute(Cuf(2));
+        term.execute(&Cuf(2));
 
         assert_eq!(text(&term), "   |");
 
-        term.execute(Print('a'));
+        term.execute(&Print('a'));
 
         assert_eq!(text(&term), "   a|");
 
-        term.execute(Cuf(5));
+        term.execute(&Cuf(5));
 
         assert_eq!(text(&term), "   |a");
 
         feed(&mut term, "ab");
-        term.execute(Cuf(10));
+        term.execute(&Cuf(10));
 
         assert_eq!(text(&term), "b  |");
     }
@@ -2134,17 +2119,17 @@ mod tests {
         let mut term = Terminal::new((8, 2), None);
 
         feed(&mut term, "abc");
-        term.execute(Cha(0));
+        term.execute(&Cha(0));
 
-        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(term.cursor().position().unwrap(), (0, 0));
 
-        term.execute(Cha(3));
+        term.execute(&Cha(3));
 
-        assert_eq!(term.cursor(), (2, 0));
+        assert_eq!(term.cursor().position().unwrap(), (2, 0));
 
-        term.execute(Cha(20));
+        term.execute(&Cha(20));
 
-        assert_eq!(term.cursor(), (7, 0));
+        assert_eq!(term.cursor().position().unwrap(), (7, 0));
     }
 
     #[test]
@@ -2152,23 +2137,23 @@ mod tests {
         let mut term = Terminal::new((8, 2), None);
 
         feed(&mut term, "abcd");
-        term.execute(Cub(2));
+        term.execute(&Cub(2));
 
         assert_eq!(text(&term), "ab|cd\n");
 
         feed(&mut term, "cdef");
-        term.execute(Cub(2));
+        term.execute(&Cub(2));
 
         assert_eq!(text(&term), "abcd|ef\n");
 
-        term.execute(Cub(10));
+        term.execute(&Cub(10));
 
         assert_eq!(text(&term), "|abcdef\n");
 
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "abcd");
-        term.execute(Cub(0));
+        term.execute(&Cub(0));
 
         assert_eq!(text(&term), "ab|cd\n");
     }
@@ -2177,84 +2162,84 @@ mod tests {
     fn execute_ht() {
         let mut term = Terminal::new((20, 1), None);
 
-        term.execute(Ht);
-        assert_eq!(term.cursor(), (8, 0));
+        term.execute(&Ht);
+        assert_eq!(term.cursor().position().unwrap(), (8, 0));
 
-        term.execute(Ht);
-        assert_eq!(term.cursor(), (16, 0));
+        term.execute(&Ht);
+        assert_eq!(term.cursor().position().unwrap(), (16, 0));
 
-        term.execute(Ht);
-        assert_eq!(term.cursor(), (19, 0));
+        term.execute(&Ht);
+        assert_eq!(term.cursor().position().unwrap(), (19, 0));
     }
 
     #[test]
     fn execute_hts() {
         let mut term = Terminal::new((20, 1), None);
 
-        term.execute(Cuf(5));
-        term.execute(Hts);
+        term.execute(&Cuf(5));
+        term.execute(&Hts);
 
         assert_eq!(term.tabs, vec![5, 8, 16]);
 
-        term.execute(Cup(1, 1));
-        term.execute(Ht);
+        term.execute(&Cup(1, 1));
+        term.execute(&Ht);
 
-        assert_eq!(term.cursor(), (5, 0));
+        assert_eq!(term.cursor().position().unwrap(), (5, 0));
     }
 
     #[test]
     fn execute_cht() {
         let mut term = build_term(28, 1, 3, 0, "abcdefghijklmnopqrstuwxyzabc");
 
-        term.execute(Cht(0));
+        term.execute(&Cht(0));
 
-        assert_eq!(term.cursor(), (8, 0));
+        assert_eq!(term.cursor().position().unwrap(), (8, 0));
 
-        term.execute(Cht(2));
+        term.execute(&Cht(2));
 
-        assert_eq!(term.cursor(), (24, 0));
+        assert_eq!(term.cursor().position().unwrap(), (24, 0));
 
-        term.execute(Cht(0));
+        term.execute(&Cht(0));
 
-        assert_eq!(term.cursor(), (27, 0));
+        assert_eq!(term.cursor().position().unwrap(), (27, 0));
     }
 
     #[test]
     fn execute_cbt() {
         let mut term = build_term(28, 1, 26, 0, "abcdefghijklmnopqrstuwxyzabc");
 
-        term.execute(Cbt(0));
+        term.execute(&Cbt(0));
 
-        assert_eq!(term.cursor(), (24, 0));
+        assert_eq!(term.cursor().position().unwrap(), (24, 0));
 
-        term.execute(Cbt(2));
+        term.execute(&Cbt(2));
 
-        assert_eq!(term.cursor(), (8, 0));
+        assert_eq!(term.cursor().position().unwrap(), (8, 0));
 
-        term.execute(Cbt(0));
+        term.execute(&Cbt(0));
 
-        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(term.cursor().position().unwrap(), (0, 0));
     }
 
     #[test]
     fn execute_rep() {
         let mut term = build_term(20, 2, 0, 0, "");
 
-        term.execute(Rep(0));
+        term.execute(&Rep(0));
 
         assert_eq!(text(&term), "|\n");
 
-        term.execute(Print('A'));
-        term.execute(Rep(0));
+        term.execute(&Print('A'));
+        term.execute(&Rep(0));
 
         assert_eq!(text(&term), "AA|\n");
 
-        term.execute(Rep(3));
+        term.execute(&Rep(3));
 
         assert_eq!(text(&term), "AAAAA|\n");
 
-        term.execute(Cuf(5));
-        term.execute(Rep(0));
+        term.execute(&Cuf(5));
+        term.execute(&Rep(0));
 
         assert_eq!(text(&term), "AAAAA      |\n");
     }
@@ -2263,8 +2248,8 @@ mod tests {
     fn execute_rep_after_wide_char() {
         let mut term = build_term(20, 2, 0, 0, "");
 
-        term.execute(Print('ハ'));
-        term.execute(Rep(3));
+        term.execute(&Print('ハ'));
+        term.execute(&Rep(3));
 
         assert_eq!(text(&term), "ハハハハ|\n");
     }
@@ -2273,9 +2258,9 @@ mod tests {
     fn execute_rep_after_moving_into_wide_char_tail() {
         let mut term = build_term(20, 2, 0, 0, "");
 
-        term.execute(Print('ハ'));
-        term.execute(Cub(1));
-        term.execute(Rep(3));
+        term.execute(&Print('ハ'));
+        term.execute(&Cub(1));
+        term.execute(&Rep(3));
 
         assert_eq!(text(&term), " ハハハ|\n");
     }
@@ -2332,14 +2317,14 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "ab");
-        term.execute(Vpr(0));
+        term.execute(&Vpr(0));
 
-        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(term.cursor().position().unwrap(), (2, 1));
         assert_eq!(text(&term), "ab\n  |\n\n");
 
-        term.execute(Vpr(10));
+        term.execute(&Vpr(10));
 
-        assert_eq!(term.cursor(), (2, 3));
+        assert_eq!(term.cursor().position().unwrap(), (2, 3));
         assert_eq!(text(&term), "ab\n\n\n  |");
     }
 
@@ -2347,22 +2332,22 @@ mod tests {
     fn execute_ich() {
         let mut term = build_term(8, 2, 3, 0, "abcdefghijklmn");
 
-        term.execute(Ich(0));
+        term.execute(&Ich(0));
 
         assert_eq!(text(&term), "abc| defg\nijklmn");
         assert_eq!(wrapped(&term), vec![true, false]);
 
-        term.execute(Ich(2));
+        term.execute(&Ich(2));
 
         assert_eq!(text(&term), "abc|   de\nijklmn");
 
-        term.execute(Ich(10));
+        term.execute(&Ich(10));
 
         assert_eq!(text(&term), "abc|\nijklmn");
 
         let mut term = build_term(8, 2, 7, 0, "abcdefghijklmn");
 
-        term.execute(Ich(10));
+        term.execute(&Ich(10));
         assert_eq!(text(&term), "abcdefg|\nijklmn");
     }
 
@@ -2370,19 +2355,19 @@ mod tests {
     fn execute_il() {
         let mut term = build_term(4, 4, 2, 1, "abcdefghij");
 
-        term.execute(Il(0));
+        term.execute(&Il(0));
 
         assert_eq!(text(&term), "abcd\n  |\nefgh\nij");
         assert_eq!(wrapped(&term), vec![false, false, true, false]);
 
-        term.execute(Cuu(1));
-        term.execute(Il(0));
+        term.execute(&Cuu(1));
+        term.execute(&Il(0));
 
         assert_eq!(text(&term), "  |\nabcd\n\nefgh");
         assert_eq!(wrapped(&term), vec![false, false, false, false]);
 
-        term.execute(Cud(3));
-        term.execute(Il(100));
+        term.execute(&Cud(3));
+        term.execute(&Il(100));
 
         assert_eq!(text(&term), "\nabcd\n\n  |");
     }
@@ -2392,8 +2377,8 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "abcdefghijklmn");
-        term.execute(Cuu(2));
-        term.execute(Dl(0));
+        term.execute(&Cuu(2));
+        term.execute(&Dl(0));
 
         assert_eq!(text(&term), "abcd\nij|kl\nmn\n");
         assert_eq!(wrapped(&term), vec![false, true, false, false]);
@@ -2401,9 +2386,9 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "abcdefghijklmn");
-        term.execute(Decstbm(1, 3));
-        term.execute(Cup(2, 1));
-        term.execute(Dl(0));
+        term.execute(&Decstbm(1, 3));
+        term.execute(&Cup(2, 1));
+        term.execute(&Dl(0));
 
         assert_eq!(text(&term), "abcd\n|ijkl\n\nmn");
         assert_eq!(wrapped(&term), vec![false, false, false, false]);
@@ -2411,9 +2396,9 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "abcdefghijklmn");
-        term.execute(Decstbm(1, 2));
-        term.execute(Cup(4, 1));
-        term.execute(Dl(0));
+        term.execute(&Decstbm(1, 2));
+        term.execute(&Cup(4, 1));
+        term.execute(&Dl(0));
 
         assert_eq!(text(&term), "abcd\nefgh\nijkl\n|");
         assert_eq!(wrapped(&term), vec![true, true, false, false]);
@@ -2423,33 +2408,33 @@ mod tests {
     fn execute_el() {
         let mut term = build_term(4, 2, 2, 0, "abcd");
 
-        term.execute(El(ElScope::ToRight));
+        term.execute(&El(ElScope::ToRight));
 
         assert_eq!(text(&term), "ab|\n");
 
         let mut term = build_term(4, 2, 2, 0, "a");
 
-        term.execute(El(ElScope::ToRight));
+        term.execute(&El(ElScope::ToRight));
 
         assert_eq!(text(&term), "a |\n");
 
         let mut term = build_term(4, 2, 2, 0, "abcd");
 
-        term.execute(El(ElScope::ToLeft));
+        term.execute(&El(ElScope::ToLeft));
 
         assert_eq!(text(&term), "  | d\n");
 
         let mut term = build_term(4, 2, 2, 0, "abcd");
 
-        term.execute(El(ElScope::All));
+        term.execute(&El(ElScope::All));
 
         assert_eq!(text(&term), "  |\n");
 
         let mut term = Terminal::new((4, 3), None);
 
         feed(&mut term, "abcdefghij");
-        term.execute(Cuu(1));
-        term.execute(El(ElScope::ToRight));
+        term.execute(&Cuu(1));
+        term.execute(&El(ElScope::ToRight));
 
         assert_eq!(text(&term), "abcd\nef|\nij");
         assert_eq!(wrapped(&term), vec![true, false, false]);
@@ -2457,8 +2442,8 @@ mod tests {
         let mut term = Terminal::new((4, 3), None);
 
         feed(&mut term, "abcdefghij");
-        term.execute(Cuu(1));
-        term.execute(El(ElScope::ToLeft));
+        term.execute(&Cuu(1));
+        term.execute(&El(ElScope::ToLeft));
 
         assert_eq!(text(&term), "abcd\n  | h\nij");
         assert_eq!(wrapped(&term), vec![true, true, false]);
@@ -2466,8 +2451,8 @@ mod tests {
         let mut term = Terminal::new((4, 3), None);
 
         feed(&mut term, "abcdefghij");
-        term.execute(Cuu(1));
-        term.execute(El(ElScope::All));
+        term.execute(&Cuu(1));
+        term.execute(&El(ElScope::All));
 
         assert_eq!(text(&term), "abcd\n  |\nij");
         assert_eq!(wrapped(&term), vec![true, false, false]);
@@ -2477,45 +2462,45 @@ mod tests {
     fn execute_ed() {
         let mut term = build_term(4, 3, 1, 1, "abc\r\ndef\r\nghi");
 
-        term.execute(Ed(EdScope::Below));
+        term.execute(&Ed(EdScope::Below));
 
         assert_eq!(text(&term), "abc\nd|\n");
 
         let mut term = build_term(4, 3, 1, 1, "abc\r\n\r\nghi");
 
-        term.execute(Ed(EdScope::Below));
+        term.execute(&Ed(EdScope::Below));
 
         assert_eq!(text(&term), "abc\n |\n");
 
         let mut term = build_term(4, 3, 1, 1, "abc\r\ndef\r\nghi");
 
-        term.execute(Ed(EdScope::Above));
+        term.execute(&Ed(EdScope::Above));
 
         assert_eq!(text(&term), "\n | f\nghi");
 
         let mut term = build_term(4, 3, 1, 1, "abc\r\ndef\r\nghi");
 
-        term.execute(Ed(EdScope::All));
+        term.execute(&Ed(EdScope::All));
 
         assert_eq!(text(&term), "\n |\n");
 
         let mut term = build_term(4, 3, 1, 1, "abcdefghij");
 
-        term.execute(Ed(EdScope::Below));
+        term.execute(&Ed(EdScope::Below));
 
         assert_eq!(text(&term), "abcd\ne|\n");
         assert_eq!(wrapped(&term), vec![true, false, false]);
 
         let mut term = build_term(4, 3, 1, 1, "abcdefghij");
 
-        term.execute(Ed(EdScope::Above));
+        term.execute(&Ed(EdScope::Above));
 
         assert_eq!(text(&term), "\n | gh\nij");
         assert_eq!(wrapped(&term), vec![false, true, false]);
 
         let mut term = build_term(4, 3, 1, 1, "abcdefghij");
 
-        term.execute(Ed(EdScope::All));
+        term.execute(&Ed(EdScope::All));
 
         assert_eq!(text(&term), "\n |\n");
         assert_eq!(wrapped(&term), vec![false, false, false]);
@@ -2525,21 +2510,21 @@ mod tests {
     fn execute_dch() {
         let mut term = build_term(8, 2, 3, 0, "abcdefghijkl");
 
-        term.execute(Dch(0));
+        term.execute(&Dch(0));
 
         assert_eq!(text(&term), "abc|efgh\nijkl");
         assert_eq!(wrapped(&term), vec![false, false]);
 
-        term.execute(Dch(2));
+        term.execute(&Dch(2));
 
         assert_eq!(text(&term), "abc|gh\nijkl");
 
-        term.execute(Dch(10));
+        term.execute(&Dch(10));
 
         assert_eq!(text(&term), "abc|\nijkl");
 
-        term.execute(Cuf(10));
-        term.execute(Dch(10));
+        term.execute(&Cuf(10));
+        term.execute(&Dch(10));
 
         assert_eq!(text(&term), "abc    |\nijkl");
     }
@@ -2548,23 +2533,23 @@ mod tests {
     fn execute_ech() {
         let mut term = build_term(8, 2, 3, 0, "abcdefghijkl");
 
-        term.execute(Ech(0));
+        term.execute(&Ech(0));
 
         assert_eq!(text(&term), "abc| efgh\nijkl");
         assert_eq!(wrapped(&term), vec![true, false]);
 
-        term.execute(Ech(2));
+        term.execute(&Ech(2));
 
         assert_eq!(text(&term), "abc|  fgh\nijkl");
         assert_eq!(wrapped(&term), vec![true, false]);
 
-        term.execute(Ech(10));
+        term.execute(&Ech(10));
 
         assert_eq!(text(&term), "abc|\nijkl");
         assert_eq!(wrapped(&term), vec![false, false]);
 
-        term.execute(Cuf(3));
-        term.execute(Ech(0));
+        term.execute(&Cuf(3));
+        term.execute(&Ech(0));
 
         assert_eq!(text(&term), "abc   |\nijkl");
     }
@@ -2573,13 +2558,13 @@ mod tests {
     fn execute_ri() {
         let mut term = build_term(8, 5, 0, 0, "abcd\r\nefgh\r\nijkl\r\nmnop\r\nqrst");
 
-        term.execute(Ri);
+        term.execute(&Ri);
 
         assert_eq!(text(&term), "|\nabcd\nefgh\nijkl\nmnop");
 
-        term.execute(Decstbm(3, 4));
-        term.execute(Cup(3, 1));
-        term.execute(Ri);
+        term.execute(&Decstbm(3, 4));
+        term.execute(&Cup(3, 1));
+        term.execute(&Ri);
 
         assert_eq!(text(&term), "\nabcd\n|\nefgh\nmnop");
     }
@@ -2589,20 +2574,20 @@ mod tests {
         let mut term = build_term(4, 3, 0, 0, "");
 
         feed(&mut term, "  \n");
-        term.execute(Decsc);
+        term.execute(&Decsc);
         feed(&mut term, " \n");
-        term.execute(Decrc);
+        term.execute(&Decrc);
 
-        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(term.cursor().position().unwrap(), (2, 1));
 
         let mut term = build_term(4, 3, 0, 0, "");
 
         feed(&mut term, "  \n");
-        term.execute(Scosc);
+        term.execute(&Scosc);
         feed(&mut term, " \n");
-        term.execute(Scorc);
+        term.execute(&Scorc);
 
-        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(term.cursor().position().unwrap(), (2, 1));
     }
 
     #[test]
@@ -2610,20 +2595,20 @@ mod tests {
         fn assert_save_restore(save: Function, restore: Function) {
             let mut term = Terminal::new((4, 4), None);
 
-            term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
-            term.execute(Decstbm(2, 4));
-            term.execute(Decset(dec_modes([DecMode::Origin])));
-            term.execute(Cup(2, 3));
-            term.execute(sgr(SetBoldIntensity));
-            term.execute(save);
+            term.execute(&Decrst(dec_modes([DecMode::AutoWrap])));
+            term.execute(&Decstbm(2, 4));
+            term.execute(&Decset(dec_modes([DecMode::Origin])));
+            term.execute(&Cup(2, 3));
+            term.execute(&sgr(SetBoldIntensity));
+            term.execute(&save);
 
-            term.execute(Decset(dec_modes([DecMode::AutoWrap])));
-            term.execute(Decrst(dec_modes([DecMode::Origin])));
-            term.execute(Cup(4, 4));
-            term.execute(sgr(Reset));
-            term.execute(restore);
+            term.execute(&Decset(dec_modes([DecMode::AutoWrap])));
+            term.execute(&Decrst(dec_modes([DecMode::Origin])));
+            term.execute(&Cup(4, 4));
+            term.execute(&sgr(Reset));
+            term.execute(&restore);
 
-            assert_eq!(term.cursor(), (2, 2));
+            assert_eq!(term.cursor().position().unwrap(), (2, 2));
             assert_eq!(term.pen.intensity, Intensity::Bold);
             assert!(term.origin_mode);
             assert!(!term.auto_wrap_mode);
@@ -2637,14 +2622,14 @@ mod tests {
     fn auto_wrap_mode() {
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decset(dec_modes([DecMode::AutoWrap])));
+        term.execute(&Decset(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
         assert_eq!(text(&term), "abcd\nef|\n\n");
 
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        term.execute(&Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "abcdef");
 
         assert_eq!(text(&term), "abc|f\n\n\n");
@@ -2655,8 +2640,8 @@ mod tests {
         let mut term = Terminal::new((4, 4), None);
 
         feed(&mut term, "abcd");
-        term.execute(Cub(2));
-        term.execute(Sm(ansi_modes([AnsiMode::Insert])));
+        term.execute(&Cub(2));
+        term.execute(&Sm(ansi_modes([AnsiMode::Insert])));
         feed(&mut term, "ef");
 
         assert_eq!(text(&term), "aef|b\n\n\n");
@@ -2671,9 +2656,9 @@ mod tests {
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "xxxxxxxxxx");
-        term.execute(Cup(50, 1));
+        term.execute(&Cup(50, 1));
         feed(&mut term, "yyy");
-        term.execute(Cuf(50));
+        term.execute(&Cuf(50));
         feed(&mut term, "zzz");
 
         assert_eq!(text(&term), "xxxx\nxx\n\n\nyyyz\nzz|");
@@ -2681,21 +2666,21 @@ mod tests {
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "\nxxxxxxxxxx");
-        term.execute(Decstbm(2, 4));
-        term.execute(Cup(1, 1));
+        term.execute(&Decstbm(2, 4));
+        term.execute(&Cup(1, 1));
         feed(&mut term, "yyy");
-        term.execute(Cuf(50));
+        term.execute(&Cuf(50));
         feed(&mut term, "zzz");
 
         assert_eq!(text(&term), "yyyz\nzz|xx\nxxxx\nxx\n\n");
 
         let mut term = Terminal::new((4, 6), None);
 
-        term.execute(Decstbm(0, 3));
+        term.execute(&Decstbm(0, 3));
         feed(&mut term, "xxxxxxxxxx");
-        term.execute(Cup(50, 1));
+        term.execute(&Cup(50, 1));
         feed(&mut term, "yyy");
-        term.execute(Cuf(50));
+        term.execute(&Cuf(50));
         feed(&mut term, "zzz");
 
         assert_eq!(text(&term), "xxxx\nxxxx\nxx\n\n\nzz|yz");
@@ -2708,7 +2693,7 @@ mod tests {
         feed(&mut term, "ハローワールド");
         assert_eq!(text(&term), "ハローワールド|\n");
 
-        term.execute(Cub(5));
+        term.execute(&Cub(5));
         assert_eq!(term.cursor().col, 9);
         assert_eq!(text(&term), "ハローワ|ールド\n");
     }
@@ -2718,14 +2703,14 @@ mod tests {
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "Aハz");
-        term.execute(Cub(1));
-        term.execute(Print('界'));
+        term.execute(&Cub(1));
+        term.execute(&Print('界'));
 
-        assert_eq!(term.cursor(), (4, 0));
+        assert_eq!(term.cursor().position().unwrap(), (4, 0));
         assert_eq!(text(&term), "A 界|\n");
         assert_eq!(wrapped(&term), vec![false, false]);
 
-        let row0 = term.view().next().unwrap();
+        let row0 = term.active_screen().visible_lines().next().unwrap();
         assert_eq!(row0.text(), "A 界");
 
         assert_eq!(
@@ -2746,16 +2731,16 @@ mod tests {
     fn print_wide_char_on_wide_tail_with_one_col_right_and_no_autowrap() {
         let mut term = Terminal::new((4, 2), None);
 
-        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
+        term.execute(&Decrst(dec_modes([DecMode::AutoWrap])));
         feed(&mut term, "Aハz");
-        term.execute(Cub(1));
-        term.execute(Print('界'));
+        term.execute(&Cub(1));
+        term.execute(&Print('界'));
 
-        assert_eq!(term.cursor(), (3, 0));
+        assert_eq!(term.cursor().position().unwrap(), (3, 0));
         assert_eq!(text(&term), "A |界\n");
         assert_eq!(wrapped(&term), vec![false, false]);
 
-        let row0 = term.view().next().unwrap();
+        let row0 = term.active_screen().visible_lines().next().unwrap();
         assert_eq!(row0.text(), "A 界");
 
         assert_eq!(
@@ -2777,14 +2762,14 @@ mod tests {
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "abcz");
-        term.execute(Cup(1, 4));
-        term.execute(Print('界'));
+        term.execute(&Cup(1, 4));
+        term.execute(&Print('界'));
 
-        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(term.cursor().position().unwrap(), (2, 1));
         assert_eq!(text(&term), "abcz\n界|");
         assert_eq!(wrapped(&term), vec![true, false]);
 
-        let mut view = term.view();
+        let mut view = term.active_screen().visible_lines();
         let row0 = view.next().unwrap();
         let row1 = view.next().unwrap();
 
@@ -2823,29 +2808,34 @@ mod tests {
     fn execute_su() {
         let mut term = Terminal::new((4, 6), None);
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        term.execute(Su(2));
+        term.execute(&Su(2));
         assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
 
         let mut term = Terminal::new((4, 6), None);
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        term.execute(sgr(SetBoldIntensity));
-        term.execute(Su(2));
+        term.execute(&sgr(SetBoldIntensity));
+        term.execute(&Su(2));
         assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
-        assert!(term.view().last().unwrap()[0].pen().is_bold());
+
+        assert!(
+            term.active_screen().visible_lines().last().unwrap()[0]
+                .pen()
+                .is_bold()
+        );
 
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        term.execute(Decstbm(2, 5));
-        term.execute(Cup(1, 1));
-        term.execute(Su(2));
+        term.execute(&Decstbm(2, 5));
+        term.execute(&Cup(1, 1));
+        term.execute(&Su(2));
 
         assert_eq!(text(&term), "|aa\ndd\nee\n\n\nff");
 
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
-        term.execute(Su(2));
+        term.execute(&Su(2));
 
         assert_eq!(text(&term), "bbbb\nbb\ncccc\ncc\n\n  |");
         assert_eq!(wrapped(&term), vec![true, false, true, false, false, false]);
@@ -2853,9 +2843,9 @@ mod tests {
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
-        term.execute(Decstbm(2, 5));
-        term.execute(Cup(1, 1));
-        term.execute(Su(2));
+        term.execute(&Decstbm(2, 5));
+        term.execute(&Cup(1, 1));
+        term.execute(&Su(2));
 
         assert_eq!(text(&term), "|aaaa\nbb\ncccc\n\n\ncc");
 
@@ -2870,23 +2860,23 @@ mod tests {
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        term.execute(Sd(2));
+        term.execute(&Sd(2));
 
         assert_eq!(text(&term), "\n\naa\nbb\ncc\ndd|");
 
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
-        term.execute(Decstbm(2, 5));
-        term.execute(Cup(1, 1));
-        term.execute(Sd(2));
+        term.execute(&Decstbm(2, 5));
+        term.execute(&Cup(1, 1));
+        term.execute(&Sd(2));
 
         assert_eq!(text(&term), "|aa\n\n\nbb\ncc\nff");
 
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
-        term.execute(Sd(2));
+        term.execute(&Sd(2));
 
         assert_eq!(text(&term), "\n\naaaa\naa\nbbbb\nbb|");
         assert_eq!(wrapped(&term), vec![false, false, true, false, true, false]);
@@ -2894,9 +2884,9 @@ mod tests {
         let mut term = Terminal::new((4, 6), None);
 
         feed(&mut term, "aaaaaa\r\nbbbbbb\r\ncccccc");
-        term.execute(Decstbm(2, 5));
-        term.execute(Cup(1, 1));
-        term.execute(Sd(2));
+        term.execute(&Decstbm(2, 5));
+        term.execute(&Cup(1, 1));
+        term.execute(&Sd(2));
 
         assert_eq!(text(&term), "|aaaa\n\n\naa\nbbbb\ncc");
 
@@ -2911,16 +2901,16 @@ mod tests {
         let mut term = build_term(6, 7, 0, 0, "");
 
         feed(&mut term, "alpty\r\n");
-        term.execute(Gzd4(Charset::Drawing));
+        term.execute(&Gzd4(Charset::Drawing));
         feed(&mut term, "alpty\r\n");
-        term.execute(So);
+        term.execute(&So);
         feed(&mut term, "alpty\r\n");
-        term.execute(G1d4(Charset::Drawing));
+        term.execute(&G1d4(Charset::Drawing));
         feed(&mut term, "alpty\r\n");
-        term.execute(G1d4(Charset::Ascii));
+        term.execute(&G1d4(Charset::Ascii));
         feed(&mut term, "alpty\r\n");
-        term.execute(Gzd4(Charset::Ascii));
-        term.execute(Si);
+        term.execute(&Gzd4(Charset::Ascii));
+        term.execute(&Si);
         feed(&mut term, "alpty");
 
         assert_eq!(text(&term), "alpty\n▒┌⎻├≤\nalpty\n▒┌⎻├≤\nalpty\nalpty|\n");
@@ -2931,10 +2921,10 @@ mod tests {
         let mut term = Terminal::new((4, 2), None);
 
         feed(&mut term, "ab\r\nc");
-        term.execute(Cup(2, 3));
-        term.execute(Decaln);
+        term.execute(&Cup(2, 3));
+        term.execute(&Decaln);
 
-        assert_eq!(term.cursor(), (2, 1));
+        assert_eq!(term.cursor().position().unwrap(), (2, 1));
         assert_eq!(text(&term), "EEEE\nEE|EE");
     }
 
@@ -2945,12 +2935,12 @@ mod tests {
         term.resize(7, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.view().any(|l| l.wrapped));
+        assert!(!term.active_screen().visible_lines().any(|l| l.wrapped));
 
         term.resize(15, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.view().any(|l| l.wrapped));
+        assert!(!term.active_screen().visible_lines().any(|l| l.wrapped));
 
         let mut term = Terminal::new((6, 6), None);
 
@@ -2989,12 +2979,12 @@ mod tests {
         term.resize(7, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.view().any(|l| l.wrapped));
+        assert!(!term.active_screen().visible_lines().any(|l| l.wrapped));
 
         term.resize(6, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.view().any(|l| l.wrapped));
+        assert!(!term.active_screen().visible_lines().any(|l| l.wrapped));
 
         let mut term = Terminal::new((8, 2), None);
 
@@ -3029,7 +3019,7 @@ mod tests {
     fn resize() {
         let mut term = Terminal::new((8, 4), None);
         feed(&mut term, "abcdefgh\r\nijklmnop\r\nqrstuw");
-        term.execute(Cup(4, 1));
+        term.execute(&Cup(4, 1));
         feed(&mut term, "AAA");
 
         term.resize(8, 5);
@@ -3038,7 +3028,7 @@ mod tests {
 
         feed(&mut term, "BBBBB");
 
-        assert_eq!(term.cursor(), (8, 3));
+        assert_eq!(term.cursor().position().unwrap(), (8, 3));
 
         term.resize(4, 5);
 
@@ -3098,24 +3088,24 @@ mod tests {
 
         feed(&mut term, "aaa\n\rbbb\n\rc\n\rddd");
 
-        assert_eq!(term.cursor(), (3, 3));
+        assert_eq!(term.cursor().position().unwrap(), (3, 3));
 
         term.resize(4, 5);
 
         assert_eq!(text(&term), "aaa\nbbb\nc\nddd|\n");
 
-        term.execute(Decset(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
+        term.execute(&Decset(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
 
-        assert_eq!(term.cursor(), (3, 3));
+        assert_eq!(term.cursor().position().unwrap(), (3, 3));
 
         term.resize(4, 2);
 
-        assert_eq!(term.cursor(), (3, 1));
+        assert_eq!(term.cursor().position().unwrap(), (3, 1));
 
         term.resize(2, 3);
         term.resize(3, 3);
 
-        term.execute(Decrst(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
+        term.execute(&Decrst(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
 
         assert_eq!(text(&term), "bbb\nc\ndd|d");
     }
@@ -3124,16 +3114,16 @@ mod tests {
     fn execute_new_line_mode() {
         let mut term = build_term(8, 2, 3, 0, "abc");
 
-        term.execute(Sm(ansi_modes([AnsiMode::NewLine])));
-        term.execute(Lf);
+        term.execute(&Sm(ansi_modes([AnsiMode::NewLine])));
+        term.execute(&Lf);
 
-        assert_eq!(term.cursor(), (0, 1));
+        assert_eq!(term.cursor().position().unwrap(), (0, 1));
 
-        term.execute(Rm(ansi_modes([AnsiMode::NewLine])));
-        term.execute(Cup(1, 4));
-        term.execute(Lf);
+        term.execute(&Rm(ansi_modes([AnsiMode::NewLine])));
+        term.execute(&Cup(1, 4));
+        term.execute(&Lf);
 
-        assert_eq!(term.cursor(), (3, 1));
+        assert_eq!(term.cursor().position().unwrap(), (3, 1));
     }
 
     #[test]
@@ -3142,10 +3132,10 @@ mod tests {
 
         assert!(!term.cursor_keys_app_mode());
 
-        term.execute(Decset(dec_modes([DecMode::CursorKeys])));
+        term.execute(&Decset(dec_modes([DecMode::CursorKeys])));
         assert!(term.cursor_keys_app_mode());
 
-        term.execute(Decrst(dec_modes([DecMode::CursorKeys])));
+        term.execute(&Decrst(dec_modes([DecMode::CursorKeys])));
         assert!(!term.cursor_keys_app_mode());
     }
 
@@ -3155,10 +3145,10 @@ mod tests {
 
         assert!(term.cursor.visible);
 
-        term.execute(Decrst(dec_modes([DecMode::TextCursorEnable])));
+        term.execute(&Decrst(dec_modes([DecMode::TextCursorEnable])));
         assert!(!term.cursor.visible);
 
-        term.execute(Decset(dec_modes([DecMode::TextCursorEnable])));
+        term.execute(&Decset(dec_modes([DecMode::TextCursorEnable])));
         assert!(term.cursor.visible);
     }
 
@@ -3166,16 +3156,16 @@ mod tests {
     fn execute_origin_mode() {
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decstbm(2, 4));
-        term.execute(Decset(dec_modes([DecMode::Origin])));
+        term.execute(&Decstbm(2, 4));
+        term.execute(&Decset(dec_modes([DecMode::Origin])));
 
-        assert_eq!(term.cursor(), (0, 1));
+        assert_eq!(term.cursor().position().unwrap(), (0, 1));
 
-        term.execute(Cup(2, 1));
-        assert_eq!(term.cursor(), (0, 2));
+        term.execute(&Cup(2, 1));
+        assert_eq!(term.cursor().position().unwrap(), (0, 2));
 
-        term.execute(Decrst(dec_modes([DecMode::Origin])));
-        assert_eq!(term.cursor(), (0, 0));
+        term.execute(&Decrst(dec_modes([DecMode::Origin])));
+        assert_eq!(term.cursor().position().unwrap(), (0, 0));
     }
 
     #[test]
@@ -3184,20 +3174,20 @@ mod tests {
 
         feed(&mut term, "ab\r\ncd");
 
-        assert_eq!(term.active_buffer_type(), BufferType::Primary);
+        assert_eq!(term.active_screen_kind(), ScreenKind::Primary);
         assert_eq!(text(&term), "ab\ncd|\n");
 
-        term.execute(Decset(dec_modes([DecMode::AltScreenBuffer])));
+        term.execute(&Decset(dec_modes([DecMode::AltScreenBuffer])));
 
-        assert_eq!(term.active_buffer_type(), BufferType::Alternate);
+        assert_eq!(term.active_screen_kind(), ScreenKind::Alternate);
         assert_eq!(text(&term), "\n  |\n");
 
         feed(&mut term, "xy");
         assert_eq!(text(&term), "\n  xy|\n");
 
-        term.execute(Decrst(dec_modes([DecMode::AltScreenBuffer])));
+        term.execute(&Decrst(dec_modes([DecMode::AltScreenBuffer])));
 
-        assert_eq!(term.active_buffer_type(), BufferType::Primary);
+        assert_eq!(term.active_screen_kind(), ScreenKind::Primary);
         assert_eq!(text(&term), "ab\ncd  |\n");
     }
 
@@ -3205,22 +3195,22 @@ mod tests {
     fn execute_save_cursor_mode() {
         let mut term = Terminal::new((4, 4), None);
 
-        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
-        term.execute(Decstbm(2, 4));
-        term.execute(Decset(dec_modes([DecMode::Origin])));
-        term.execute(Cup(2, 3));
-        term.execute(sgr(SetBoldIntensity));
+        term.execute(&Decrst(dec_modes([DecMode::AutoWrap])));
+        term.execute(&Decstbm(2, 4));
+        term.execute(&Decset(dec_modes([DecMode::Origin])));
+        term.execute(&Cup(2, 3));
+        term.execute(&sgr(SetBoldIntensity));
 
-        term.execute(Decset(dec_modes([DecMode::SaveCursor])));
+        term.execute(&Decset(dec_modes([DecMode::SaveCursor])));
 
-        term.execute(Decset(dec_modes([DecMode::AutoWrap])));
-        term.execute(Decrst(dec_modes([DecMode::Origin])));
-        term.execute(Cup(4, 4));
-        term.execute(sgr(Reset));
+        term.execute(&Decset(dec_modes([DecMode::AutoWrap])));
+        term.execute(&Decrst(dec_modes([DecMode::Origin])));
+        term.execute(&Cup(4, 4));
+        term.execute(&sgr(Reset));
 
-        term.execute(Decrst(dec_modes([DecMode::SaveCursor])));
+        term.execute(&Decrst(dec_modes([DecMode::SaveCursor])));
 
-        assert_eq!(term.cursor(), (2, 2));
+        assert_eq!(term.cursor().position().unwrap(), (2, 2));
         assert_eq!(term.pen.intensity, Intensity::Bold);
         assert!(term.origin_mode);
         assert!(!term.auto_wrap_mode);
@@ -3231,22 +3221,22 @@ mod tests {
         let mut term = Terminal::new((4, 3), None);
 
         feed(&mut term, "ab");
-        term.execute(Decset(dec_modes([DecMode::AltScreenBuffer])));
+        term.execute(&Decset(dec_modes([DecMode::AltScreenBuffer])));
         feed(&mut term, "xy");
-        term.execute(Decrst(dec_modes([DecMode::TextCursorEnable])));
-        term.execute(Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])));
-        term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
-        term.execute(Decset(dec_modes([DecMode::CursorKeys])));
-        term.execute(Decstbm(2, 3));
-        term.execute(Decset(dec_modes([DecMode::Origin])));
-        term.execute(Cup(2, 3));
-        term.execute(sgr(SetBoldIntensity));
-        term.execute(G1d4(Charset::Drawing));
-        term.execute(So);
-        term.execute(Decsc);
+        term.execute(&Decrst(dec_modes([DecMode::TextCursorEnable])));
+        term.execute(&Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])));
+        term.execute(&Decrst(dec_modes([DecMode::AutoWrap])));
+        term.execute(&Decset(dec_modes([DecMode::CursorKeys])));
+        term.execute(&Decstbm(2, 3));
+        term.execute(&Decset(dec_modes([DecMode::Origin])));
+        term.execute(&Cup(2, 3));
+        term.execute(&sgr(SetBoldIntensity));
+        term.execute(&G1d4(Charset::Drawing));
+        term.execute(&So);
+        term.execute(&Decsc);
 
-        assert_eq!(term.active_buffer_type(), BufferType::Alternate);
-        assert_eq!(term.cursor(), (2, 2));
+        assert_eq!(term.active_screen_kind(), ScreenKind::Alternate);
+        assert_eq!((term.cursor.col, term.cursor.row), (2, 2));
         assert_eq!(text(&term), "  xy\n\n  |");
         assert!(!term.cursor.visible);
         assert!(term.insert_mode);
@@ -3262,10 +3252,10 @@ mod tests {
         assert_eq!(term.alternate_saved_cursor.cursor_row, 2);
         assert_eq!(term.pen.intensity, Intensity::Bold);
 
-        term.execute(Decstr);
+        term.execute(&Decstr);
 
-        assert_eq!(term.active_buffer_type(), BufferType::Alternate);
-        assert_eq!(term.cursor(), (2, 2));
+        assert_eq!(term.active_screen_kind(), ScreenKind::Alternate);
+        assert_eq!(term.cursor().position().unwrap(), (2, 2));
         assert_eq!(text(&term), "  xy\n\n  |");
         assert!(term.cursor.visible);
         assert!(!term.insert_mode);
@@ -3291,19 +3281,19 @@ mod tests {
         let mut term = Terminal::new((4, 3), None);
 
         feed(&mut term, "ab\r\ncd");
-        term.execute(sgr(SetBoldIntensity));
+        term.execute(&sgr(SetBoldIntensity));
 
-        term.execute(Decset(dec_modes([
+        term.execute(&Decset(dec_modes([
             DecMode::CursorKeys,
             DecMode::SaveCursorAltScreenBuffer,
         ])));
 
         feed(&mut term, "zz");
 
-        term.execute(Ris);
+        term.execute(&Ris);
 
-        assert_eq!(term.active_buffer_type(), BufferType::Primary);
-        assert_eq!(term.cursor(), (0, 0));
+        assert_eq!(term.active_screen_kind(), ScreenKind::Primary);
+        assert_eq!(term.cursor().position().unwrap(), (0, 0));
         assert_eq!(text(&term), "|\n\n");
         assert_eq!(term.pen, crate::pen::Pen::default());
         assert!(!term.cursor_keys_app_mode());
@@ -3334,25 +3324,20 @@ mod tests {
 
         let mut term = Terminal::new((20, 5), None);
 
-        // move cursor forward by 15 cols
-        term.execute(Cuf(15));
+        term.execute(&Cuf(15));
 
         assert_eq!(term.cursor.col, 15);
 
-        // save cursor
-        term.execute(Decsc);
+        term.execute(&Decsc);
 
         assert_eq!(term.primary_saved_cursor.cursor_col, 15);
 
-        // switch to alternate buffer
-        term.execute(Decset(dec_modes([AltScreenBuffer])));
+        term.execute(&Decset(dec_modes([AltScreenBuffer])));
 
-        // save cursor
-        term.execute(Decsc);
+        term.execute(&Decsc);
 
         assert_eq!(term.alternate_saved_cursor.cursor_col, 15);
 
-        // resize to 10x5
         term.resize(10, 5);
 
         assert_eq!(term.alternate_saved_cursor.cursor_col, 9);

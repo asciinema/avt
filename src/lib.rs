@@ -1,17 +1,224 @@
+//! A virtual terminal with composable observers.
+//!
+//! [`Terminal`] interprets application output, including text and control
+//! sequences, and maintains primary and alternate screen buffers.
+//! Plain mutations return `()`; `_with` variants return an
+//! [`Observer`]'s output.
+//!
+//! Stateful observers should be reused across calls when collecting
+//! dirty rows or transcripts. Feed boundaries do not finish parsing or
+//! logical lines.
+//!
+//! ```
+//! use avt::{DirtyRows, Terminal};
+//!
+//! let mut terminal = Terminal::new(80, 24)?;
+//! let mut dirty = DirtyRows::new();
+//! let rows = terminal.feed_with("hello\r\nworld", &mut dirty);
+//! assert_eq!(rows.len(), 24); // First observation requests a full repaint.
+//! assert_eq!(terminal.screen().line(1).unwrap().text().trim_end(), "world");
+//!
+//! # Ok::<(), avt::InvalidSize>(())
+//! ```
+//!
+//! [`Parser`] can also be used independently, with parsed functions passed to
+//! [`Terminal::execute`]. Construction is fallible and defaults to zero history;
+//! [`Terminal::with_scrollback`] enables bounded or unlimited primary history.
+//! [`Terminal::dump`] initializes visible state and pending parsing, omitting
+//! retained history and analysis state. See the repository examples for rendering,
+//! transcripts and replay.
 mod buffer;
 mod cell;
 mod charset;
 mod color;
+mod dirty_rows;
 mod line;
+mod observer;
+pub mod operation;
 pub mod parser;
 mod pen;
 mod tabs;
-pub mod terminal;
-pub mod util;
-mod vt;
+mod terminal;
+mod transcript;
+
+#[cfg(test)]
+mod tests;
+
 pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
+pub use dirty_rows::DirtyRows;
 pub use line::Line;
+pub use observer::{Observation, Observer};
+pub use operation::Operation;
+pub use parser::{Parser, ShellIntegration};
 pub use pen::Pen;
-pub use vt::Vt;
+pub use terminal::{Cursor, Screen, ScreenKind};
+pub use transcript::Transcript;
+
+/// Rejected terminal dimensions. Both columns and rows must be positive.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InvalidSize {
+    pub cols: usize,
+    pub rows: usize,
+}
+
+impl std::fmt::Display for InvalidSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "invalid terminal size {}x{}: columns and rows must be positive",
+            self.cols, self.rows
+        )
+    }
+}
+
+impl std::error::Error for InvalidSize {}
+
+/// A virtual terminal with a parser and primary and alternate screen buffers.
+pub struct Terminal {
+    parser: Parser,
+    engine: terminal::Engine,
+}
+
+impl Terminal {
+    /// Creates a terminal with no retained scrollback.
+    /// Returns `InvalidSize` if either dimension is zero.
+    pub fn new(cols: usize, rows: usize) -> Result<Self, InvalidSize> {
+        Self::with_scrollback(cols, rows, Some(0))
+    }
+
+    /// Creates a terminal with zero (`Some(0)`), bounded (`Some(limit)`), or
+    /// unlimited (`None`) primary scrollback.
+    /// Returns `InvalidSize` if either dimension is zero.
+    pub fn with_scrollback(
+        cols: usize,
+        rows: usize,
+        scrollback_limit: Option<usize>,
+    ) -> Result<Self, InvalidSize> {
+        if cols == 0 || rows == 0 {
+            return Err(InvalidSize { cols, rows });
+        }
+
+        Ok(Self {
+            parser: Parser::new(),
+            engine: terminal::Engine::new((cols, rows), scrollback_limit),
+        })
+    }
+
+    /// Processes text and control sequences, updating the virtual terminal
+    /// state.
+    pub fn feed(&mut self, input: &str) {
+        self.feed_with(input, ());
+    }
+
+    /// Processes input with the supplied observer and returns its result,
+    /// including for empty or incomplete input.
+    pub fn feed_with<O: Observer>(&mut self, input: &str, mut observer: O) -> O::Output {
+        observer.begin(&mut Observation::new(self));
+
+        for ch in input.chars() {
+            self.feed_char(ch, &mut observer);
+        }
+
+        observer.end(&mut Observation::new(self))
+    }
+
+    fn feed_char<O: Observer>(&mut self, ch: char, observer: &mut O) {
+        if let Some(function) = self.parser.feed(ch) {
+            self.apply(Operation::Function(function), observer);
+        }
+    }
+
+    /// Executes one function or caller-requested operation, preserving pending
+    /// parser state.
+    pub fn execute(&mut self, operation: impl Into<Operation>) {
+        self.execute_with(operation, ());
+    }
+
+    /// Executes an operation with the supplied observer and returns its result.
+    pub fn execute_with<O: Observer>(
+        &mut self,
+        operation: impl Into<Operation>,
+        mut observer: O,
+    ) -> O::Output {
+        observer.begin(&mut Observation::new(self));
+        self.apply(operation.into(), &mut observer);
+
+        observer.end(&mut Observation::new(self))
+    }
+
+    /// Changes the virtual terminal's dimensions. Dimensions are clamped to at
+    /// least one.
+    pub fn resize(&mut self, cols: usize, rows: usize) {
+        self.resize_with(cols, rows, ());
+    }
+
+    pub fn resize_with<O: Observer>(&mut self, cols: usize, rows: usize, observer: O) -> O::Output {
+        self.execute_with(Operation::Resize { cols, rows }, observer)
+    }
+
+    #[inline]
+    fn apply<O: Observer>(&mut self, mut operation: Operation, observer: &mut O) {
+        if let Operation::Resize { cols, rows } = &mut operation {
+            *cols = (*cols).max(1);
+            *rows = (*rows).max(1);
+        }
+
+        observer.before(&mut Observation::new(self), &operation);
+
+        match &operation {
+            Operation::Function(function) => self.engine.execute_with(function, observer),
+
+            Operation::Resize { cols, rows } => {
+                self.engine.resize_with(*cols, *rows, observer);
+            }
+        }
+
+        observer.after(&mut Observation::new(self), &operation);
+        self.evict(observer);
+    }
+
+    fn evict<O: Observer>(&mut self, observer: &mut O) {
+        while let Some(line) = self.engine.pop_evicted() {
+            observer.evicted(&mut Observation::new(self), &line);
+        }
+    }
+
+    pub fn size(&self) -> (usize, usize) {
+        self.engine.size()
+    }
+
+    /// Returns a read-only view of the active screen.
+    pub fn screen(&self) -> Screen<'_> {
+        self.engine.active_screen()
+    }
+
+    /// Returns a read-only view of the primary screen, even when inactive.
+    pub fn primary_screen(&self) -> Screen<'_> {
+        self.engine.primary_screen()
+    }
+
+    pub fn cursor(&self) -> Cursor {
+        self.engine.cursor()
+    }
+
+    /// Returns which screen is active.
+    pub fn active_screen_kind(&self) -> ScreenKind {
+        self.engine.active_screen_kind()
+    }
+
+    /// Escape-sequence initialization for a terminal of the same size, including
+    /// visible buffers, terminal modes, and unfinished parsing. Retained scrollback
+    /// and observer state are omitted; this is not a full-state snapshot.
+    pub fn dump(&self) -> String {
+        let mut dump = parser::dump(&self.engine.dump());
+        dump.push_str(&self.parser.dump());
+
+        dump
+    }
+
+    pub fn cursor_key_app_mode(&self) -> bool {
+        self.engine.cursor_keys_app_mode()
+    }
+}
