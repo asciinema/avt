@@ -53,7 +53,7 @@ impl Observer for DirtyRows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Terminal;
+    use crate::{Operation, Terminal, parser::Function};
 
     #[test]
     fn reports_are_per_call_and_owned() {
@@ -85,5 +85,38 @@ mod tests {
         // Write to row 2, then row 0, then row 2 again.
         let rows = terminal.feed_with("\x1b[3;1HX\x1b[1;1HY\x1b[3;1HZ", &mut dirty);
         assert_eq!(rows, [0, 2]);
+    }
+
+    #[test]
+    fn reports_follow_resized_geometry() {
+        let mut terminal = Terminal::new(8, 6).unwrap();
+        let mut dirty = DirtyRows::new();
+        terminal.feed_with("", &mut dirty);
+
+        // The row dirtied before shrinking must not survive in the report.
+        let rows = terminal.execute_with(
+            [
+                Function::Cup(6, 1).into(),
+                Function::Print('x').into(),
+                Operation::Resize { cols: 8, rows: 2 },
+                Function::Print('y').into(),
+            ],
+            &mut dirty,
+        );
+
+        assert_eq!(rows, [0, 1]);
+        assert!(terminal.feed_with("", &mut dirty).is_empty());
+
+        let rows = terminal.execute_with(
+            [
+                Operation::Resize { cols: 8, rows: 5 },
+                Function::Cup(5, 1).into(),
+                Function::Print('z').into(),
+            ],
+            &mut dirty,
+        );
+
+        assert_eq!(rows, [0, 1, 2, 3, 4]);
+        assert!(terminal.feed_with("", &mut dirty).is_empty());
     }
 }

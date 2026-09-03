@@ -1,7 +1,7 @@
 mod terminal;
 
 use crate::parser::Function;
-use crate::{DirtyRows, Observation, Observer, Operation, Terminal, Transcript};
+use crate::{DirtyRows, Input, IntoInputs, Observation, Observer, Operation, Terminal, Transcript};
 use proptest::prelude::*;
 
 const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
@@ -136,6 +136,108 @@ impl Observer for Calls {
             notifications: std::mem::take(&mut self.notifications),
         }
     }
+}
+
+#[test]
+#[allow(clippy::needless_borrows_for_generic_args)] // Exercise borrowed forms too.
+fn all_input_forms_share_one_feed_lifecycle() {
+    fn check<I, Kind>(input: I, text: &str)
+    where
+        I: IntoInputs<Kind>,
+    {
+        let mut expected = Terminal::new(16, 3).unwrap();
+        let mut actual = Terminal::new(16, 3).unwrap();
+        let expected_report = expected.feed_with(text, Calls::default());
+        let report = actual.feed_with(input, Calls::default());
+        assert_eq!(report, expected_report);
+        assert_eq!(report.number, 1);
+        actual.engine.assert_eq(&expected.engine);
+    }
+
+    let text = "hé界";
+    let owned = text.to_owned();
+    check(text, text);
+    check(&owned, text);
+    check(owned.clone(), text);
+    check('界', "界");
+    check(&'界', "界");
+    check('界'.encode_utf8(&mut [0; 4]), "界");
+    check(Input::Text(text), text);
+    check(Input::Char('界'), "界");
+    check(Input::from(&owned), text);
+    check(Input::from('界'), "界");
+
+    let chunks = ["hé", "界"];
+    check(chunks, text);
+    check(&chunks[..], text);
+    check(chunks.iter(), text);
+    check(chunks.to_vec(), text);
+    let chunks: Vec<String> = chunks.iter().map(|text| text.to_string()).collect();
+    check(&chunks, text);
+    check(&chunks[..], text);
+    check(chunks.iter(), text);
+    check(chunks, text);
+    check(text.chars(), text);
+    check(['h', 'é', '界'], text);
+    check(&['h', 'é', '界'][..], text);
+    check((0..3).map(|n| format!("{n}")), "012");
+
+    let parts = [Input::Char('h'), Input::Text("é界")];
+    check(parts, text);
+    check(&parts[..], text);
+    check(parts.iter(), text);
+    check(["\x1b[3", "1m", "X"], "\x1b[31mX");
+    check(Vec::<String>::new(), "");
+    check(std::iter::empty::<Input<'_>>(), "");
+}
+
+#[test]
+fn feed_processes_owned_chunks_before_advancing_iterator() {
+    use std::cell::Cell;
+
+    struct Progress<'a> {
+        produced: &'a Cell<usize>,
+        printed: usize,
+    }
+
+    impl Observer for Progress<'_> {
+        type Output = usize;
+
+        fn begin(&mut self, _: &mut Observation<'_>) {
+            assert_eq!(self.produced.get(), 0);
+        }
+
+        fn after(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+            assert!(matches!(operation, Operation::Function(Function::Print(_))));
+            self.printed += 1;
+            assert_eq!(self.produced.get(), self.printed);
+        }
+
+        fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+            self.printed
+        }
+    }
+
+    let produced = Cell::new(0);
+
+    let chunks = (0..3).map(|n| {
+        produced.set(n + 1);
+
+        n.to_string()
+    });
+
+    let mut terminal = Terminal::new(8, 2).unwrap();
+
+    let printed = terminal.feed_with(
+        chunks,
+        Progress {
+            produced: &produced,
+            printed: 0,
+        },
+    );
+
+    assert_eq!(printed, 3);
+    assert_eq!(terminal.screen().text()[0], "012");
 }
 
 #[test]
@@ -301,9 +403,7 @@ fn observed_functions_and_host_resizes_form_one_replayable_stream() {
     for report in reports {
         assert_eq!(replay.dump(), report.before);
         assert_eq!(replay.size(), report.size_before);
-        for operation in report.operations {
-            replay.execute(operation);
-        }
+        replay.execute(report.operations);
         assert_eq!(replay.dump(), report.after);
         assert_eq!(replay.size(), report.size_after);
     }
@@ -412,7 +512,7 @@ fn dump_restores_visible_state_and_parser_without_history() {
     let mut original = Terminal::with_scrollback(8, 2, Some(2)).unwrap();
     original.feed("one\r\ntwo\r\nthree\r\nfour\r\nfive\x1b[31");
     let mut restored = Terminal::with_scrollback(8, 2, Some(2)).unwrap();
-    restored.feed(&original.dump());
+    restored.feed(original.dump());
     // Dump initializes visible buffers; retained history is not serialized.
     assert_eq!(original.primary_screen().all_lines().count(), 4);
     assert_eq!(restored.primary_screen().all_lines().count(), 2);
@@ -443,16 +543,85 @@ fn terminal_and_owned_types_are_send_sync() {
 }
 
 #[test]
+fn all_operation_forms_share_one_execution_lifecycle() {
+    fn check<I, Kind>(actions: I, text: &str)
+    where
+        I: crate::IntoOperations<Kind>,
+    {
+        let mut expected = Terminal::new(16, 3).unwrap();
+        let mut actual = Terminal::new(16, 3).unwrap();
+        let reference = expected.feed_with(text, Calls::default());
+        let report = actual.execute_with(actions, Calls::default());
+        assert_eq!(report, reference);
+        actual.engine.assert_eq(&expected.engine);
+    }
+
+    check(Function::Print('x'), "x");
+    check(Operation::Function(Function::Print('x')), "x");
+    let functions = [Function::Print('x'), Function::Cr, Function::Lf];
+    check(functions.clone(), "x\r\n");
+    check(functions.to_vec(), "x\r\n");
+    check(functions.iter().cloned(), "x\r\n");
+
+    check(
+        functions
+            .into_iter()
+            .map(Operation::from)
+            .collect::<Vec<_>>(),
+        "x\r\n",
+    );
+
+    check(Vec::<Function>::new(), "");
+    check(std::iter::empty::<Operation>(), "");
+
+    let mut parser = crate::Parser::new();
+
+    check(
+        "\x1b[31mhello".chars().filter_map(|ch| parser.feed(ch)),
+        "\x1b[31mhello",
+    );
+}
+
+#[test]
 fn explicit_execution_preserves_unfinished_text_parsing() {
     let mut terminal = Terminal::new(8, 2).unwrap();
     terminal.feed("\x1b[31");
-    terminal.execute(Function::Print('x'));
+    terminal.execute([Function::Print('x')]);
     terminal.feed("mY");
     let cells = terminal.screen().line(0).unwrap().cells();
     assert_eq!(cells[0].char(), 'x');
     assert_eq!(cells[0].pen().foreground(), None);
     assert_eq!(cells[1].char(), 'Y');
     assert_eq!(cells[1].pen().foreground(), Some(crate::Color::Indexed(1)));
+}
+
+#[test]
+fn execute_finishes_eviction_before_advancing_iterator() {
+    // A local-only observer also verifies that observers need no Send bound.
+    struct Evictions(std::rc::Rc<std::cell::Cell<usize>>);
+
+    impl Observer for Evictions {
+        type Output = usize;
+
+        fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+            self.0.set(self.0.get() + 1);
+        }
+
+        fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+            self.0.get()
+        }
+    }
+
+    let count = std::rc::Rc::new(std::cell::Cell::new(0));
+
+    let actions = (0..3).map(|index| {
+        assert_eq!(count.get(), index);
+
+        Function::Lf
+    });
+
+    let mut terminal = Terminal::new(4, 1).unwrap();
+    assert_eq!(terminal.execute_with(actions, Evictions(count.clone())), 3);
 }
 
 #[test]
@@ -493,7 +662,7 @@ fn execution_hooks_borrow_original_sgr_parameters() {
     };
 
     let mut terminal = Terminal::new(4, 2).unwrap();
-    assert_eq!(terminal.execute_with(Function::Sgr(ops), observer), 2);
+    assert_eq!(terminal.execute_with([Function::Sgr(ops)], observer), 2);
 }
 
 proptest! {
@@ -519,11 +688,11 @@ proptest! {
             let mut expected = std::collections::BTreeSet::new();
 
             for ch in text.chars() {
-                expected.extend(split.feed_with(ch.encode_utf8(&mut [0; 4]), &mut split_dirty));
+                expected.extend(split.feed_with(ch, &mut split_dirty));
             }
 
             prop_assert_eq!(
-                terminal.feed_with(&text, &mut dirty),
+                terminal.feed_with(text, &mut dirty),
                 expected.into_iter().collect::<Vec<_>>()
             );
 
@@ -540,4 +709,61 @@ fn cursor_only_changes_emit_no_dirty_notifications() {
     let mut terminal = Terminal::new(8, 3).unwrap();
     let report = terminal.feed_with("\x1b[2;2H\x1b[?25l", Calls::default());
     assert!(report.notifications.is_empty());
+}
+
+#[test]
+fn resize_notifications_precede_dirty_ranges() {
+    #[derive(Default)]
+    struct Geometry {
+        rows: usize,
+        sizes: Vec<(usize, usize)>,
+    }
+
+    impl Observer for Geometry {
+        type Output = Vec<(usize, usize)>;
+
+        fn begin(&mut self, context: &mut Observation<'_>) {
+            self.rows = context.terminal().size().1;
+        }
+
+        fn resized(&mut self, cols: usize, rows: usize) {
+            self.rows = rows;
+            self.sizes.push((cols, rows));
+        }
+
+        fn dirty(&mut self, rows: std::ops::Range<usize>) {
+            assert!(rows.end <= self.rows);
+        }
+
+        fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+            std::mem::take(&mut self.sizes)
+        }
+    }
+
+    let mut terminal = Terminal::new(8, 6).unwrap();
+
+    let sizes = terminal.execute_with(
+        [
+            Function::Cup(6, 1).into(),
+            Function::Print('x').into(),
+            Operation::Resize { cols: 8, rows: 2 },
+            Function::Print('y').into(),
+            Operation::Resize { cols: 8, rows: 2 },
+        ],
+        Geometry::default(),
+    );
+
+    assert_eq!(sizes, [(8, 2)]);
+
+    let sizes = terminal.execute_with(
+        [
+            Operation::Resize { cols: 8, rows: 5 },
+            Operation::Resize { cols: 4, rows: 5 },
+            Function::Cup(5, 1).into(),
+            Function::Print('z').into(),
+        ],
+        Geometry::default(),
+    );
+
+    assert_eq!(sizes, [(8, 5), (4, 5)]);
 }

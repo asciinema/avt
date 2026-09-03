@@ -14,7 +14,7 @@
 //!
 //! let mut terminal = Terminal::new(80, 24)?;
 //! let mut dirty = DirtyRows::new();
-//! let rows = terminal.feed_with("hello\r\nworld", &mut dirty);
+//! let rows = terminal.feed_with(["hello", "\r\nworld"], &mut dirty);
 //! assert_eq!(rows.len(), 24); // First observation requests a full repaint.
 //! assert_eq!(terminal.screen().line(1).unwrap().text().trim_end(), "world");
 //!
@@ -26,12 +26,13 @@
 //! [`Terminal::with_scrollback`] enables bounded or unlimited primary history.
 //! [`Terminal::dump`] initializes visible state and pending parsing, omitting
 //! retained history and analysis state. See the repository examples for rendering,
-//! transcripts and replay.
+//! transcripts, replay, and dependency-based slicing.
 mod buffer;
 mod cell;
 mod charset;
 mod color;
 mod dirty_rows;
+pub mod input;
 mod line;
 mod observer;
 pub mod operation;
@@ -48,9 +49,10 @@ pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
 pub use dirty_rows::DirtyRows;
+pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
 pub use observer::{Observation, Observer};
-pub use operation::Operation;
+pub use operation::{IntoOperations, Operation};
 pub use parser::{Parser, ShellIntegration};
 pub use pen::Pen;
 pub use terminal::{Cursor, Screen, ScreenKind};
@@ -107,21 +109,43 @@ impl Terminal {
     }
 
     /// Processes text and control sequences, updating the virtual terminal
-    /// state.
-    pub fn feed(&mut self, input: &str) {
+    /// state. Accepts a string, character, `Input`, or flat sequence of
+    /// fragments. Iterators are processed incrementally, with one call
+    /// lifecycle for the whole sequence, including an empty sequence.
+    pub fn feed<I, Kind>(&mut self, input: I)
+    where
+        I: IntoInputs<Kind>,
+    {
         self.feed_with(input, ());
     }
 
-    /// Processes input with the supplied observer and returns its result,
-    /// including for empty or incomplete input.
-    pub fn feed_with<O: Observer>(&mut self, input: &str, mut observer: O) -> O::Output {
+    /// Processes input with the supplied observer and returns its result.
+    /// Fragment boundaries do not finish parsing, flush analysis, or invoke
+    /// additional begin/end hooks.
+    pub fn feed_with<I, Kind, O>(&mut self, input: I, mut observer: O) -> O::Output
+    where
+        I: IntoInputs<Kind>,
+        O: Observer,
+    {
         observer.begin(&mut Observation::new(self));
 
-        for ch in input.chars() {
-            self.feed_char(ch, &mut observer);
+        for item in input.into_inputs() {
+            self.feed_fragment(item.as_input(), &mut observer);
         }
 
         observer.end(&mut Observation::new(self))
+    }
+
+    fn feed_fragment<O: Observer>(&mut self, input: Input<'_>, observer: &mut O) {
+        match input {
+            Input::Text(text) => {
+                for ch in text.chars() {
+                    self.feed_char(ch, observer);
+                }
+            }
+
+            Input::Char(ch) => self.feed_char(ch, observer),
+        }
     }
 
     fn feed_char<O: Observer>(&mut self, ch: char, observer: &mut O) {
@@ -130,20 +154,30 @@ impl Terminal {
         }
     }
 
-    /// Executes one function or caller-requested operation, preserving pending
-    /// parser state.
-    pub fn execute(&mut self, operation: impl Into<Operation>) {
-        self.execute_with(operation, ());
+    /// Executes a function, operation, or flat iterable of either. Owned values
+    /// are moved into execution; use `.iter().cloned()` to execute operations
+    /// from a borrowed collection. Pending text-parser state is preserved.
+    pub fn execute<I, Kind>(&mut self, operations: I)
+    where
+        I: IntoOperations<Kind>,
+    {
+        self.execute_with(operations, ());
     }
 
-    /// Executes an operation with the supplied observer and returns its result.
-    pub fn execute_with<O: Observer>(
-        &mut self,
-        operation: impl Into<Operation>,
-        mut observer: O,
-    ) -> O::Output {
+    /// Executes operations with the supplied observer and returns its result,
+    /// including for an empty iterable. Actions are processed incrementally.
+    /// Before requesting the next operation, any primary-buffer lines removed
+    /// to enforce the scrollback limit are passed to [`Observer::evicted`].
+    pub fn execute_with<I, Kind, O>(&mut self, operations: I, mut observer: O) -> O::Output
+    where
+        I: IntoOperations<Kind>,
+        O: Observer,
+    {
         observer.begin(&mut Observation::new(self));
-        self.apply(operation.into(), &mut observer);
+
+        for operation in operations.into_operations() {
+            self.apply(operation.into(), &mut observer);
+        }
 
         observer.end(&mut Observation::new(self))
     }

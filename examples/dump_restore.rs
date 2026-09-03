@@ -7,7 +7,7 @@ fn main() {
 
     let (cols, rows) = source.size();
     let mut restored = Terminal::new(cols, rows).unwrap();
-    restored.feed(&source.dump());
+    restored.feed(source.dump());
 
     // Feed the same subsequent input to both terminals.
     let output = "\r\ncontinued";

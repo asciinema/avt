@@ -28,7 +28,7 @@ fn feed_updates_screen_accessors_with_retained_history() {
 #[test]
 fn screens_address_buffers_explicitly() {
     let mut terminal = Terminal::new(8, 2).unwrap();
-    terminal.feed(&["shell", "\x1b[?1047h", "\x1b[Hvim"].concat());
+    terminal.feed(["shell", "\x1b[?1047h", "\x1b[Hvim"]);
     assert_eq!(terminal.active_screen_kind(), ScreenKind::Alternate);
     assert_eq!(terminal.screen().line(0).unwrap().text().trim_end(), "vim");
     assert_eq!(terminal.primary_screen().text()[0], "shell");
@@ -44,7 +44,7 @@ fn screens_address_buffers_explicitly() {
 #[test]
 fn primary_reflows_when_reactivated_after_alternate_resize() {
     let mut terminal = Terminal::new(4, 2).unwrap();
-    terminal.feed(&["abcd", "\x1b[?1047h"].concat());
+    terminal.feed(["abcd", "\x1b[?1047h"]);
     terminal.resize(2, 2);
     assert_eq!(terminal.size(), (2, 2));
     assert_eq!(terminal.primary_screen().line(0).unwrap().len(), 4);
@@ -57,16 +57,13 @@ fn primary_reflows_when_reactivated_after_alternate_resize() {
 fn alternate_saved_cursor_persists_across_sessions() {
     let mut terminal = Terminal::new(8, 4).unwrap();
 
-    terminal.feed(
-        &[
-            "\x1b[?1047h",
-            "\x1b[2;3H\x1b7",
-            "\x1b[?1047l",
-            "\x1b[?1047h",
-            "\x1b8",
-        ]
-        .concat(),
-    );
+    terminal.feed([
+        "\x1b[?1047h",
+        "\x1b[2;3H\x1b7",
+        "\x1b[?1047l",
+        "\x1b[?1047h",
+        "\x1b8",
+    ]);
 
     assert_eq!(terminal.cursor().position(), Some((2, 1)));
 }
@@ -75,7 +72,7 @@ fn alternate_saved_cursor_persists_across_sessions() {
 fn alternate_buffer_starts_blank_on_each_entry() {
     let mut terminal = Terminal::new(8, 2).unwrap();
 
-    terminal.feed(&["\x1b[?1047h", "hello", "\x1b[?1047l", "\x1b[41m\x1b[?1047h"].concat());
+    terminal.feed(["\x1b[?1047h", "hello", "\x1b[?1047l", "\x1b[41m\x1b[?1047h"]);
 
     assert_eq!(terminal.screen().line(0).unwrap().text().trim_end(), "");
     let pen = *terminal.screen().line(0).unwrap().cells()[0].pen();
@@ -85,7 +82,7 @@ fn alternate_buffer_starts_blank_on_each_entry() {
 #[test]
 fn reselecting_active_buffer_preserves_content_and_dirty_state() {
     let mut terminal = Terminal::new(8, 2).unwrap();
-    terminal.feed(&["\x1b[?1047h", "hello", "\x1b[?1047h"].concat());
+    terminal.feed(["\x1b[?1047h", "hello", "\x1b[?1047h"]);
 
     assert_eq!(
         terminal.screen().line(0).unwrap().text().trim_end(),
@@ -97,8 +94,8 @@ fn reselecting_active_buffer_preserves_content_and_dirty_state() {
 fn dump_restores_saved_cursors_in_both_buffers() {
     let mut original = Terminal::new(8, 4).unwrap();
     let mut restored = Terminal::new(8, 4).unwrap();
-    original.feed(&["\x1b[3;4H\x1b7", "\x1b[?1047h", "\x1b[2;2H\x1b7"].concat());
-    restored.feed(&original.dump());
+    original.feed(["\x1b[3;4H\x1b7", "\x1b[?1047h", "\x1b[2;2H\x1b7"]);
+    restored.feed(original.dump());
     assert_terminals_eq(&original, &restored);
 
     for input in ["\x1b8", "\x1b[?1047l\x1b8"] {
@@ -112,7 +109,7 @@ fn dump_restores_saved_cursors_in_both_buffers() {
 fn dump_initial() {
     let original = Terminal::new(10, 4).unwrap();
     let mut restored = Terminal::new(10, 4).unwrap();
-    restored.feed(&original.dump());
+    restored.feed(original.dump());
     assert_terminals_eq(&original, &restored);
 }
 
@@ -121,16 +118,13 @@ fn dump_modified() {
     let mut original = Terminal::new(10, 4).unwrap();
     let mut restored = Terminal::new(10, 4).unwrap();
 
-    original.feed(
-        &[
-            "hello\n\rworld 日\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h",
-            "\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{9b}4h",
-            "\u{9b}?7l\u{9b}20h\u{9b}\u{3a}\x1b(0\x1b)0\u{0e}",
-        ]
-        .concat(),
-    );
+    original.feed([
+        "hello\n\rworld 日\u{9b}5W\u{9b}7`\u{1b}[W\u{9b}?6h",
+        "\u{9b}2;4r\u{9b}1;5H\x1b[1;31;41m\u{9b}?25l\u{9b}4h",
+        "\u{9b}?7l\u{9b}20h\u{9b}\u{3a}\x1b(0\x1b)0\u{0e}",
+    ]);
 
-    restored.feed(&original.dump());
+    restored.feed(original.dump());
     assert_terminals_eq(&original, &restored);
 }
 
@@ -140,11 +134,11 @@ fn dump_with_file() {
         let mut original = Terminal::new(cols, rows).unwrap();
 
         for (index, ch) in input.chars().take(1_000_000).enumerate() {
-            original.feed(ch.encode_utf8(&mut [0; 4]));
+            original.feed(ch);
 
             if index % step == 0 {
                 let mut restored = Terminal::new(cols, rows).unwrap();
-                restored.feed(&original.dump());
+                restored.feed(original.dump());
                 assert_terminals_eq(&original, &restored);
             }
         }
@@ -279,7 +273,7 @@ proptest! {
     #[test]
     fn prop_sanity_checks_infinite_scrollback(input in gen_input(25)) {
         let mut terminal = Terminal::with_scrollback(10, 5, None).unwrap();
-        terminal.feed(&input.into_iter().collect::<String>());
+        terminal.feed(input);
         terminal.engine.verify();
         assert!(terminal.screen().all_lines().count() >= terminal.size().1);
     }
@@ -287,7 +281,7 @@ proptest! {
     #[test]
     fn prop_sanity_checks_no_scrollback(input in gen_input(25)) {
         let mut terminal = Terminal::new(10, 5).unwrap();
-        terminal.feed(&input.into_iter().collect::<String>());
+        terminal.feed(input);
         terminal.engine.verify();
         assert_eq!(terminal.screen().all_lines().count(), terminal.size().1);
     }
@@ -296,7 +290,7 @@ proptest! {
     fn prop_sanity_checks_fixed_scrollback(input in gen_input(25)) {
         let limit = 3;
         let mut terminal = Terminal::with_scrollback(10, 5, Some(limit)).unwrap();
-        terminal.feed(&input.into_iter().collect::<String>());
+        terminal.feed(input);
         let (_, rows) = terminal.size();
         terminal.engine.verify();
         assert!((rows..=rows + limit).contains(&terminal.screen().all_lines().count()));
@@ -310,9 +304,9 @@ proptest! {
         input2 in gen_input(25)
     ) {
         let mut terminal = Terminal::with_scrollback(10, 5, None).unwrap();
-        terminal.feed(&input1.into_iter().collect::<String>());
+        terminal.feed(input1);
         terminal.resize(new_cols, new_rows);
-        terminal.feed(&input2.into_iter().collect::<String>());
+        terminal.feed(input2);
         terminal.engine.verify();
         assert!(terminal.screen().all_lines().count() >= terminal.size().1);
     }
@@ -321,8 +315,8 @@ proptest! {
     fn prop_dump(input in gen_input(25)) {
         let mut original = Terminal::new(10, 5).unwrap();
         let mut restored = Terminal::new(10, 5).unwrap();
-        original.feed(&input.into_iter().collect::<String>());
-        restored.feed(&original.dump());
+        original.feed(input);
+        restored.feed(original.dump());
         assert_terminals_eq(&original, &restored);
     }
 }
