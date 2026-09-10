@@ -1,11 +1,163 @@
 mod terminal;
 
 use crate::parser::Function;
-use crate::{DirtyRows, Input, IntoInputs, Observation, Observer, Operation, Terminal, Transcript};
+use crate::{
+    DirtyRows, Input, IntoInputs, Observation, Observer, Operation, ShellEvent, ShellTracker,
+    Terminal, Transcript,
+};
 use proptest::prelude::*;
 
 const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
 const SUBMIT: &str = "\x1b]133;C\x07";
+
+fn collect(input: &str, split: usize) -> (Vec<ShellEvent>, Vec<String>) {
+    let mut terminal = Terminal::new(24, 4).unwrap();
+    let mut shell = ShellTracker::new();
+    let mut transcript = Transcript::new();
+    let mut events = Vec::new();
+    let mut lines = Vec::new();
+
+    for chunk in [&input[..split], &input[split..]] {
+        let (shell_events, text) = terminal.feed_with(chunk, (&mut shell, &mut transcript));
+        events.extend(shell_events);
+        lines.extend(text);
+    }
+
+    lines.extend(transcript.finish(&terminal));
+
+    (events, lines)
+}
+
+#[test]
+fn captures_commands_and_status_before_same_feed_overwrite() {
+    let input = format!(
+        "{PROMPT}ecxo\x1b[2Dh\x1b[C{SUBMIT}\x1b[2J\x1b[Hresult\x1b]133;D;7\x07{PROMPT}cancel\x1b]133;D\x07"
+    );
+
+    let (events, _) = collect(&input, 0);
+
+    let command = events
+        .iter()
+        .find_map(|event| match event {
+            ShellEvent::CommandSubmitted(command) => Some(command),
+            _ => None,
+        })
+        .unwrap();
+
+    assert_eq!(command.text.as_deref(), Some("echo"));
+    assert_eq!(command.prompt, Some(crate::PromptId(0)));
+
+    assert!(events.contains(&ShellEvent::CommandFinished {
+        id: command.id,
+        exit_status: Some(7)
+    }));
+
+    assert!(events.contains(&ShellEvent::CommandCancelled {
+        prompt: Some(crate::PromptId(1))
+    }));
+}
+
+#[test]
+fn wraps_and_scrolls_command_while_start_is_retained() {
+    let mut terminal = Terminal::new(6, 3).unwrap();
+    let mut shell = ShellTracker::new();
+    let events = terminal.feed_with(format!("old\r\nold\r\n{PROMPT}echo 界{SUBMIT}"), &mut shell);
+
+    let texts: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            ShellEvent::CommandSubmitted(command) => Some(command.text.as_deref()),
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(texts, [Some("echo 界")]);
+}
+
+#[test]
+fn unavailable_input_is_explicit() {
+    for input in [
+        format!("missing B{SUBMIT}"),
+        format!("{PROMPT}first\r\nsecond{SUBMIT}"),
+        format!("{PROMPT}lost\x1b[2J{SUBMIT}"),
+        format!("{PROMPT}long enough to evict the start of input completely{SUBMIT}"),
+    ] {
+        let mut terminal = Terminal::new(8, 3).unwrap();
+        let mut shell = ShellTracker::new();
+        let events = terminal.feed_with(&input, &mut shell);
+
+        let command = events
+            .iter()
+            .find_map(|event| match event {
+                ShellEvent::CommandSubmitted(command) => Some(command),
+                _ => None,
+            })
+            .unwrap();
+
+        assert!(command.text.is_none(), "{input:?}");
+
+        assert_eq!(
+            command.prompt,
+            input.starts_with(PROMPT).then_some(crate::PromptId(0))
+        );
+    }
+}
+
+#[test]
+fn command_capture_survives_reflow_edits_and_scrolling() {
+    let mut terminal = Terminal::new(24, 4).unwrap();
+    let mut shell = ShellTracker::new();
+    terminal.feed_with(format!("{PROMPT}echo ok"), &mut shell);
+    terminal.resize_with(4, 6, &mut shell);
+    let events = terminal.feed_with(SUBMIT, &mut shell);
+
+    assert!(matches!(
+        &events[0],
+        ShellEvent::CommandSubmitted(command) if command.text.as_deref() == Some("echo ok")
+    ));
+
+    for input in [
+        format!("{PROMPT}echo\r\x1b[P{SUBMIT}"),
+        format!("\x1b[2;4r\x1b[4;1H{PROMPT}echo{SUBMIT}"),
+    ] {
+        let mut terminal = Terminal::new(6, 5).unwrap();
+        let mut shell = ShellTracker::new();
+        let events = terminal.feed_with(&input, &mut shell);
+
+        assert!(events.iter().any(|event| matches!(
+            event,
+            ShellEvent::CommandSubmitted(command) if command.text.as_deref() == Some("echo")
+        )));
+    }
+
+    let mut terminal = Terminal::new(6, 5).unwrap();
+    let mut shell = ShellTracker::new();
+
+    let events = terminal.feed_with(
+        format!("\x1b[2;4r\x1b[4;1H{PROMPT}echo ok{SUBMIT}"),
+        &mut shell,
+    );
+
+    // The existing engine breaks the logical wrap link when scrolling a region
+    // whose bottom is above the screen bottom. The position still tracks, but
+    // reconstruction must stay unknown rather than return a partial command.
+    assert!(!terminal.screen().line(2).unwrap().wrapped);
+    assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
+
+    assert!(events.iter().any(
+        |event| matches!(event, ShellEvent::CommandSubmitted(command) if command.text.is_none())
+    ));
+}
+
+#[test]
+fn clamped_cursor_before_input_makes_command_unavailable() {
+    let mut terminal = Terminal::new(8, 4).unwrap();
+    let mut shell = ShellTracker::new();
+    terminal.feed_with(PROMPT, &mut shell);
+    terminal.resize_with(2, 4, &mut shell);
+    let events = terminal.feed_with(format!("x{SUBMIT}"), &mut shell);
+    assert!(matches!(&events[0], ShellEvent::CommandSubmitted(command) if command.text.is_none()));
+}
 
 #[test]
 fn ordinary_transcript_unwraps_and_ignores_alternate_screen_output() {
@@ -19,6 +171,47 @@ fn ordinary_transcript_unwraps_and_ignores_alternate_screen_output() {
 
     lines.extend(transcript.finish(&terminal));
     assert_eq!(lines, ["abcdefgh", "second", "third"]);
+}
+
+#[test]
+fn unknown_exit_status_is_not_reported_as_success() {
+    let mut terminal = Terminal::new(24, 4).unwrap();
+    let mut shell = ShellTracker::new();
+    let events = terminal.feed_with(format!("{PROMPT}cmd{SUBMIT}\x1b]133;D\x07"), &mut shell);
+
+    assert!(matches!(
+        events.last(),
+        Some(ShellEvent::CommandFinished {
+            exit_status: None,
+            ..
+        })
+    ));
+}
+
+#[test]
+fn reset_discards_editing_and_running_state() {
+    for input in [format!("{PROMPT}draft"), format!("{PROMPT}cmd{SUBMIT}")] {
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut shell = ShellTracker::new();
+        terminal.feed_with(input, &mut shell);
+        terminal.execute_with(Function::Ris, &mut shell);
+        assert!(shell.visible_prompts(&terminal).next().is_none());
+        assert!(terminal.feed_with("\x1b]133;D\x07", &mut shell).is_empty());
+    }
+}
+
+#[test]
+fn missing_prompt_does_not_reuse_a_previous_commands_prompt() {
+    let mut terminal = Terminal::new(24, 4).unwrap();
+    let mut shell = ShellTracker::new();
+    terminal.feed_with(format!("{PROMPT}one{SUBMIT}\x1b]133;D;0\x07"), &mut shell);
+    let events = terminal.feed_with(format!("\r\n\x1b]133;B\x07two{SUBMIT}"), &mut shell);
+
+    assert!(matches!(
+        &events[0],
+        ShellEvent::CommandSubmitted(command)
+            if command.prompt.is_none() && command.text.as_deref() == Some("two")
+    ));
 }
 
 #[derive(Debug, PartialEq)]
@@ -241,6 +434,118 @@ fn feed_processes_owned_chunks_before_advancing_iterator() {
 }
 
 #[test]
+fn shell_events_and_transcript_survive_chunking_and_reflow() {
+    fn replay(
+        character_fragments: bool,
+        separate_calls: bool,
+    ) -> (Vec<ShellEvent>, Vec<String>, String) {
+        let first = [
+            "pré\r\n\x1b]13",
+            "3;A\x07$ \x1b]133;B\x07ecxo\x1b[2Dh\x1b[C\x1b]133;C",
+        ];
+
+        let second = [
+            "\x07\x1b[2J\x1b[Hdone\r\n\x1b]133;D;0\x07",
+            "\x1b]133;A\x07$ \x1b]133;B\x07pwd\x1b]133;C\x07\r\n\x1b]133;D;0\x07\x1b]133;A\x07$ \x1b]133;B\x07cancel\x1b]133;D\x07",
+        ];
+
+        let mut terminal = Terminal::new(24, 5).unwrap();
+        let mut shell = ShellTracker::new();
+        let mut transcript = Transcript::new();
+        let mut events = Vec::new();
+        let mut lines = Vec::new();
+
+        for (index, parts) in [first, second].into_iter().enumerate() {
+            if index == 1 {
+                let (batch, text) = terminal.resize_with(4, 8, (&mut shell, &mut transcript));
+                events.extend(batch);
+                lines.extend(text);
+            }
+
+            let fragments: Vec<_> = if character_fragments {
+                parts
+                    .into_iter()
+                    .flat_map(str::chars)
+                    .map(Input::Char)
+                    .collect()
+            } else {
+                parts.into_iter().map(Input::Text).collect()
+            };
+
+            if separate_calls {
+                for input in fragments {
+                    let (batch, text) = terminal.feed_with(input, (&mut shell, &mut transcript));
+                    events.extend(batch);
+                    lines.extend(text);
+                }
+            } else {
+                let (batch, text) = terminal.feed_with(fragments, (&mut shell, &mut transcript));
+                events.extend(batch);
+                lines.extend(text);
+            }
+        }
+
+        lines.extend(transcript.finish(&terminal));
+
+        (events, lines, terminal.dump())
+    }
+
+    let expected = replay(false, false);
+
+    let commands: Vec<_> = expected
+        .0
+        .iter()
+        .filter_map(|event| match event {
+            ShellEvent::CommandSubmitted(command) => {
+                Some((command.prompt, command.text.as_deref()))
+            }
+
+            _ => None,
+        })
+        .collect();
+
+    assert_eq!(
+        commands,
+        [
+            (Some(crate::PromptId(0)), Some("echo")),
+            (Some(crate::PromptId(1)), Some("pwd")),
+        ]
+    );
+
+    for (characters, separate) in [(false, true), (true, false), (true, true)] {
+        assert_eq!(replay(characters, separate), expected);
+    }
+}
+
+#[test]
+fn dump_restoration_preserves_pending_shell_marker_recognition() {
+    let mut original = Terminal::new(24, 4).unwrap();
+    original.feed("\x1b]133;");
+    let mut restored = Terminal::new(24, 4).unwrap();
+    restored.feed(original.dump());
+    let mut original_shell = ShellTracker::new();
+    let mut restored_shell = ShellTracker::new();
+    let tail = "A\x07$ \x1b]133;B\x07cmd\x1b]133;C\x07";
+    let original_events = original.feed_with(tail, &mut original_shell);
+    let restored_events = restored.feed_with(tail, &mut restored_shell);
+    assert_eq!(original_events, restored_events);
+
+    assert_eq!(
+        restored_events[0],
+        ShellEvent::PromptStarted(crate::PromptId(0))
+    );
+
+    assert!(matches!(
+        &restored_events[1],
+        ShellEvent::CommandSubmitted(command)
+            if command.prompt == Some(crate::PromptId(0))
+                && command.text.as_deref() == Some("cmd")
+    ));
+
+    original.engine.assert_eq(&restored.engine);
+}
+
+#[test]
 fn tuple_observers_preserve_call_lifecycle_and_output_order() {
     let mut terminal = Terminal::new(3, 2).unwrap();
     // Every callback must visit the left observer before the right observer.
@@ -421,6 +726,22 @@ fn unfinished_evicted_line_survives_feed_boundaries() {
     assert!(transcript.finish(&terminal).is_empty());
 }
 
+#[test]
+fn new_prompt_replaces_annotation_at_same_position() {
+    let mut terminal = Terminal::new(24, 4).unwrap();
+    let mut shell = ShellTracker::new();
+
+    terminal.feed_with(
+        format!("{PROMPT}one{SUBMIT}\x1b]133;D;0\x07\r{PROMPT}"),
+        &mut shell,
+    );
+
+    let prompts: Vec<_> = shell.visible_prompts(&terminal).collect();
+    assert_eq!(prompts.len(), 1);
+    assert_eq!(prompts[0].id, crate::PromptId(1));
+    assert_eq!(prompts[0].outcome, crate::PromptOutcome::Editing);
+}
+
 fn input() -> impl Strategy<Value = String> {
     prop::collection::vec(
         prop::sample::select(vec![
@@ -449,6 +770,79 @@ fn input() -> impl Strategy<Value = String> {
         0..40,
     )
     .prop_map(|parts| parts.concat())
+}
+
+proptest! {
+    #[test]
+    fn observed_execution_preserves_engine_state(
+        first in input(),
+        second in input(),
+        cols in 2..20usize,
+        rows in 2..8usize
+    ) {
+        let mut plain = Terminal::new(12, 5).unwrap();
+        let mut observed = Terminal::new(12, 5).unwrap();
+        let mut shell = ShellTracker::new();
+        let mut transcript = Transcript::new();
+        plain.feed(&first);
+        let (mut events, mut lines) = observed.feed_with(&first, (&mut shell, &mut transcript));
+        plain.resize(cols, rows);
+        let (batch, text) = observed.resize_with(cols, rows, (&mut shell, &mut transcript));
+        events.extend(batch);
+        lines.extend(text);
+        plain.feed(&second);
+        let (batch, text) = observed.feed_with(&second, (&mut shell, &mut transcript));
+        events.extend(batch);
+        lines.extend(text);
+        lines.extend(transcript.finish(&observed));
+        observed.engine.verify();
+        plain.engine.assert_eq(&observed.engine);
+        plain.parser.assert_eq(&observed.parser);
+
+        let mut chunked = Terminal::new(12, 5).unwrap();
+        let mut chunked_shell = ShellTracker::new();
+        let mut chunked_transcript = Transcript::new();
+        let mut chunked_events = Vec::new();
+        let mut chunked_lines = Vec::new();
+
+        for (index, input) in [&first, &second].into_iter().enumerate() {
+            if index == 1 {
+                let (batch, text) =
+                    chunked.resize_with(cols, rows, (&mut chunked_shell, &mut chunked_transcript));
+
+                chunked_events.extend(batch);
+                chunked_lines.extend(text);
+            }
+
+            for ch in input.chars() {
+                let (batch, text) =
+                    chunked.feed_with(ch, (&mut chunked_shell, &mut chunked_transcript));
+
+                chunked_events.extend(batch);
+                chunked_lines.extend(text);
+            }
+        }
+
+        chunked_lines.extend(chunked_transcript.finish(&chunked));
+        prop_assert_eq!(events, chunked_events);
+        prop_assert_eq!(lines, chunked_lines);
+
+        prop_assert_eq!(
+            shell.visible_prompts(&observed).collect::<Vec<_>>(),
+            chunked_shell.visible_prompts(&chunked).collect::<Vec<_>>()
+        );
+
+        plain.engine.assert_eq(&chunked.engine);
+
+        // Standalone parsing and explicit execution preserve the same state.
+        let mut parsed = Terminal::new(12, 5).unwrap();
+        let mut parser = crate::Parser::new();
+        parsed.execute(first.chars().filter_map(|ch| parser.feed(ch)));
+        parsed.resize(cols, rows);
+        parsed.execute(second.chars().filter_map(|ch| parser.feed(ch)));
+        plain.engine.assert_eq(&parsed.engine);
+        plain.parser.assert_eq(&parser);
+    }
 }
 
 #[test]
@@ -567,6 +961,7 @@ fn terminal_and_owned_types_are_send_sync() {
     send_sync::<crate::Line>();
     send_sync::<crate::Anchor>();
     send_sync::<crate::Parser>();
+    send_sync::<ShellTracker>();
     send_sync::<Transcript>();
 }
 

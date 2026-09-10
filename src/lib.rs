@@ -6,8 +6,8 @@
 //! [`Observer`]'s output.
 //!
 //! Stateful observers should be reused across calls when collecting
-//! dirty rows or transcripts. Feed boundaries do not finish parsing or
-//! logical lines.
+//! dirty rows, transcripts, or shell integration events. Feed boundaries
+//! do not finish parsing or logical lines.
 //!
 //! ```
 //! use avt::{DirtyRows, Terminal};
@@ -26,7 +26,7 @@
 //! [`Terminal::with_scrollback`] enables bounded or unlimited primary history.
 //! [`Terminal::dump`] initializes visible state and pending parsing, omitting
 //! retained history and analysis state. See the repository examples for rendering,
-//! transcripts, replay, and dependency-based slicing.
+//! transcripts, shell tracking, replay, and dependency-based slicing.
 mod anchor;
 mod buffer;
 mod cell;
@@ -39,6 +39,7 @@ mod observer;
 pub mod operation;
 pub mod parser;
 mod pen;
+mod shell;
 mod tabs;
 mod terminal;
 mod transcript;
@@ -57,6 +58,9 @@ pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
 pub use parser::{Parser, ShellIntegration};
 pub use pen::Pen;
+pub use shell::{
+    Command, CommandId, PromptId, PromptOutcome, ShellEvent, ShellTracker, VisiblePrompt,
+};
 pub use terminal::{Cursor, Screen, ScreenKind};
 pub use transcript::Transcript;
 

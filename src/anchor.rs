@@ -46,7 +46,7 @@ impl Mark {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Anchor, Position, ScreenKind, Terminal};
+    use crate::{Anchor, Position, PromptOutcome, ScreenKind, ShellTracker, Terminal};
     use proptest::prelude::*;
 
     fn at(terminal: &mut Terminal, col: usize, row: isize) -> Anchor {
@@ -169,6 +169,30 @@ mod tests {
     }
 
     #[test]
+    fn inactive_buffer_anchors_survive_until_that_buffer_is_replaced() {
+        let mut terminal = Terminal::new(12, 5).unwrap();
+        terminal.feed("\x1b]133;A\x07$ abcdefgh");
+        let mut shell = ShellTracker::new();
+        terminal.feed_with("\r\n\x1b]133;A\x07$ ", &mut shell);
+        let primary = terminal.anchor_at_cursor();
+        terminal.feed_with("\x1b[?1049h", &mut shell);
+
+        assert_eq!(
+            terminal.resolve(&primary).unwrap().screen,
+            ScreenKind::Primary
+        );
+
+        assert_eq!(shell.visible_prompts(&terminal).count(), 0);
+        let alternate = terminal.anchor_at_cursor();
+        terminal.resize_with(6, 6, &mut shell);
+        terminal.feed_with("\x1b[?1049l", &mut shell);
+        assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
+        assert!(terminal.resolve(&primary).is_some());
+        terminal.feed_with("\x1b[?1049h", &mut shell);
+        assert!(terminal.resolve(&alternate).is_none());
+    }
+
+    #[test]
     fn anchors_are_terminal_local_and_excluded_from_line_copies() {
         let mut terminal = Terminal::new(8, 3).unwrap();
         let anchor = terminal.anchor_at_cursor();
@@ -195,6 +219,37 @@ mod tests {
                 })
                 .is_none()
         );
+    }
+
+    #[test]
+    fn outcomes_remain_associated_with_their_original_prompt() {
+        let mut terminal = Terminal::new(20, 5).unwrap();
+        let mut shell = ShellTracker::new();
+
+        terminal.feed_with(
+            "\x1b]133;A\x07$ one\x1b]133;C\x07\r\n\x1b]133;D;7\x07\x1b]133;A\x07$ two",
+            &mut shell,
+        );
+
+        let prompts: Vec<_> = shell.visible_prompts(&terminal).collect();
+
+        assert_eq!(
+            prompts[0].outcome,
+            PromptOutcome::Finished {
+                exit_status: Some(7)
+            }
+        );
+
+        assert_eq!(prompts[1].outcome, PromptOutcome::Editing);
+        terminal.feed_with("\x1b]133;D\x07", &mut shell);
+
+        assert_eq!(
+            shell.visible_prompts(&terminal).last().unwrap().outcome,
+            PromptOutcome::Cancelled
+        );
+
+        terminal.feed_with("\x1b[H\x1b[2J", &mut shell);
+        assert_eq!(shell.visible_prompts(&terminal).count(), 0);
     }
 
     proptest! {
