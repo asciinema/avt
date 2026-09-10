@@ -1,7 +1,6 @@
 mod cursor;
 
 pub use self::cursor::Cursor;
-use crate::Observer;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
@@ -12,6 +11,7 @@ use crate::parser::{
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
+use crate::{Anchor, Observer, Position};
 use std::cmp::Ordering;
 
 #[derive(Debug)]
@@ -183,6 +183,26 @@ impl Engine {
 
     pub fn active_screen_kind(&self) -> ScreenKind {
         self.active
+    }
+
+    pub fn anchor_at(&mut self, position: Position) -> Option<Anchor> {
+        match position.screen {
+            ScreenKind::Primary => self.primary_buffer.anchor_at(position.col, position.row),
+            ScreenKind::Alternate => self.alternate_buffer.anchor_at(position.col, position.row),
+        }
+    }
+
+    pub fn resolve(&self, anchor: &Anchor) -> Option<Position> {
+        for (screen, contents) in [
+            (ScreenKind::Primary, &self.primary_buffer),
+            (ScreenKind::Alternate, &self.alternate_buffer),
+        ] {
+            if let Some((col, row)) = contents.resolve(anchor) {
+                return Some(Position { screen, col, row });
+            }
+        }
+
+        None
     }
 
     #[inline(always)]
@@ -791,13 +811,22 @@ impl Engine {
     fn wrap_and_print_at_line_start(&mut self, ch: char, observer: &mut impl Observer) {
         let row = self.cursor.row;
 
-        if row == self.bottom_margin {
-            self.active_buffer_mut().wrap(row);
+        let marks = if row == self.bottom_margin {
+            let marks = self.active_buffer_mut().wrap(row);
             self.scroll_up_in_region(1, observer);
+
+            marks
         } else if row < self.rows - 1 {
-            self.active_buffer_mut().wrap(row);
+            let marks = self.active_buffer_mut().wrap(row);
             self.cursor.row += 1;
-        }
+
+            marks
+        } else {
+            Vec::new()
+        };
+
+        let row = self.cursor.row;
+        self.active_buffer_mut().attach_marks(row, marks);
 
         let pos = (0, self.cursor.row);
         let pen = self.pen;

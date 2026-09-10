@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
+use std::sync::Arc;
 
+use crate::anchor::{Anchor, Mark};
 use crate::cell::Cell;
 use crate::line::Line;
 use crate::pen::Pen;
@@ -85,8 +87,44 @@ impl Buffer {
         self[row].print(col, ch, pen)
     }
 
-    pub fn wrap(&mut self, row: usize) {
+    pub fn wrap(&mut self, row: usize) -> Vec<Mark> {
         self[row].wrapped = true;
+        let cols = self.cols;
+
+        self[row].split_marks(cols)
+    }
+
+    pub fn attach_marks(&mut self, row: usize, marks: Vec<Mark>) {
+        self[row].marks.extend(marks);
+    }
+
+    pub fn anchor_at(&mut self, col: usize, row: isize) -> Option<Anchor> {
+        let index = self.view_offset().checked_add_signed(row)?;
+        let line = self.lines.get_mut(index)?;
+
+        if col > line.len() {
+            return None;
+        }
+
+        line.marks.retain(Mark::live);
+        let anchor = Anchor(Arc::new(()));
+
+        line.marks.push(Mark {
+            token: Arc::downgrade(&anchor.0),
+            col,
+        });
+
+        Some(anchor)
+    }
+
+    pub fn resolve(&self, anchor: &Anchor) -> Option<(usize, isize)> {
+        for (row, line) in self.lines.iter().enumerate() {
+            if let Some(mark) = line.marks.iter().find(|mark| mark.matches(anchor)) {
+                return Some((mark.col, row as isize - self.view_offset() as isize));
+            }
+        }
+
+        None
     }
 
     pub fn shift_right(&mut self, (col, row): VisualPosition, mut n: usize, pen: Pen) {
@@ -263,6 +301,10 @@ impl Buffer {
         self.cols = new_cols;
         self.rows = new_rows;
         self.trim_needed = true;
+
+        for line in &mut self.lines {
+            line.clip_marks();
+        }
 
         cursor
     }

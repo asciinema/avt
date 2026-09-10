@@ -488,6 +488,33 @@ fn constructors_validate_both_dimensions_for_every_retention_policy() {
 }
 
 #[test]
+fn retention_controls_eviction_anchors_and_transcript_delivery() {
+    for (limit, evicted, retained) in [
+        (Some(0), vec!["aa", "bb"], 2),
+        (Some(1), vec!["aa"], 3),
+        (Some(2), vec![], 4),
+        (None, vec![], 4),
+    ] {
+        let mut terminal = Terminal::with_scrollback(4, 2, limit).unwrap();
+        let anchor = terminal.anchor_at_cursor();
+        let mut transcript = Transcript::new();
+        let mut text = terminal.feed_with("aa\r\nbb\r\ncc\r\ndd", &mut transcript);
+        assert_eq!(text, evicted);
+        assert_eq!(terminal.primary_screen().all_lines().count(), retained);
+
+        if retained == 4 {
+            assert_eq!(terminal.resolve(&anchor).unwrap().row, -2);
+        } else {
+            assert!(terminal.resolve(&anchor).is_none());
+        }
+
+        text.extend(terminal.resize_with(4, 1, &mut transcript));
+        text.extend(transcript.finish(&terminal));
+        assert_eq!(text, ["aa", "bb", "cc", "dd"]);
+    }
+}
+
+#[test]
 fn partial_ed_preserves_history_without_archiving_screen() {
     for clear in ["\x1b[H\x1b[J", "\x1b[2;8H\x1b[1J"] {
         let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
@@ -538,6 +565,7 @@ fn terminal_and_owned_types_are_send_sync() {
     send_sync::<Terminal>();
     send_sync::<std::sync::RwLock<Terminal>>();
     send_sync::<crate::Line>();
+    send_sync::<crate::Anchor>();
     send_sync::<crate::Parser>();
     send_sync::<Transcript>();
 }

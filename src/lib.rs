@@ -27,6 +27,7 @@
 //! [`Terminal::dump`] initializes visible state and pending parsing, omitting
 //! retained history and analysis state. See the repository examples for rendering,
 //! transcripts, replay, and dependency-based slicing.
+mod anchor;
 mod buffer;
 mod cell;
 mod charset;
@@ -45,6 +46,7 @@ mod transcript;
 #[cfg(test)]
 mod tests;
 
+pub use anchor::{Anchor, Position};
 pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
@@ -223,6 +225,32 @@ impl Terminal {
         self.engine.size()
     }
 
+    pub fn cursor_position(&self) -> Position {
+        let cursor = self.cursor();
+
+        Position {
+            screen: self.active_screen_kind(),
+            col: cursor.col,
+            row: cursor.row as isize,
+        }
+    }
+
+    pub fn anchor_at_cursor(&mut self) -> Anchor {
+        self.anchor_at(self.cursor_position())
+            .expect("cursor is in the active screen")
+    }
+
+    /// Registers a positional anchor. Invalid coordinates return None.
+    pub fn anchor_at(&mut self, position: Position) -> Option<Anchor> {
+        self.engine.anchor_at(position)
+    }
+
+    /// Resolves even in an inactive screen. Erasure, removal, eviction, and hard
+    /// reset invalidate positions. Ordinary writes leave them in place.
+    pub fn resolve(&self, anchor: &Anchor) -> Option<Position> {
+        self.engine.resolve(anchor)
+    }
+
     /// Returns a read-only view of the active screen.
     pub fn screen(&self) -> Screen<'_> {
         self.engine.active_screen()
@@ -244,7 +272,7 @@ impl Terminal {
 
     /// Escape-sequence initialization for a terminal of the same size, including
     /// visible buffers, terminal modes, and unfinished parsing. Retained scrollback
-    /// and observer state are omitted; this is not a full-state snapshot.
+    /// and observer/anchor state are omitted; this is not a full-state snapshot.
     pub fn dump(&self) -> String {
         let mut dump = parser::dump(&self.engine.dump());
         dump.push_str(&self.parser.dump());

@@ -1,5 +1,6 @@
 use unicode_width::UnicodeWidthChar;
 
+use crate::anchor::Mark;
 use crate::cell::{Cell, Occupancy};
 use crate::pen::Pen;
 use std::ops::{Index, Range, RangeFull};
@@ -19,10 +20,27 @@ impl CharWidth {
     }
 }
 
-#[derive(Clone, PartialEq)]
 pub struct Line {
     pub(crate) cells: Vec<Cell>,
     pub(crate) wrapped: bool,
+    pub(crate) marks: Vec<Mark>,
+}
+
+// Frames and evicted-line copies are visual values, not tracking registrations.
+impl Clone for Line {
+    fn clone(&self) -> Self {
+        Self {
+            cells: self.cells.clone(),
+            wrapped: self.wrapped,
+            marks: Vec::new(),
+        }
+    }
+}
+
+impl PartialEq for Line {
+    fn eq(&self, other: &Self) -> bool {
+        self.cells == other.cells && self.wrapped == other.wrapped
+    }
 }
 
 impl Line {
@@ -30,10 +48,12 @@ impl Line {
         Line {
             cells: vec![Cell::blank(pen); cols],
             wrapped: false,
+            marks: Vec::new(),
         }
     }
 
     pub(crate) fn reset(&mut self, cols: usize, pen: Pen) {
+        self.marks.clear();
         self.cells.clear();
         self.cells.resize(cols, Cell::blank(pen));
         self.wrapped = false;
@@ -44,20 +64,25 @@ impl Line {
             return;
         }
 
-        let start_col = range.start;
-        let end_col = range.end;
+        let width = self.len();
 
-        if self.cells[start_col].occupancy() == Occupancy::WideTail {
-            self.cells[start_col - 1].set(' ', Occupancy::Single, *pen);
-        }
+        let start =
+            if range.start < width && self.cells[range.start].occupancy() == Occupancy::WideTail {
+                range.start - 1
+            } else {
+                range.start
+            };
 
-        self.cells[range].fill(Cell::blank(*pen));
+        let end = if range.end < width && self.cells[range.end].occupancy() == Occupancy::WideTail {
+            range.end + 1
+        } else {
+            range.end
+        };
 
-        if let Some(next_cell) = self.cells.get_mut(end_col) {
-            if next_cell.occupancy() == Occupancy::WideTail {
-                next_cell.set(' ', Occupancy::Single, *pen);
-            }
-        }
+        self.marks
+            .retain(|mark| mark.live() && !(start <= mark.col && (mark.col < end || end == width)));
+
+        self.cells[start..end].fill(Cell::blank(*pen));
     }
 
     pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
@@ -151,9 +176,24 @@ impl Line {
 
     pub(crate) fn shift_right(&mut self, col: usize, n: usize, pen: Pen) {
         let col = col.min(self.len() - 1);
+        let width = self.len();
+
+        self.marks.retain_mut(|mark| {
+            if mark.col > col {
+                mark.col += n;
+
+                if mark.col >= width {
+                    return false;
+                }
+            }
+
+            mark.live()
+        });
+
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != col - 1);
             cur_cell.set(' ', Occupancy::Single, pen);
             self.cells[col - 1].set(' ', Occupancy::Single, pen);
         }
@@ -163,7 +203,9 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != width - 1);
             cur_cell.set(' ', Occupancy::Single, pen);
+
             self.cells
                 .last_mut()
                 .unwrap()
@@ -172,7 +214,20 @@ impl Line {
     }
 
     pub(crate) fn delete(&mut self, col: usize, n: usize, pen: &Pen) {
+        self.marks.retain_mut(|mark| {
+            if (col..col + n).contains(&mark.col) {
+                return false;
+            }
+
+            if mark.col >= col + n {
+                mark.col -= n;
+            }
+
+            mark.live()
+        });
+
         if self.cells[col].occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != col - 1);
             self.cells[col - 1].set(' ', Occupancy::Single, *pen);
         }
 
@@ -181,6 +236,7 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != col);
             cur_cell.set(' ', Occupancy::Single, *pen);
         }
 
@@ -212,6 +268,8 @@ impl Line {
                 self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
             }
 
+            let rest_marks = other.split_marks(needed);
+            self.append_marks(&mut other, self.len());
             self.cells.extend(&other[0..needed]);
             let mut cells = other.cells;
             cells.rotate_left(needed);
@@ -222,10 +280,12 @@ impl Line {
                 Some(Line {
                     cells,
                     wrapped: other.wrapped,
+                    marks: rest_marks,
                 }),
             );
         }
 
+        self.append_marks(&mut other, self.len());
         self.cells.extend(&other[..]);
 
         if !other.wrapped {
@@ -263,6 +323,7 @@ impl Line {
             let mut rest = Line {
                 cells: self.cells.split_off(len),
                 wrapped: self.wrapped,
+                marks: self.split_marks(len),
             };
 
             if wide_char_boundary {
@@ -288,6 +349,48 @@ impl Line {
 
     pub fn len(&self) -> usize {
         self.cells.len()
+    }
+
+    pub(crate) fn split_marks(&mut self, col: usize) -> Vec<Mark> {
+        let mut rest = Vec::new();
+
+        self.marks.retain_mut(|mark| {
+            if !mark.live() {
+                return false;
+            }
+
+            if mark.col >= col {
+                rest.push(Mark {
+                    token: mark.token.clone(),
+                    col: mark.col - col,
+                });
+
+                false
+            } else {
+                true
+            }
+        });
+
+        rest
+    }
+
+    fn append_marks(&mut self, other: &mut Line, offset: usize) {
+        self.marks.extend(
+            other
+                .marks
+                .drain(..)
+                .filter(|mark| mark.live())
+                .map(|mut mark| {
+                    mark.col += offset;
+
+                    mark
+                }),
+        );
+    }
+
+    pub(crate) fn clip_marks(&mut self) {
+        let width = self.len();
+        self.marks.retain(|mark| mark.live() && mark.col <= width);
     }
 
     #[must_use]

@@ -1,7 +1,7 @@
-use crate::{Line, Operation, Terminal};
+use crate::{Anchor, Line, Operation, Position, Terminal};
 use std::ops::Range;
 
-/// Read-only terminal inspection during observation.
+/// Read-only terminal inspection with permission to register tracking metadata.
 pub struct Observation<'a> {
     terminal: &'a mut Terminal,
 }
@@ -13,6 +13,18 @@ impl<'a> Observation<'a> {
 
     pub fn terminal(&self) -> &Terminal {
         self.terminal
+    }
+
+    pub fn anchor_at_cursor(&mut self) -> Anchor {
+        self.terminal.anchor_at_cursor()
+    }
+
+    pub fn anchor_at(&mut self, position: Position) -> Option<Anchor> {
+        self.terminal.anchor_at(position)
+    }
+
+    pub fn resolve(&self, anchor: &Anchor) -> Option<Position> {
+        self.terminal.resolve(anchor)
     }
 }
 
