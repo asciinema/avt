@@ -1,6 +1,6 @@
 mod terminal;
 
-use crate::parser::Function;
+use crate::parser::{EdScope, Function};
 use crate::{
     DirtyRows, Input, IntoInputs, Observation, Observer, Operation, ShellEvent, ShellTracker,
     Terminal, Transcript,
@@ -55,6 +55,50 @@ fn captures_commands_and_status_before_same_feed_overwrite() {
     assert!(events.contains(&ShellEvent::CommandCancelled {
         prompt: Some(crate::PromptId(1))
     }));
+}
+
+#[test]
+fn paired_observers_are_independent_of_every_input_split() {
+    let input = format!(
+        "old\r\n{PROMPT}wrong\x1b[H\x1b[2J{PROMPT}echo 界{SUBMIT}\r\nresult\r\n\x1b]133;D;0\x1b\\{PROMPT}"
+    );
+
+    for (input, expected_lines) in [
+        (
+            input.as_str(),
+            &["old", "$ wrong", "$ echo 界", "result", "$"][..],
+        ),
+        (
+            "before\r\n$ 界\x1b[H\x1b[2J$ corrected",
+            &["before", "$ 界", "$ corrected"][..],
+        ),
+    ] {
+        let expected = collect(input, 0);
+        assert_eq!(expected.1, expected_lines);
+
+        for split in input
+            .char_indices()
+            .map(|(index, _)| index)
+            .chain([input.len()])
+        {
+            assert_eq!(collect(input, split), expected, "split at byte {split}");
+        }
+
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut shell = ShellTracker::new();
+        let mut transcript = Transcript::new();
+        let mut events = Vec::new();
+        let mut lines = Vec::new();
+
+        for ch in input.chars() {
+            let (batch, text) = terminal.feed_with(ch, (&mut shell, &mut transcript));
+            events.extend(batch);
+            lines.extend(text);
+        }
+
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!((events, lines), expected);
+    }
 }
 
 #[test]
@@ -150,6 +194,25 @@ fn command_capture_survives_reflow_edits_and_scrolling() {
 }
 
 #[test]
+fn transcript_preserves_reflowed_output_and_editable_prompts_on_ed2() {
+    let mut terminal = Terminal::new(24, 4).unwrap();
+    let mut transcript = Transcript::new();
+
+    let mut lines =
+        terminal.feed_with(format!("previous output\r\n{PROMPT}wrong"), &mut transcript);
+
+    lines.extend(terminal.resize_with(12, 6, &mut transcript));
+
+    lines.extend(terminal.feed_with(
+        format!("\x1b[H\x1b[2J{PROMPT}corrected{SUBMIT}"),
+        &mut transcript,
+    ));
+
+    lines.extend(transcript.finish(&terminal));
+    assert_eq!(lines, ["previous output", "$ wrong", "$ corrected"]);
+}
+
+#[test]
 fn clamped_cursor_before_input_makes_command_unavailable() {
     let mut terminal = Terminal::new(8, 4).unwrap();
     let mut shell = ShellTracker::new();
@@ -157,6 +220,29 @@ fn clamped_cursor_before_input_makes_command_unavailable() {
     terminal.resize_with(2, 4, &mut shell);
     let events = terminal.feed_with(format!("x{SUBMIT}"), &mut shell);
     assert!(matches!(&events[0], ShellEvent::CommandSubmitted(command) if command.text.is_none()));
+}
+
+#[test]
+fn repeated_ed2_clears_keep_evicted_editable_input_once() {
+    let mut terminal = Terminal::new(8, 2).unwrap();
+    let mut transcript = Transcript::new();
+
+    let input = format!(
+        "prior\r\n{PROMPT}an unfinished and very long command\x1b[H\x1b[2J\x1b[2J{PROMPT}ok{SUBMIT}\r\nresult"
+    );
+
+    let mut lines = terminal.feed_with(&input, &mut transcript);
+    lines.extend(transcript.finish(&terminal));
+
+    assert_eq!(
+        lines,
+        [
+            "prior",
+            "$ an unfinished and very long command",
+            "$ ok",
+            "result"
+        ]
+    );
 }
 
 #[test]
@@ -717,6 +803,108 @@ fn observed_functions_and_host_resizes_form_one_replayable_stream() {
 }
 
 #[test]
+fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
+    struct Evictions {
+        anchors: Vec<crate::Anchor>,
+        addresses: Vec<*const crate::Cell>,
+        lines: Vec<String>,
+    }
+
+    impl Observer for Evictions {
+        type Output = Vec<String>;
+
+        fn after(&mut self, context: &mut Observation<'_>, _: &Operation) {
+            for anchor in &self.anchors {
+                assert!(context.resolve(anchor).is_some());
+            }
+        }
+
+        fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+            let index = self.lines.len();
+            assert_eq!(line.cells().as_ptr(), self.addresses[index]);
+            assert!(context.resolve(&self.anchors[index]).is_none());
+
+            for anchor in &self.anchors[..index] {
+                // Retaining an original evicted line would keep its weak marks alive.
+                assert_eq!(std::sync::Arc::weak_count(&anchor.0), 0);
+            }
+
+            for anchor in &self.anchors[index + 1..] {
+                assert!(context.resolve(anchor).is_some());
+            }
+
+            self.lines.push(line.text().trim_end().to_owned());
+        }
+
+        fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
+            for anchor in &self.anchors[..self.lines.len()] {
+                assert!(context.resolve(anchor).is_none());
+                assert_eq!(std::sync::Arc::weak_count(&anchor.0), 0);
+            }
+
+            assert_eq!(
+                context.terminal().primary_screen().all_lines().count(),
+                context.terminal().size().1
+            );
+
+            std::mem::take(&mut self.lines)
+        }
+    }
+
+    for (operation, expected, visible) in [
+        (
+            Operation::Resize { cols: 6, rows: 1 },
+            vec!["first", "second", "third"],
+            vec!["last"],
+        ),
+        (
+            Function::Ed(EdScope::All).into(),
+            vec!["first", "second", "third", "last"],
+            vec!["", "", "", ""],
+        ),
+    ] {
+        let mut terminal = Terminal::new(6, 4).unwrap();
+        terminal.feed("first\r\nsecond\r\nthird\r\nlast");
+
+        let anchors = (0..4)
+            .map(|row| {
+                terminal
+                    .anchor_at(crate::Position {
+                        screen: crate::ScreenKind::Primary,
+                        col: 0,
+                        row,
+                    })
+                    .unwrap()
+            })
+            .collect();
+
+        let mut evictions = Evictions {
+            anchors,
+            addresses: terminal
+                .screen()
+                .visible_lines()
+                .map(|line| line.cells().as_ptr())
+                .collect(),
+            lines: Vec::new(),
+        };
+
+        let mut other = Evictions {
+            anchors: evictions.anchors.clone(),
+            addresses: evictions.addresses.clone(),
+            lines: Vec::new(),
+        };
+
+        let (rows, (lines, other_lines)) =
+            terminal.execute_with(operation, (DirtyRows::new(), (&mut evictions, &mut other)));
+
+        assert_eq!(lines, other_lines);
+        assert_eq!(lines, expected);
+        assert_eq!(rows, (0..visible.len()).collect::<Vec<_>>());
+        assert_eq!(terminal.screen().text(), visible);
+    }
+}
+
+#[test]
 fn unfinished_evicted_line_survives_feed_boundaries() {
     let mut terminal = Terminal::new(4, 1).unwrap();
     let mut transcript = Transcript::new();
@@ -909,6 +1097,239 @@ fn retention_controls_eviction_anchors_and_transcript_delivery() {
 }
 
 #[test]
+fn repeated_ed2_preserves_transcript_order_across_retention_limits() {
+    for limit in [Some(0), Some(1), Some(2), Some(10), None] {
+        for prompt in ["$ ", PROMPT] {
+            let input = format!(
+                "aa\r\nbb\r\ncc\r\n{prompt}wrong\x1b[H\x1b[2J\x1b[2J{prompt}right\x1b[H\x1b[2J{prompt}done"
+            );
+
+            for chunked in [false, true] {
+                let mut terminal = Terminal::with_scrollback(12, 2, limit).unwrap();
+                let mut transcript = Transcript::new();
+                let mut lines = Vec::new();
+
+                if chunked {
+                    for ch in input.chars() {
+                        lines.extend(terminal.feed_with(ch, &mut transcript));
+                    }
+                } else {
+                    lines.extend(terminal.feed_with(&input, &mut transcript));
+                }
+
+                lines.extend(transcript.finish(&terminal));
+                assert_eq!(lines, ["aa", "bb", "cc", "$ wrong", "$ right", "$ done"]);
+            }
+        }
+    }
+}
+
+#[test]
+fn ed2_archives_rows_and_anchors_preserving_cursor_and_margins() {
+    let mut terminal = Terminal::with_scrollback(8, 6, None).unwrap();
+    terminal.feed("one\r\n\r\nthree\x1b[2;4r\x1b[?6h\x1b[2;5H\x1b[?25l\x1b7");
+    let cursor = terminal.cursor();
+
+    let occupied = terminal
+        .anchor_at(crate::Position {
+            screen: crate::ScreenKind::Primary,
+            col: 1,
+            row: 2,
+        })
+        .unwrap();
+
+    let blank = terminal
+        .anchor_at(crate::Position {
+            screen: crate::ScreenKind::Primary,
+            col: 0,
+            row: 5,
+        })
+        .unwrap();
+
+    let addresses: Vec<_> = terminal
+        .screen()
+        .visible_lines()
+        .take(3)
+        .map(|line| line.cells().as_ptr())
+        .collect();
+
+    let mut dirty = DirtyRows::new();
+    terminal.feed_with("", &mut dirty);
+
+    assert_eq!(
+        terminal.feed_with("\x1b[2J", &mut dirty),
+        [0, 1, 2, 3, 4, 5]
+    );
+
+    assert_eq!(terminal.cursor(), cursor);
+    assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+
+    assert_eq!(
+        terminal
+            .primary_screen()
+            .all_lines()
+            .take(3)
+            .map(|line| line.cells().as_ptr())
+            .collect::<Vec<_>>(),
+        addresses
+    );
+
+    assert_eq!(
+        terminal.screen().text(),
+        ["one", "", "three", "", "", "", "", "", ""]
+    );
+
+    assert!(
+        terminal
+            .screen()
+            .visible_lines()
+            .all(|line| line.is_blank())
+    );
+
+    assert_eq!(terminal.resolve(&occupied).unwrap().row, -1);
+    assert!(terminal.resolve(&blank).is_none());
+    terminal.feed("\x1b[2J");
+    assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+    terminal.feed("\x1b[H\x1b8");
+    assert_eq!(terminal.cursor(), cursor);
+    terminal.feed("\x1b[H");
+    assert_eq!(terminal.cursor().row, 1); // Origin mode still uses the top margin.
+    terminal.feed("\x1b[99B");
+    assert_eq!(terminal.cursor().row, 3); // The bottom margin also survives.
+}
+
+#[test]
+fn ed2_counts_styled_blanks_but_not_default_spaces_as_occupied() {
+    for style in ["0", "31", "41", "1", "2", "3", "4", "5", "7", "9"] {
+        let mut terminal = Terminal::with_scrollback(6, 5, None).unwrap();
+        terminal.feed(format!("one\x1b[4;1H\x1b[{style}m \x1b[0m\x1b[2J"));
+        let preserved = if style == "0" { 1 } else { 4 };
+        assert_eq!(terminal.primary_screen().all_lines().count(), 5 + preserved);
+
+        assert!(
+            terminal
+                .screen()
+                .visible_lines()
+                .all(|line| line.is_blank())
+        );
+
+        if style != "0" {
+            let line = terminal.primary_screen().all_lines().nth(3).unwrap();
+            assert!(!line.cells()[0].pen().is_default());
+            assert_eq!(line.text(), "      ");
+        }
+    }
+}
+
+#[test]
+fn ed2_uses_erase_pen_and_skips_default_blank_screens() {
+    let mut terminal = Terminal::with_scrollback(6, 3, None).unwrap();
+    terminal.feed("\x1b[2J\x1b[2J\x1b[41m\x1b[2J");
+    assert_eq!(terminal.primary_screen().all_lines().count(), 3);
+
+    assert!(terminal.screen().visible_lines().all(|line| {
+        line.cells()
+            .iter()
+            .all(|cell| cell.pen().background() == Some(crate::Color::Indexed(1)))
+    }));
+
+    terminal.feed("\x1b[0m\x1b[2J\x1b[2J");
+    assert_eq!(terminal.primary_screen().all_lines().count(), 6);
+
+    assert!(
+        terminal
+            .screen()
+            .visible_lines()
+            .all(|line| line.is_blank())
+    );
+}
+
+#[test]
+fn ed2_preserves_pending_wrap() {
+    let mut terminal = Terminal::with_scrollback(4, 2, None).unwrap();
+    terminal.feed("abcd");
+    let cursor = terminal.cursor();
+    assert_eq!(cursor.col, 4);
+    terminal.feed("\x1b[2J");
+    assert_eq!(terminal.cursor(), cursor);
+    terminal.feed("X");
+    assert_eq!(terminal.cursor().position(), Some((1, 1)));
+    assert_eq!(terminal.screen().line(0).unwrap().text(), "    ");
+    assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+}
+
+#[test]
+fn ed2_after_explicit_scrolling_preserves_each_row_once() {
+    for limit in [Some(0), Some(1), Some(10), None] {
+        let mut terminal = Terminal::with_scrollback(12, 6, limit).unwrap();
+        let mut transcript = Transcript::new();
+
+        let mut lines = terminal.feed_with(
+            "one\r\ntwo\r\n$ draft\x1b[2S\x1b[2A\x1b[H\x1b[2J$ new",
+            &mut transcript,
+        );
+
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, ["one", "two", "$ draft", "$ new"]);
+    }
+}
+
+#[test]
+fn ed2_keeps_blank_soft_wrap_terminators_even_after_prefix_eviction() {
+    for limit in [Some(0), Some(1), None] {
+        for rows in [1, 4] {
+            for text in ["abcd ", "     "] {
+                let mut terminal = Terminal::with_scrollback(4, rows, limit).unwrap();
+                let mut transcript = Transcript::new();
+                let mut lines = terminal.feed_with(text, &mut transcript);
+                lines.extend(terminal.feed_with("\x1b[H\x1b[2J\x1b[2Jnew", &mut transcript));
+                lines.extend(transcript.finish(&terminal));
+
+                assert_eq!(
+                    lines,
+                    [text.trim_end(), "new"],
+                    "{limit:?}, {rows}, {text:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn ed2_preserved_wrapped_text_and_anchors_reflow_with_history() {
+    for limit in [Some(0), Some(1), Some(10), None] {
+        let mut terminal = Terminal::with_scrollback(4, 3, limit).unwrap();
+        let mut transcript = Transcript::new();
+        let mut lines = terminal.feed_with("abcd界ef", &mut transcript);
+
+        let anchor = terminal
+            .anchor_at(crate::Position {
+                screen: crate::ScreenKind::Primary,
+                col: 0,
+                row: 1,
+            })
+            .unwrap();
+
+        lines.extend(terminal.feed_with("\x1b[H\x1b[2Jnew", &mut transcript));
+        lines.extend(terminal.resize_with(8, 3, &mut transcript));
+
+        match limit {
+            Some(0) => assert!(terminal.resolve(&anchor).is_none()),
+
+            _ => {
+                let position = terminal.resolve(&anchor).unwrap();
+                assert_eq!(position.row, -1);
+                assert_eq!(position.col, if limit == Some(1) { 0 } else { 4 });
+            }
+        }
+
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, ["abcd界ef", "new"]);
+        terminal.engine.verify();
+    }
+}
+
+#[test]
 fn partial_ed_preserves_history_without_archiving_screen() {
     for clear in ["\x1b[H\x1b[J", "\x1b[2;8H\x1b[1J"] {
         let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
@@ -926,6 +1347,30 @@ fn partial_ed_preserves_history_without_archiving_screen() {
 
         assert_eq!(transcript.finish(&terminal), ["history"]);
     }
+}
+
+#[test]
+fn alternate_screen_ed2_erases_without_archiving() {
+    let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
+    let mut transcript = Transcript::new();
+    terminal.feed_with("history\r\none\r\ntwo\x1b[?1049halt", &mut transcript);
+    let cursor = terminal.cursor();
+    let anchor = terminal.anchor_at_cursor();
+    assert!(terminal.feed_with("\x1b[2J", &mut transcript).is_empty());
+    assert_eq!(terminal.cursor(), cursor);
+    assert!(terminal.resolve(&anchor).is_none());
+
+    assert!(
+        terminal
+            .screen()
+            .visible_lines()
+            .all(|line| line.is_blank())
+    );
+
+    assert_eq!(terminal.screen().all_lines().count(), 2);
+    assert_eq!(terminal.primary_screen().text(), ["history", "one", "two"]);
+    terminal.feed_with("\x1b[?1049l", &mut transcript);
+    assert_eq!(transcript.finish(&terminal), ["history", "one", "two"]);
 }
 
 #[test]

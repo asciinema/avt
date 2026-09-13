@@ -84,6 +84,8 @@ impl std::fmt::Display for InvalidSize {
 impl std::error::Error for InvalidSize {}
 
 /// A virtual terminal with a parser and primary and alternate screen buffers.
+/// Primary-screen ED2 preserves the occupied screen prefix in scrollback,
+/// subject to normal retention and eviction. The cursor stays in place.
 pub struct Terminal {
     parser: Parser,
     engine: terminal::Engine,
@@ -249,8 +251,10 @@ impl Terminal {
         self.engine.anchor_at(position)
     }
 
-    /// Resolves even in an inactive screen. Erasure, removal, eviction, and hard
-    /// reset invalidate positions. Ordinary writes leave them in place.
+    /// Resolves even in an inactive screen. Destructive erasure, removal, eviction,
+    /// and hard reset invalidate positions. Ordinary writes leave them in place.
+    /// Primary-screen ED2 moves anchors in preserved rows into history, subject
+    /// to normal retention and eviction.
     pub fn resolve(&self, anchor: &Anchor) -> Option<Position> {
         self.engine.resolve(anchor)
     }

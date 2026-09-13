@@ -15,6 +15,8 @@ pub(crate) struct Buffer {
     pub rows: usize,
     scrollback_limit: Option<usize>,
     trim_needed: bool,
+    // The first retained row continues the last evicted row's logical line.
+    front_wrapped: bool,
 }
 
 pub(crate) enum EraseMode {
@@ -60,6 +62,7 @@ impl Buffer {
             rows,
             scrollback_limit,
             trim_needed: false,
+            front_wrapped: false,
         }
     }
 
@@ -222,6 +225,27 @@ impl Buffer {
         self.trim_needed = true;
     }
 
+    /// Moves the occupied screen prefix into history, including blank rows that
+    /// finish a soft-wrapped line. Trailing ordinary blank rows stay on screen.
+    pub fn scroll_out(&mut self, pen: &Pen) {
+        let mut end = 0;
+
+        let mut wrapped = self
+            .view_offset()
+            .checked_sub(1)
+            .map_or(self.front_wrapped, |row| self.lines[row].wrapped);
+
+        for (row, line) in self.view().enumerate() {
+            if wrapped || line.wrapped || !line.is_blank() {
+                end = row + 1;
+            }
+
+            wrapped = line.wrapped;
+        }
+
+        self.scroll_up(0..self.rows, end, pen);
+    }
+
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         let (start, end) = (range.start, range.end);
         n = n.min(end - start);
@@ -376,7 +400,10 @@ impl Buffer {
                 .scrollback_limit
                 .is_some_and(|limit| self.lines.len() - self.rows > limit)
             {
-                return self.lines.pop_front();
+                let line = self.lines.pop_front()?;
+                self.front_wrapped = line.wrapped;
+
+                return Some(line);
             }
 
             self.trim_needed = false;

@@ -1017,6 +1017,10 @@ impl Engine {
             }
 
             EdScope::All => {
+                if self.active == ScreenKind::Primary {
+                    self.primary_buffer.scroll_out(&self.pen);
+                }
+
                 self.erase_at_cursor(EraseMode::WholeView);
 
                 observer.dirty(0..self.rows);
