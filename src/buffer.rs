@@ -218,7 +218,7 @@ impl Buffer {
         } else {
             self[range.start - 1].wrapped = false;
             let end = range.end;
-            self[range].rotate_left(n);
+            self.visible_rows_mut(range).rotate_left(n);
             self.clear((end - n)..end, pen);
         }
 
@@ -249,7 +249,7 @@ impl Buffer {
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         let (start, end) = (range.start, range.end);
         n = n.min(end - start);
-        self[range].rotate_right(n);
+        self.visible_rows_mut(range).rotate_right(n);
         self.clear(start..start + n, pen);
 
         if start > 0 {
@@ -394,6 +394,12 @@ impl Buffer {
         self.lines.len() - self.rows
     }
 
+    fn visible_rows_mut(&mut self, range: Range<usize>) -> &mut [Line] {
+        let offset = self.view_offset();
+
+        &mut self.lines.make_contiguous()[offset + range.start..offset + range.end]
+    }
+
     pub fn pop_evicted(&mut self) -> Option<Line> {
         if self.trim_needed {
             if self
@@ -452,14 +458,6 @@ impl Index<usize> for Buffer {
     }
 }
 
-impl Index<Range<usize>> for Buffer {
-    type Output = [Line];
-
-    fn index(&self, _range: Range<usize>) -> &Self::Output {
-        panic!("impossible");
-    }
-}
-
 impl Index<VisualPosition> for Buffer {
     type Output = Cell;
 
@@ -472,13 +470,6 @@ impl IndexMut<usize> for Buffer {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         let idx = self.view_offset() + index;
         &mut self.lines[idx]
-    }
-}
-
-impl IndexMut<Range<usize>> for Buffer {
-    fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
-        let offset = self.view_offset();
-        &mut self.lines.make_contiguous()[offset + range.start..offset + range.end]
     }
 }
 
@@ -546,12 +537,7 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
             }
         }
 
-        self.rest.take().map(|mut line| {
-            line.expand(self.cols, &Pen::default());
-            line.wrapped = false;
-
-            line
-        })
+        None
     }
 }
 
