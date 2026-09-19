@@ -33,6 +33,7 @@ mod cell;
 mod charset;
 mod color;
 mod dirty_rows;
+mod engine;
 pub mod input;
 mod line;
 mod observer;
@@ -41,7 +42,6 @@ pub mod parser;
 mod pen;
 mod shell;
 mod tabs;
-mod terminal;
 mod transcript;
 
 #[cfg(test)]
@@ -52,6 +52,7 @@ pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
 pub use dirty_rows::DirtyRows;
+pub use engine::{Cursor, Screen, ScreenKind};
 pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
 pub use observer::{Observation, Observer};
@@ -61,7 +62,6 @@ pub use pen::Pen;
 pub use shell::{
     Command, CommandId, PromptId, PromptOutcome, ShellEvent, ShellTracker, VisiblePrompt,
 };
-pub use terminal::{Cursor, Screen, ScreenKind};
 pub use transcript::Transcript;
 
 /// Rejected terminal dimensions. Both columns and rows must be positive.
@@ -88,7 +88,7 @@ impl std::error::Error for InvalidSize {}
 /// subject to normal retention and eviction. The cursor stays in place.
 pub struct Terminal {
     parser: Parser,
-    engine: terminal::Engine,
+    engine: engine::Engine,
 }
 
 impl Terminal {
@@ -112,7 +112,7 @@ impl Terminal {
 
         Ok(Self {
             parser: Parser::new(),
-            engine: terminal::Engine::new((cols, rows), scrollback_limit),
+            engine: engine::Engine::new((cols, rows), scrollback_limit),
         })
     }
 

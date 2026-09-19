@@ -636,7 +636,9 @@ impl Engine {
 
         match cols.cmp(&self.cols) {
             Ordering::Less => self.tabs.contract(cols),
+
             Ordering::Equal => {}
+
             Ordering::Greater => self.tabs.expand(self.cols, cols),
         }
 
@@ -844,6 +846,7 @@ impl Engine {
 
         if self.cursor.col > 0 {
             let col = self.cursor.col - 1;
+
             let printed = self
                 .active_buffer_mut()
                 .print((col, row), ch, pen)
