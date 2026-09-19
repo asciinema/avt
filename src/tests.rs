@@ -105,7 +105,8 @@ fn paired_observers_are_independent_of_every_input_split() {
 fn wraps_and_scrolls_command_while_start_is_retained() {
     let mut terminal = Terminal::new(6, 3).unwrap();
     let mut shell = ShellTracker::new();
-    let events = terminal.feed_with(format!("old\r\nold\r\n{PROMPT}echo 界{SUBMIT}"), &mut shell);
+
+    let events = terminal.feed_with(["old\r\nold\r\n", PROMPT, "echo 界", SUBMIT], &mut shell);
 
     let texts: Vec<_> = events
         .iter()
@@ -151,7 +152,7 @@ fn unavailable_input_is_explicit() {
 fn command_capture_survives_reflow_edits_and_scrolling() {
     let mut terminal = Terminal::new(24, 4).unwrap();
     let mut shell = ShellTracker::new();
-    terminal.feed_with(format!("{PROMPT}echo ok"), &mut shell);
+    terminal.feed_with([PROMPT, "echo ok"], &mut shell);
     terminal.resize_with(4, 6, &mut shell);
     let events = terminal.feed_with(SUBMIT, &mut shell);
 
@@ -178,14 +179,14 @@ fn command_capture_survives_reflow_edits_and_scrolling() {
     let mut shell = ShellTracker::new();
 
     let events = terminal.feed_with(
-        format!("\x1b[2;4r\x1b[4;1H{PROMPT}echo ok{SUBMIT}"),
+        ["\x1b[2;4r\x1b[4;1H", PROMPT, "echo ok", SUBMIT],
         &mut shell,
     );
 
     // The existing engine breaks the logical wrap link when scrolling a region
     // whose bottom is above the screen bottom. The position still tracks, but
     // reconstruction must stay unknown rather than return a partial command.
-    assert!(!terminal.screen().line(2).unwrap().wrapped);
+    assert!(!terminal.screen().line(2).unwrap().is_wrapped());
     assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
 
     assert!(events.iter().any(
@@ -198,13 +199,12 @@ fn transcript_preserves_reflowed_output_and_editable_prompts_on_ed2() {
     let mut terminal = Terminal::new(24, 4).unwrap();
     let mut transcript = Transcript::new();
 
-    let mut lines =
-        terminal.feed_with(format!("previous output\r\n{PROMPT}wrong"), &mut transcript);
+    let mut lines = terminal.feed_with(["previous output\r\n", PROMPT, "wrong"], &mut transcript);
 
     lines.extend(terminal.resize_with(12, 6, &mut transcript));
 
     lines.extend(terminal.feed_with(
-        format!("\x1b[H\x1b[2J{PROMPT}corrected{SUBMIT}"),
+        ["\x1b[H\x1b[2J", PROMPT, "corrected", SUBMIT],
         &mut transcript,
     ));
 
@@ -218,7 +218,7 @@ fn clamped_cursor_before_input_makes_command_unavailable() {
     let mut shell = ShellTracker::new();
     terminal.feed_with(PROMPT, &mut shell);
     terminal.resize_with(2, 4, &mut shell);
-    let events = terminal.feed_with(format!("x{SUBMIT}"), &mut shell);
+    let events = terminal.feed_with(["x", SUBMIT], &mut shell);
     assert!(matches!(&events[0], ShellEvent::CommandSubmitted(command) if command.text.is_none()));
 }
 
@@ -227,11 +227,19 @@ fn repeated_ed2_clears_keep_evicted_editable_input_once() {
     let mut terminal = Terminal::new(8, 2).unwrap();
     let mut transcript = Transcript::new();
 
-    let input = format!(
-        "prior\r\n{PROMPT}an unfinished and very long command\x1b[H\x1b[2J\x1b[2J{PROMPT}ok{SUBMIT}\r\nresult"
+    let mut lines = terminal.feed_with(
+        [
+            "prior\r\n",
+            PROMPT,
+            "an unfinished and very long command\x1b[H\x1b[2J\x1b[2J",
+            PROMPT,
+            "ok",
+            SUBMIT,
+            "\r\nresult",
+        ],
+        &mut transcript,
     );
 
-    let mut lines = terminal.feed_with(&input, &mut transcript);
     lines.extend(transcript.finish(&terminal));
 
     assert_eq!(
@@ -263,7 +271,8 @@ fn ordinary_transcript_unwraps_and_ignores_alternate_screen_output() {
 fn unknown_exit_status_is_not_reported_as_success() {
     let mut terminal = Terminal::new(24, 4).unwrap();
     let mut shell = ShellTracker::new();
-    let events = terminal.feed_with(format!("{PROMPT}cmd{SUBMIT}\x1b]133;D\x07"), &mut shell);
+
+    let events = terminal.feed_with([PROMPT, "cmd", SUBMIT, "\x1b]133;D\x07"], &mut shell);
 
     assert!(matches!(
         events.last(),
@@ -290,8 +299,8 @@ fn reset_discards_editing_and_running_state() {
 fn missing_prompt_does_not_reuse_a_previous_commands_prompt() {
     let mut terminal = Terminal::new(24, 4).unwrap();
     let mut shell = ShellTracker::new();
-    terminal.feed_with(format!("{PROMPT}one{SUBMIT}\x1b]133;D;0\x07"), &mut shell);
-    let events = terminal.feed_with(format!("\r\n\x1b]133;B\x07two{SUBMIT}"), &mut shell);
+    terminal.feed_with([PROMPT, "one", SUBMIT, "\x1b]133;D;0\x07"], &mut shell);
+    let events = terminal.feed_with(["\r\n\x1b]133;B\x07two", SUBMIT], &mut shell);
 
     assert!(matches!(
         &events[0],
@@ -920,7 +929,7 @@ fn new_prompt_replaces_annotation_at_same_position() {
     let mut shell = ShellTracker::new();
 
     terminal.feed_with(
-        format!("{PROMPT}one{SUBMIT}\x1b]133;D;0\x07\r{PROMPT}"),
+        [PROMPT, "one", SUBMIT, "\x1b]133;D;0\x07\r", PROMPT],
         &mut shell,
     );
 
@@ -1454,7 +1463,7 @@ fn all_operation_forms_share_one_execution_lifecycle() {
 fn explicit_execution_preserves_unfinished_text_parsing() {
     let mut terminal = Terminal::new(8, 2).unwrap();
     terminal.feed("\x1b[31");
-    terminal.execute([Function::Print('x')]);
+    terminal.execute(Function::Print('x'));
     terminal.feed("mY");
     let cells = terminal.screen().line(0).unwrap().cells();
     assert_eq!(cells[0].char(), 'x');
