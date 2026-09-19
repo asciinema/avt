@@ -112,11 +112,6 @@ impl SavedCursorState {
     }
 }
 
-enum PrintResult {
-    Printed(usize),
-    NeedsRelocation,
-}
-
 /// Borrowed read-only view of a terminal screen, including visible rows and
 /// any retained scrollback. Copy; methods take self and return data bound to
 /// the underlying buffer lifetime.
@@ -630,8 +625,7 @@ impl Engine {
     // resizing
 
     pub fn resize_with(&mut self, cols: usize, rows: usize, observer: &mut impl Observer) {
-        let cols = cols.max(1);
-        let rows = rows.max(1);
+        debug_assert!(cols > 0 && rows > 0, "terminal size must be at least 1x1");
         let resized = (cols, rows) != self.size();
 
         match cols.cmp(&self.cols) {
@@ -772,21 +766,19 @@ impl Engine {
         ch = self.charsets[self.active_charset].translate(ch);
 
         match self.try_print(ch) {
-            PrintResult::Printed(width) => self.advance_cursor_after_print(width),
+            Some(width) => self.advance_cursor_after_print(width),
 
-            PrintResult::NeedsRelocation if self.auto_wrap_mode => {
-                self.wrap_and_print_at_line_start(ch, observer)
-            }
+            None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, observer),
 
-            PrintResult::NeedsRelocation => self.print_at_line_end(ch),
+            None => self.print_at_line_end(ch),
         }
 
         observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
-    fn try_print(&mut self, ch: char) -> PrintResult {
+    fn try_print(&mut self, ch: char) -> Option<usize> {
         if self.cursor.col >= self.cols {
-            return PrintResult::NeedsRelocation;
+            return None;
         }
 
         let pos = (self.cursor.col, self.cursor.row);
@@ -796,10 +788,7 @@ impl Engine {
             self.active_buffer_mut().shift_right(pos, 1, pen);
         }
 
-        match self.active_buffer_mut().print(pos, ch, pen) {
-            Some(width) => PrintResult::Printed(width),
-            None => PrintResult::NeedsRelocation,
-        }
+        self.active_buffer_mut().print(pos, ch, pen)
     }
 
     fn advance_cursor_after_print(&mut self, width: usize) {
@@ -1775,12 +1764,6 @@ fn as_usize(value: u16, default: usize) -> usize {
     if value == 0 { default } else { value as usize }
 }
 
-impl Default for Engine {
-    fn default() -> Self {
-        Self::new((80, 24), None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::{Engine, ScreenKind};
@@ -1879,7 +1862,7 @@ mod tests {
 
     #[test]
     fn execute_sgr() {
-        let mut term = Engine::default();
+        let mut term = Engine::new((1, 1), Some(0));
 
         term.execute_with(&sgr(SetBoldIntensity), &mut ());
 

@@ -71,7 +71,7 @@ impl Buffer {
         let mut current = String::new();
 
         for line in &self.lines {
-            current.push_str(&line.text());
+            current.extend(line.chars());
 
             if !line.wrapped {
                 text.push(current.trim_end().to_owned());
@@ -267,10 +267,15 @@ impl Buffer {
     ) -> VisualPosition {
         let old_cols = self.cols;
         let mut old_rows = self.rows;
-        let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
 
         if new_cols != old_cols {
+            let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
             self.lines = reflow(self.lines.drain(..), new_cols);
+
+            for line in &mut self.lines {
+                line.clip_marks();
+            }
+
             let line_count = self.lines.len();
 
             if line_count < old_rows {
@@ -325,10 +330,6 @@ impl Buffer {
         self.cols = new_cols;
         self.rows = new_rows;
         self.trim_needed = true;
-
-        for line in &mut self.lines {
-            line.clip_marks();
-        }
 
         cursor
     }

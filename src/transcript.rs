@@ -30,7 +30,7 @@ impl Transcript {
     }
 
     fn push(&mut self, line: &Line) {
-        self.pending.push_str(&line.text());
+        self.pending.extend(line.chars());
 
         if !line.is_wrapped() {
             self.ready.push(self.pending.trim_end().to_owned());

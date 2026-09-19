@@ -1,6 +1,6 @@
 use avt::Terminal;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use std::{fs, iter};
+use std::{fs, hint::black_box, iter};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("terminal: feed mixed in bulk", |b| {
@@ -70,6 +70,17 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("terminal: dump", |b| {
         b.iter_batched(setup_dump, run_dump, BatchSize::SmallInput)
     });
+
+    let mut terminal = Terminal::with_scrollback(80, 24, None).unwrap();
+    terminal.feed(iter::repeat_n("line\r\n", 10_000));
+
+    c.bench_function("terminal: resize height with scrollback", |b| {
+        b.iter(|| {
+            terminal.resize(80, 25);
+            terminal.resize(80, 24);
+            black_box(&terminal);
+        });
+    });
 }
 
 fn setup_feed(filename: &str) -> impl Fn() -> (Terminal, Vec<String>) + use<> {
@@ -131,7 +142,7 @@ fn setup_dump() -> Terminal {
 }
 
 fn run_dump(vt: Terminal) -> Terminal {
-    std::hint::black_box(vt.dump());
+    black_box(vt.dump());
 
     vt
 }
