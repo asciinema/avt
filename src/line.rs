@@ -308,6 +308,12 @@ impl Line {
     }
 
     pub(crate) fn contract(&mut self, mut len: usize) -> Option<Line> {
+        // A wide pair cannot fit on a one-column row, even after wrapping.
+        if len == 1 && self.cells[0].occupancy() == Occupancy::WideHead {
+            let pen = *self.cells[0].pen();
+            self.clear(0..2, &pen);
+        }
+
         if !self.wrapped {
             let trimmed_len = self.len() - self.trailers();
             self.cells.truncate(len.max(trimmed_len));

@@ -54,6 +54,20 @@ fn primary_reflows_when_reactivated_after_alternate_resize() {
 }
 
 #[test]
+fn resizing_a_wide_character_to_one_column_erases_it() {
+    for cols in [0, 1] {
+        let mut terminal = Terminal::new(2, 2).unwrap();
+        terminal.feed("界");
+        terminal.resize(cols, 2);
+        terminal.engine.verify();
+        assert_eq!(terminal.size(), (1, 2));
+        assert_eq!(terminal.screen().text(), ["", ""]);
+        terminal.feed("a");
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "a");
+    }
+}
+
+#[test]
 fn alternate_saved_cursor_persists_across_sessions() {
     let mut terminal = Terminal::new(8, 4).unwrap();
 
@@ -298,8 +312,8 @@ proptest! {
 
     #[test]
     fn prop_resizing(
-        new_cols in 2..15usize,
-        new_rows in 2..8usize,
+        new_cols in 1..15usize,
+        new_rows in 1..8usize,
         input1 in gen_input(25),
         input2 in gen_input(25)
     ) {

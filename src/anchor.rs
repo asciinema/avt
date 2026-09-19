@@ -126,6 +126,32 @@ mod tests {
     }
 
     #[test]
+    fn one_column_reflow_erases_wide_cells_and_their_anchors() {
+        let mut terminal = Terminal::new(4, 2).unwrap();
+        terminal.feed("\x1b[41m界\x1b[0mab");
+        let head = at(&mut terminal, 0, 0);
+        let tail = at(&mut terminal, 1, 0);
+        let narrow = at(&mut terminal, 2, 0);
+        terminal.resize(1, 5);
+        terminal.engine.verify();
+        assert!(terminal.resolve(&head).is_none());
+        assert!(terminal.resolve(&tail).is_none());
+        assert_eq!(pos(&terminal, &narrow), Some((0, 2)));
+
+        for line in terminal.screen().visible_lines().take(2) {
+            let cell = &line.cells()[0];
+            assert_eq!(cell.char(), ' ');
+            assert_eq!(cell.width(), 1);
+            assert_eq!(cell.pen().background(), Some(crate::Color::Indexed(1)));
+        }
+
+        terminal.resize(4, 2);
+        terminal.engine.verify();
+        assert_eq!(terminal.screen().text(), ["  ab", ""]);
+        assert_eq!(pos(&terminal, &narrow), Some((2, 0)));
+    }
+
+    #[test]
     fn cursor_end_boundary_moves_to_next_row_on_wrap() {
         let mut terminal = Terminal::new(4, 2).unwrap();
         terminal.feed("1234");
@@ -254,9 +280,9 @@ mod tests {
 
     proptest! {
         #[test]
-        fn reflow_preserves_the_cells_at_surviving_anchors(
+        fn prop_reflow_preserves_the_cells_at_surviving_anchors(
             chars in prop::collection::vec(prop::sample::select(vec!['a', 'b', '界', '日']), 1..20),
-            cols in 2..13usize,
+            cols in 1..13usize,
         ) {
             let mut terminal = Terminal::new(8, 32).unwrap();
             terminal.feed(chars);
@@ -279,12 +305,16 @@ mod tests {
                 .map(|(col, row, ch)| (at(&mut terminal, col, row), ch))
                 .collect();
 
-            for width in [cols, 8] {
-                terminal.resize(width, 32);
-                prop_assert!(anchors.iter().any(|(anchor, _)| terminal.resolve(anchor).is_some()));
+            for (width, rows) in [(cols, 96), (8, 192)] {
+                // Grow on each resize to retain reflowed rows instead of evicting them.
+                terminal.resize(width, rows);
 
                 for (anchor, ch) in &anchors {
-                    if let Some(position) = terminal.resolve(anchor) {
+                    if cols == 1 && matches!(ch, '界' | '日') {
+                        prop_assert!(terminal.resolve(anchor).is_none());
+                    } else {
+                        let position = terminal.resolve(anchor).unwrap();
+
                         let actual = terminal
                             .screen()
                             .line(position.row as usize)

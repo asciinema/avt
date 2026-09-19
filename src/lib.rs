@@ -191,7 +191,8 @@ impl Terminal {
     }
 
     /// Changes the virtual terminal's dimensions. Dimensions are clamped to at
-    /// least one.
+    /// least one. Reflow to one column erases wide characters that cannot fit,
+    /// preserving their style and invalidating anchors in the erased cells.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.resize_with(cols, rows, ());
     }

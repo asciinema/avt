@@ -971,11 +971,11 @@ fn input() -> impl Strategy<Value = String> {
 
 proptest! {
     #[test]
-    fn observed_execution_preserves_engine_state(
+    fn prop_observed_execution_preserves_engine_state(
         first in input(),
         second in input(),
-        cols in 2..20usize,
-        rows in 2..8usize
+        cols in 1..20usize,
+        rows in 1..8usize
     ) {
         let mut plain = Terminal::new(12, 5).unwrap();
         let mut observed = Terminal::new(12, 5).unwrap();
@@ -1544,11 +1544,11 @@ fn execution_hooks_borrow_original_sgr_parameters() {
 
 proptest! {
     #[test]
-    fn dirty_observer_is_batching_independent(
+    fn prop_dirty_observer_is_batching_independent(
         first in input(),
         second in input(),
-        cols in 2..20usize,
-        rows in 2..8usize
+        cols in 1..20usize,
+        rows in 1..8usize
     ) {
         let mut terminal = Terminal::new(12, 5).unwrap();
         let mut dirty = DirtyRows::new();
