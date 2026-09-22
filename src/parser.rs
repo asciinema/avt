@@ -981,13 +981,21 @@ impl Parser {
     }
 
     #[cfg(test)]
-    pub(crate) fn assert_eq(&self, other: &Parser) {
+    pub(crate) fn assert_continuation_equivalent(&self, other: &Parser) {
         use State::*;
 
         assert_eq!(self.state, other.state);
 
-        if self.state == CsiParam || self.state == DcsParam {
-            assert_eq!(self.params, other.params);
+        if matches!(
+            self.state,
+            CsiParam | CsiIntermediate | DcsParam | DcsIntermediate
+        ) {
+            assert_eq!(self.cur_param, other.cur_param);
+
+            assert_eq!(
+                self.params[..=self.cur_param],
+                other.params[..=other.cur_param]
+            );
         }
 
         if self.state == EscapeIntermediate
@@ -2431,13 +2439,13 @@ mod tests {
                 .collect::<Vec<_>>();
 
             prop_assert!(dump_output.is_empty());
-            parser1.assert_eq(&parser2);
+            parser1.assert_continuation_equivalent(&parser2);
 
             let suffix_output1 = emit(&mut parser1, suffix);
             let suffix_output2 = emit(&mut parser2, suffix);
 
             prop_assert_eq!(suffix_output1, suffix_output2);
-            parser1.assert_eq(&parser2);
+            parser1.assert_continuation_equivalent(&parser2);
         }
 
         #[test]

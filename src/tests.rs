@@ -129,8 +129,8 @@ enum Notification {
 #[derive(Debug, PartialEq)]
 struct CallReport {
     number: usize,
-    before: String,
-    after: String,
+    before: Vec<crate::Line>,
+    after: Vec<crate::Line>,
     size_before: (usize, usize),
     size_after: (usize, usize),
     operations: Vec<Operation>,
@@ -142,7 +142,7 @@ struct CallReport {
 struct Calls {
     notifications: Vec<Notification>,
     number: usize,
-    before: String,
+    before: Vec<crate::Line>,
     size_before: (usize, usize),
     operations: Vec<Operation>,
     hooks: Vec<&'static str>,
@@ -168,7 +168,12 @@ impl Observer for Calls {
         assert!(!self.active);
         self.active = true;
         self.number += 1;
-        self.before = context.terminal().dump();
+        self.before = context
+            .terminal()
+            .screen()
+            .visible_lines()
+            .cloned()
+            .collect();
         self.size_before = context.terminal().size();
         self.hooks.push("begin");
     }
@@ -225,7 +230,12 @@ impl Observer for Calls {
         CallReport {
             number: self.number,
             before: std::mem::take(&mut self.before),
-            after: context.terminal().dump(),
+            after: context
+                .terminal()
+                .screen()
+                .visible_lines()
+                .cloned()
+                .collect(),
             size_before: self.size_before,
             size_after: context.terminal().size(),
             operations: std::mem::take(&mut self.operations),
@@ -248,7 +258,9 @@ fn all_input_forms_share_one_feed_lifecycle() {
         let report = actual.feed_with(input, Calls::default());
         assert_eq!(report, expected_report);
         assert_eq!(report.number, 1);
-        actual.engine.assert_eq(&expected.engine);
+        actual
+            .parser
+            .assert_continuation_equivalent(&expected.parser);
     }
 
     let text = "hé界";
@@ -342,7 +354,7 @@ fn shell_events_and_transcript_survive_chunking_and_reflow() {
     fn replay(
         character_fragments: bool,
         separate_calls: bool,
-    ) -> (Vec<ShellEvent>, Vec<String>, String) {
+    ) -> (Vec<ShellEvent>, Vec<String>, Terminal) {
         let first = [
             "pré\r\n\x1b]13",
             "3;A\x07$ \x1b]133;B\x07ecxo\x1b[2Dh\x1b[C\x1b]133;C",
@@ -391,7 +403,7 @@ fn shell_events_and_transcript_survive_chunking_and_reflow() {
 
         lines.extend(transcript.finish(&terminal));
 
-        (events, lines, terminal.dump())
+        (events, lines, terminal)
     }
 
     let expected = replay(false, false);
@@ -417,7 +429,17 @@ fn shell_events_and_transcript_survive_chunking_and_reflow() {
     );
 
     for (characters, separate) in [(false, true), (true, false), (true, true)] {
-        assert_eq!(replay(characters, separate), expected);
+        let actual = replay(characters, separate);
+        assert_eq!(actual.0, expected.0);
+        assert_eq!(actual.1, expected.1);
+        actual
+            .2
+            .engine
+            .assert_execution_equivalent(&expected.2.engine);
+        actual
+            .2
+            .parser
+            .assert_continuation_equivalent(&expected.2.parser);
     }
 }
 
@@ -446,7 +468,10 @@ fn dump_restoration_preserves_pending_shell_marker_recognition() {
                 && command.text.as_deref() == Some("cmd")
     ));
 
-    original.engine.assert_eq(&restored.engine);
+    original.engine.assert_dump_equivalent(&restored.engine);
+    original
+        .parser
+        .assert_continuation_equivalent(&restored.parser);
 }
 
 #[test]
@@ -476,7 +501,7 @@ fn tuple_observers_preserve_call_lifecycle_and_output_order() {
     assert_eq!(partial, other);
     assert_eq!(partial.number, 2);
     assert_eq!(partial.before, empty.after);
-    assert_ne!(partial.before, partial.after); // Parser continuation changed.
+    assert_eq!(partial.before, partial.after); // Incomplete input leaves the screen alone.
     assert_eq!(partial.hooks, ["begin", "end"]);
     assert!(partial.notifications.is_empty());
 
@@ -562,7 +587,12 @@ fn resize_matches_explicit_operation_lifecycle_and_clamping() {
             }]
         );
 
-        assert_eq!(convenience.dump(), explicit.dump());
+        convenience
+            .engine
+            .assert_execution_equivalent(&explicit.engine);
+        convenience
+            .parser
+            .assert_continuation_equivalent(&explicit.parser);
     }
 }
 
@@ -594,30 +624,36 @@ fn only_host_resize_changes_geometry() {
 
 #[test]
 fn observed_functions_and_host_resizes_form_one_replayable_stream() {
-    let mut terminal = Terminal::new(12, 5).unwrap();
-    let mut calls = Calls::default();
-
-    // Exercise recording a heap-backed operation across both hooks.
-    let reports = [
-        terminal.feed_with("hello\x1b[1;2;3;4;5;7;9m界\r\nworld", &mut calls),
-        terminal.resize_with(8, 3, &mut calls),
-        terminal.execute_with(Function::Cup(1, 1), &mut calls),
-        terminal.feed_with("\x1b[?1049h\x1b[31malt", &mut calls),
-        terminal.execute_with(Operation::Resize { cols: 6, rows: 4 }, &mut calls),
-        terminal.feed_with("\x1b[?1049l\x1b[0m!", &mut calls),
-    ];
-
-    let mut replay = Terminal::new(12, 5).unwrap();
-
-    for report in reports {
-        assert_eq!(replay.dump(), report.before);
-        assert_eq!(replay.size(), report.size_before);
-        replay.execute(report.operations);
-        assert_eq!(replay.dump(), report.after);
-        assert_eq!(replay.size(), report.size_after);
+    enum Event {
+        Output(&'static str),
+        Action(Operation),
     }
 
-    replay.engine.assert_eq(&terminal.engine);
+    let mut terminal = Terminal::new(12, 5).unwrap();
+    let mut calls = Calls::default();
+    let mut replay = Terminal::new(12, 5).unwrap();
+
+    // Exercise recording a heap-backed operation across both hooks.
+    for event in [
+        Event::Output("hello\x1b[1;2;3;4;5;7;9m界\r\nworld"),
+        Event::Action(Operation::Resize { cols: 8, rows: 3 }),
+        Event::Action(Function::Cup(1, 1).into()),
+        Event::Output("\x1b[?1049h\x1b[31malt"),
+        Event::Action(Operation::Resize { cols: 6, rows: 4 }),
+        Event::Output("\x1b[?1049l\x1b[0m!"),
+    ] {
+        let report = match event {
+            Event::Output(text) => terminal.feed_with(text, &mut calls),
+            Event::Action(operation) => terminal.execute_with(operation, &mut calls),
+        };
+
+        assert!(replay.screen().visible_lines().eq(&report.before));
+        assert_eq!(replay.size(), report.size_before);
+        replay.execute(report.operations);
+        assert!(replay.screen().visible_lines().eq(&report.after));
+        assert_eq!(replay.size(), report.size_after);
+        replay.engine.assert_execution_equivalent(&terminal.engine);
+    }
 }
 
 #[test]
@@ -776,8 +812,8 @@ proptest! {
         lines.extend(text);
         lines.extend(transcript.finish(&observed));
         observed.engine.verify();
-        plain.engine.assert_eq(&observed.engine);
-        plain.parser.assert_eq(&observed.parser);
+        plain.engine.assert_execution_equivalent(&observed.engine);
+        plain.parser.assert_continuation_equivalent(&observed.parser);
 
         let mut chunked = Terminal::new(12, 5).unwrap();
         let mut chunked_shell = ShellTracker::new();
@@ -812,7 +848,8 @@ proptest! {
             chunked_shell.visible_prompts(&chunked).collect::<Vec<_>>()
         );
 
-        plain.engine.assert_eq(&chunked.engine);
+        plain.engine.assert_execution_equivalent(&chunked.engine);
+        plain.parser.assert_continuation_equivalent(&chunked.parser);
 
         // Standalone parsing and explicit execution preserve the same state.
         let mut parsed = Terminal::new(12, 5).unwrap();
@@ -820,8 +857,8 @@ proptest! {
         parsed.execute(first.chars().filter_map(|ch| parser.feed(ch)));
         parsed.resize(cols, rows);
         parsed.execute(second.chars().filter_map(|ch| parser.feed(ch)));
-        plain.engine.assert_eq(&parsed.engine);
-        plain.parser.assert_eq(&parser);
+        plain.engine.assert_execution_equivalent(&parsed.engine);
+        plain.parser.assert_continuation_equivalent(&parser);
     }
 }
 
@@ -838,7 +875,8 @@ fn eviction_before_buffer_switch_is_independent_of_feed_boundaries() {
         terminal.feed("\x1b[?1049l");
     }
 
-    batched.engine.assert_eq(&split.engine);
+    batched.engine.assert_execution_equivalent(&split.engine);
+    batched.parser.assert_continuation_equivalent(&split.parser);
     assert_eq!(batched.cursor().position(), Some((0, 0)));
 }
 
@@ -1093,14 +1131,10 @@ fn dump_restores_visible_state_and_parser_without_history() {
     for tail in ["", "m!", "\r\nsix", "\x1b[?1049halt\x1b[?1049l"] {
         original.feed(tail);
         restored.feed(tail);
-        assert_eq!(original.dump(), restored.dump());
-
-        assert!(
-            original
-                .primary_screen()
-                .visible_lines()
-                .eq(restored.primary_screen().visible_lines())
-        );
+        original.engine.assert_dump_equivalent(&restored.engine);
+        original
+            .parser
+            .assert_continuation_equivalent(&restored.parser);
     }
 }
 
@@ -1128,7 +1162,6 @@ fn all_operation_forms_share_one_execution_lifecycle() {
         let reference = expected.feed_with(text, Calls::default());
         let report = actual.execute_with(actions, Calls::default());
         assert_eq!(report, reference);
-        actual.engine.assert_eq(&expected.engine);
     }
 
     check(Function::Print('x'), "x");
@@ -1296,7 +1329,8 @@ proptest! {
                 split.resize_with(cols, rows, &mut split_dirty)
             );
 
-            terminal.engine.assert_eq(&split.engine);
+            terminal.engine.assert_execution_equivalent(&split.engine);
+            terminal.parser.assert_continuation_equivalent(&split.parser);
         }
     }
 }

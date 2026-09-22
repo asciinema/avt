@@ -110,12 +110,12 @@ fn dump_restores_saved_cursors_in_both_buffers() {
     let mut restored = Terminal::new(8, 4).unwrap();
     original.feed(["\x1b[3;4H\x1b7", "\x1b[?1047h", "\x1b[2;2H\x1b7"]);
     restored.feed(original.dump());
-    assert_terminals_eq(&original, &restored);
+    assert_dump_equivalent(&original, &restored);
 
     for input in ["\x1b8", "\x1b[?1047l\x1b8"] {
         original.feed(input);
         restored.feed(input);
-        assert_terminals_eq(&original, &restored);
+        assert_dump_equivalent(&original, &restored);
     }
 }
 
@@ -124,7 +124,7 @@ fn dump_initial() {
     let original = Terminal::new(10, 4).unwrap();
     let mut restored = Terminal::new(10, 4).unwrap();
     restored.feed(original.dump());
-    assert_terminals_eq(&original, &restored);
+    assert_dump_equivalent(&original, &restored);
 }
 
 #[test]
@@ -139,7 +139,7 @@ fn dump_modified() {
     ]);
 
     restored.feed(original.dump());
-    assert_terminals_eq(&original, &restored);
+    assert_dump_equivalent(&original, &restored);
 }
 
 #[test]
@@ -153,7 +153,7 @@ fn dump_with_file() {
             if index % step == 0 {
                 let mut restored = Terminal::new(cols, rows).unwrap();
                 restored.feed(original.dump());
-                assert_terminals_eq(&original, &restored);
+                assert_dump_equivalent(&original, &restored);
             }
         }
     }
@@ -331,7 +331,7 @@ proptest! {
         let mut restored = Terminal::new(10, 5).unwrap();
         original.feed(input);
         restored.feed(original.dump());
-        assert_terminals_eq(&original, &restored);
+        assert_dump_equivalent(&original, &restored);
     }
 }
 
@@ -346,7 +346,9 @@ fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError
     Ok((cols, rows, input, step))
 }
 
-fn assert_terminals_eq(original: &Terminal, restored: &Terminal) {
-    original.parser.assert_eq(&restored.parser);
-    original.engine.assert_eq(&restored.engine);
+fn assert_dump_equivalent(original: &Terminal, restored: &Terminal) {
+    original
+        .parser
+        .assert_continuation_equivalent(&restored.parser);
+    original.engine.assert_dump_equivalent(&restored.engine);
 }

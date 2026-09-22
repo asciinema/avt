@@ -732,7 +732,8 @@ impl Engine {
     }
 
     #[cfg(test)]
-    pub(crate) fn assert_eq(&self, other: &Engine) {
+    pub(crate) fn assert_dump_equivalent(&self, other: &Engine) {
+        assert_eq!(self.size(), other.size());
         assert_eq!(self.active, other.active);
         assert_eq!(self.cursor, other.cursor);
         assert_eq!(self.pen, other.pen);
@@ -760,6 +761,18 @@ impl Engine {
                 other.alternate_buffer.view().collect::<Vec<_>>()
             );
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn assert_execution_equivalent(&self, other: &Engine) {
+        self.assert_dump_equivalent(other);
+        assert_eq!(self.scrollback_limit, other.scrollback_limit);
+
+        self.primary_buffer
+            .assert_execution_equivalent(&other.primary_buffer);
+
+        self.alternate_buffer
+            .assert_execution_equivalent(&other.alternate_buffer);
     }
 
     fn print(&mut self, mut ch: char, observer: &mut impl Observer) {

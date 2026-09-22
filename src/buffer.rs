@@ -438,6 +438,16 @@ impl Buffer {
     }
 
     #[cfg(test)]
+    pub(crate) fn assert_execution_equivalent(&self, other: &Self) {
+        assert_eq!((self.cols, self.rows), (other.cols, other.rows));
+        assert_eq!(self.scrollback_limit, other.scrollback_limit);
+        assert_eq!(self.front_wrapped, other.front_wrapped);
+        // Line equality excludes tracking registrations. Allocation layout and
+        // the trim optimization flag are not part of execution equivalence.
+        assert_eq!(self.lines, other.lines);
+    }
+
+    #[cfg(test)]
     pub fn add_scrollback(&mut self, n: usize) {
         let mut line = Line::blank(self.cols, Pen::default());
 
