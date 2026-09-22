@@ -21,7 +21,6 @@ rust-version = "1.86.0"
 unicode-width = "0.2"
 
 [dev-dependencies]
-rand = "0.10"
 proptest = "1"
 criterion = "0.8"
 pretty_assertions = "1.0"

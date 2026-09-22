@@ -257,3 +257,257 @@ fn command_text(terminal: &Terminal, anchor: &Anchor) -> Option<String> {
 
     None
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::{PROMPT, SUBMIT};
+
+    #[test]
+    fn captures_commands_and_status_before_same_feed_overwrite() {
+        let input = format!(
+            "{PROMPT}ecxo\x1b[2Dh\x1b[C{SUBMIT}\x1b[2J\x1b[Hresult\x1b]133;D;7\x07{PROMPT}cancel\x1b]133;D\x07"
+        );
+
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let events = terminal.feed_with(input, ShellTracker::new());
+
+        let command = events
+            .iter()
+            .find_map(|event| match event {
+                ShellEvent::CommandSubmitted(command) => Some(command),
+                _ => None,
+            })
+            .unwrap();
+
+        assert_eq!(command.text.as_deref(), Some("echo"));
+        assert_eq!(command.prompt, Some(PromptId(0)));
+
+        assert!(events.contains(&ShellEvent::CommandFinished {
+            id: command.id,
+            exit_status: Some(7)
+        }));
+
+        assert!(events.contains(&ShellEvent::CommandCancelled {
+            prompt: Some(PromptId(1))
+        }));
+    }
+
+    #[test]
+    fn wraps_and_scrolls_command_while_start_is_retained() {
+        let mut terminal = Terminal::new(6, 3).unwrap();
+        let mut shell = ShellTracker::new();
+
+        let events = terminal.feed_with(["old\r\nold\r\n", PROMPT, "echo 界", SUBMIT], &mut shell);
+
+        let texts: Vec<_> = events
+            .iter()
+            .filter_map(|event| match event {
+                ShellEvent::CommandSubmitted(command) => Some(command.text.as_deref()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(texts, [Some("echo 界")]);
+    }
+
+    #[test]
+    fn unavailable_input_is_explicit() {
+        for input in [
+            format!("missing B{SUBMIT}"),
+            format!("{PROMPT}first\r\nsecond{SUBMIT}"),
+            format!("{PROMPT}lost\x1b[2J{SUBMIT}"),
+            format!("{PROMPT}long enough to evict the start of input completely{SUBMIT}"),
+        ] {
+            let mut terminal = Terminal::new(8, 3).unwrap();
+            let mut shell = ShellTracker::new();
+            let events = terminal.feed_with(&input, &mut shell);
+
+            let command = events
+                .iter()
+                .find_map(|event| match event {
+                    ShellEvent::CommandSubmitted(command) => Some(command),
+                    _ => None,
+                })
+                .unwrap();
+
+            assert!(command.text.is_none(), "{input:?}");
+
+            assert_eq!(
+                command.prompt,
+                input.starts_with(PROMPT).then_some(PromptId(0))
+            );
+        }
+    }
+
+    #[test]
+    fn command_capture_survives_reflow_edits_and_scrolling() {
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut shell = ShellTracker::new();
+        terminal.feed_with([PROMPT, "echo ok"], &mut shell);
+        terminal.resize_with(4, 6, &mut shell);
+        let events = terminal.feed_with(SUBMIT, &mut shell);
+
+        assert!(matches!(
+            &events[0],
+            ShellEvent::CommandSubmitted(command) if command.text.as_deref() == Some("echo ok")
+        ));
+
+        for input in [
+            format!("{PROMPT}echo\r\x1b[P{SUBMIT}"),
+            format!("\x1b[2;4r\x1b[4;1H{PROMPT}echo{SUBMIT}"),
+        ] {
+            let mut terminal = Terminal::new(6, 5).unwrap();
+            let mut shell = ShellTracker::new();
+            let events = terminal.feed_with(&input, &mut shell);
+
+            assert!(events.iter().any(|event| matches!(
+                event,
+                ShellEvent::CommandSubmitted(command) if command.text.as_deref() == Some("echo")
+            )));
+        }
+
+        let mut terminal = Terminal::new(6, 5).unwrap();
+        let mut shell = ShellTracker::new();
+
+        let events = terminal.feed_with(
+            ["\x1b[2;4r\x1b[4;1H", PROMPT, "echo ok", SUBMIT],
+            &mut shell,
+        );
+
+        // Scrolling a region above the screen bottom breaks the logical wrap link.
+        // Reconstruction must stay unknown rather than return a partial command.
+        assert!(!terminal.screen().line(2).unwrap().is_wrapped());
+        assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
+
+        assert!(events.iter().any(
+            |event| matches!(event, ShellEvent::CommandSubmitted(command) if command.text.is_none())
+        ));
+    }
+
+    #[test]
+    fn clamped_cursor_before_input_makes_command_unavailable() {
+        let mut terminal = Terminal::new(8, 4).unwrap();
+        let mut shell = ShellTracker::new();
+        terminal.feed_with(PROMPT, &mut shell);
+        terminal.resize_with(2, 4, &mut shell);
+        let events = terminal.feed_with(["x", SUBMIT], &mut shell);
+
+        assert!(
+            matches!(&events[0], ShellEvent::CommandSubmitted(command) if command.text.is_none())
+        );
+    }
+
+    #[test]
+    fn unknown_exit_status_is_not_reported_as_success() {
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut shell = ShellTracker::new();
+
+        let events = terminal.feed_with([PROMPT, "cmd", SUBMIT, "\x1b]133;D\x07"], &mut shell);
+
+        assert!(matches!(
+            events.last(),
+            Some(ShellEvent::CommandFinished {
+                exit_status: None,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn reset_discards_editing_and_running_state() {
+        for input in [format!("{PROMPT}draft"), format!("{PROMPT}cmd{SUBMIT}")] {
+            let mut terminal = Terminal::new(24, 4).unwrap();
+            let mut shell = ShellTracker::new();
+            terminal.feed_with(input, &mut shell);
+            terminal.execute_with(Function::Ris, &mut shell);
+            assert!(shell.visible_prompts(&terminal).next().is_none());
+            assert!(terminal.feed_with("\x1b]133;D\x07", &mut shell).is_empty());
+        }
+    }
+
+    #[test]
+    fn missing_prompt_does_not_reuse_a_previous_commands_prompt() {
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut shell = ShellTracker::new();
+        terminal.feed_with([PROMPT, "one", SUBMIT, "\x1b]133;D;0\x07"], &mut shell);
+        let events = terminal.feed_with(["\r\n\x1b]133;B\x07two", SUBMIT], &mut shell);
+
+        assert!(matches!(
+            &events[0],
+            ShellEvent::CommandSubmitted(command)
+                if command.prompt.is_none() && command.text.as_deref() == Some("two")
+        ));
+    }
+
+    #[test]
+    fn new_prompt_replaces_annotation_at_same_position() {
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut shell = ShellTracker::new();
+
+        terminal.feed_with(
+            [PROMPT, "one", SUBMIT, "\x1b]133;D;0\x07\r", PROMPT],
+            &mut shell,
+        );
+
+        let prompts: Vec<_> = shell.visible_prompts(&terminal).collect();
+        assert_eq!(prompts.len(), 1);
+        assert_eq!(prompts[0].id, PromptId(1));
+        assert_eq!(prompts[0].outcome, PromptOutcome::Editing);
+    }
+
+    #[test]
+    fn inactive_buffer_anchors_survive_until_that_buffer_is_replaced() {
+        let mut terminal = Terminal::new(12, 5).unwrap();
+        terminal.feed("\x1b]133;A\x07$ abcdefgh");
+        let mut shell = ShellTracker::new();
+        terminal.feed_with("\r\n\x1b]133;A\x07$ ", &mut shell);
+        let primary = terminal.anchor_at_cursor();
+        terminal.feed_with("\x1b[?1049h", &mut shell);
+
+        assert_eq!(
+            terminal.resolve(&primary).unwrap().screen,
+            ScreenKind::Primary
+        );
+
+        assert_eq!(shell.visible_prompts(&terminal).count(), 0);
+        let alternate = terminal.anchor_at_cursor();
+        terminal.resize_with(6, 6, &mut shell);
+        terminal.feed_with("\x1b[?1049l", &mut shell);
+        assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
+        assert!(terminal.resolve(&primary).is_some());
+        terminal.feed_with("\x1b[?1049h", &mut shell);
+        assert!(terminal.resolve(&alternate).is_none());
+    }
+
+    #[test]
+    fn outcomes_remain_associated_with_their_original_prompt() {
+        let mut terminal = Terminal::new(20, 5).unwrap();
+        let mut shell = ShellTracker::new();
+
+        terminal.feed_with(
+            "\x1b]133;A\x07$ one\x1b]133;C\x07\r\n\x1b]133;D;7\x07\x1b]133;A\x07$ two",
+            &mut shell,
+        );
+
+        let prompts: Vec<_> = shell.visible_prompts(&terminal).collect();
+
+        assert_eq!(
+            prompts[0].outcome,
+            PromptOutcome::Finished {
+                exit_status: Some(7)
+            }
+        );
+
+        assert_eq!(prompts[1].outcome, PromptOutcome::Editing);
+        terminal.feed_with("\x1b]133;D\x07", &mut shell);
+
+        assert_eq!(
+            shell.visible_prompts(&terminal).last().unwrap().outcome,
+            PromptOutcome::Cancelled
+        );
+
+        terminal.feed_with("\x1b[H\x1b[2J", &mut shell);
+        assert_eq!(shell.visible_prompts(&terminal).count(), 0);
+    }
+}

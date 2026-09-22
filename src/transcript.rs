@@ -54,6 +54,7 @@ impl Observer for Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::{PROMPT, SUBMIT};
 
     #[test]
     fn joins_wrapped_rows_preserving_internal_spaces() {
@@ -76,6 +77,165 @@ mod tests {
         );
 
         assert_eq!(transcript.finish(&terminal), ["a", "b", "c"]);
+    }
+
+    #[test]
+    fn transcript_preserves_reflowed_output_and_editable_prompts_on_ed2() {
+        let mut terminal = Terminal::new(24, 4).unwrap();
+        let mut transcript = Transcript::new();
+
+        let mut lines =
+            terminal.feed_with(["previous output\r\n", PROMPT, "wrong"], &mut transcript);
+
+        lines.extend(terminal.resize_with(12, 6, &mut transcript));
+
+        lines.extend(terminal.feed_with(
+            ["\x1b[H\x1b[2J", PROMPT, "corrected", SUBMIT],
+            &mut transcript,
+        ));
+
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, ["previous output", "$ wrong", "$ corrected"]);
+    }
+
+    #[test]
+    fn repeated_ed2_clears_keep_evicted_editable_input_once() {
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        let mut transcript = Transcript::new();
+
+        let mut lines = terminal.feed_with(
+            [
+                "prior\r\n",
+                PROMPT,
+                "an unfinished and very long command\x1b[H\x1b[2J\x1b[2J",
+                PROMPT,
+                "ok",
+                SUBMIT,
+                "\r\nresult",
+            ],
+            &mut transcript,
+        );
+
+        lines.extend(transcript.finish(&terminal));
+
+        assert_eq!(
+            lines,
+            [
+                "prior",
+                "$ an unfinished and very long command",
+                "$ ok",
+                "result"
+            ]
+        );
+    }
+
+    #[test]
+    fn ordinary_transcript_unwraps_and_ignores_alternate_screen_output() {
+        let mut terminal = Terminal::new(5, 2).unwrap();
+        let mut transcript = Transcript::new();
+
+        let mut lines = terminal.feed_with(
+            "abcdefgh\r\nsecond\r\n\x1b[?1049hignored\r\nignored\r\n\x1b[?1049lthird",
+            &mut transcript,
+        );
+
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, ["abcdefgh", "second", "third"]);
+    }
+
+    #[test]
+    fn unfinished_evicted_line_survives_feed_boundaries() {
+        let mut terminal = Terminal::new(4, 1).unwrap();
+        let mut transcript = Transcript::new();
+        assert!(terminal.feed_with("abcdE", &mut transcript).is_empty());
+        assert!(terminal.feed_with("", &mut transcript).is_empty());
+        assert_eq!(terminal.feed_with("F\r\n", &mut transcript), ["abcdEF"]);
+        assert!(transcript.finish(&terminal).is_empty());
+    }
+
+    #[test]
+    fn repeated_ed2_preserves_transcript_order_across_retention_limits() {
+        for limit in [Some(0), Some(1), Some(2), Some(10), None] {
+            for prompt in ["$ ", PROMPT] {
+                let input = format!(
+                    "aa\r\nbb\r\ncc\r\n{prompt}wrong\x1b[H\x1b[2J\x1b[2J{prompt}right\x1b[H\x1b[2J{prompt}done"
+                );
+
+                for chunked in [false, true] {
+                    let mut terminal = Terminal::with_scrollback(12, 2, limit).unwrap();
+                    let mut transcript = Transcript::new();
+                    let mut lines = Vec::new();
+
+                    if chunked {
+                        for ch in input.chars() {
+                            lines.extend(terminal.feed_with(ch, &mut transcript));
+                        }
+                    } else {
+                        lines.extend(terminal.feed_with(&input, &mut transcript));
+                    }
+
+                    lines.extend(transcript.finish(&terminal));
+                    assert_eq!(lines, ["aa", "bb", "cc", "$ wrong", "$ right", "$ done"]);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ed2_after_explicit_scrolling_preserves_each_row_once() {
+        for limit in [Some(0), Some(1), Some(10), None] {
+            let mut terminal = Terminal::with_scrollback(12, 6, limit).unwrap();
+            let mut transcript = Transcript::new();
+
+            let mut lines = terminal.feed_with(
+                "one\r\ntwo\r\n$ draft\x1b[2S\x1b[2A\x1b[H\x1b[2J$ new",
+                &mut transcript,
+            );
+
+            lines.extend(transcript.finish(&terminal));
+            assert_eq!(lines, ["one", "two", "$ draft", "$ new"]);
+        }
+    }
+
+    #[test]
+    fn ed2_keeps_blank_soft_wrap_terminators_even_after_prefix_eviction() {
+        for limit in [Some(0), Some(1), None] {
+            for rows in [1, 4] {
+                for text in ["abcd ", "     "] {
+                    let mut terminal = Terminal::with_scrollback(4, rows, limit).unwrap();
+                    let mut transcript = Transcript::new();
+                    let mut lines = terminal.feed_with(text, &mut transcript);
+                    lines.extend(terminal.feed_with("\x1b[H\x1b[2J\x1b[2Jnew", &mut transcript));
+                    lines.extend(transcript.finish(&terminal));
+
+                    assert_eq!(
+                        lines,
+                        [text.trim_end(), "new"],
+                        "{limit:?}, {rows}, {text:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn partial_ed_preserves_history_without_archiving_screen() {
+        for clear in ["\x1b[H\x1b[J", "\x1b[2;8H\x1b[1J"] {
+            let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
+            let mut transcript = Transcript::new();
+            terminal.feed_with("history\r\none\r\ntwo", &mut transcript);
+            assert!(terminal.feed_with(clear, &mut transcript).is_empty());
+            assert_eq!(terminal.primary_screen().all_lines().count(), 3);
+
+            assert!(
+                terminal
+                    .screen()
+                    .visible_lines()
+                    .all(|line| line.is_blank())
+            );
+
+            assert_eq!(transcript.finish(&terminal), ["history"]);
+        }
     }
 
     #[test]

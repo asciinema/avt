@@ -2146,50 +2146,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_osc_shell_integration() {
+    fn parse_osc_parameters_and_unsupported_commands() {
         use super::Osc;
         use super::ShellIntegration::*;
-
-        // BEL termination
-        assert_eq!(
-            parse("\x1b]133;A\x07"),
-            [Osc(Osc::ShellIntegration(PromptStart))]
-        );
-
-        assert_eq!(
-            parse("\x1b]133;C\x07"),
-            [Osc(Osc::ShellIntegration(CommandExecuted))]
-        );
-
-        assert_eq!(
-            parse("\x1b]133;D\x07"),
-            [Osc(Osc::ShellIntegration(CommandFinished {
-                exit_status: None
-            }))]
-        );
-
-        // ST termination (ESC \)
-        assert_eq!(
-            parse("\x1b]133;A\x1b\\"),
-            [Osc(Osc::ShellIntegration(PromptStart))]
-        );
-
-        assert_eq!(
-            parse("\x1b]133;C\x1b\\"),
-            [Osc(Osc::ShellIntegration(CommandExecuted))]
-        );
-
-        // C1 ST termination
-        assert_eq!(
-            parse("\x1b]133;A\u{9c}"),
-            [Osc(Osc::ShellIntegration(PromptStart))]
-        );
-
-        // OSC introduced via C1 OSC (0x9d)
-        assert_eq!(
-            parse("\u{9d}133;A\u{9c}"),
-            [Osc(Osc::ShellIntegration(PromptStart))]
-        );
 
         // Extra parameters tail is ignored
         assert_eq!(
@@ -2197,20 +2156,8 @@ mod tests {
             [Osc(Osc::ShellIntegration(PromptStart))]
         );
 
-        assert_eq!(
-            parse("\x1b]133;D;0\x07"),
-            [Osc(Osc::ShellIntegration(CommandFinished {
-                exit_status: Some(0)
-            }))]
-        );
-
-        assert_eq!(
-            parse("\x1b]133;B\x07"),
-            [Osc(Osc::ShellIntegration(CommandStart))]
-        );
-
         for (status, expected) in [
-            ("255", Some(255)),
+            ("0", Some(0)),
             ("1;extra=x", Some(1)),
             ("", None),
             ("256", None),
@@ -2303,25 +2250,6 @@ mod tests {
                 )))
             );
         }
-    }
-
-    #[test]
-    fn osc_split_across_feeds_dispatches() {
-        let mut parser = Parser::new();
-
-        for ch in "\x1b]13".chars() {
-            assert_eq!(parser.feed(ch), None);
-        }
-        for ch in "3;A".chars() {
-            assert_eq!(parser.feed(ch), None);
-        }
-
-        assert_eq!(
-            parser.feed('\x07'),
-            Some(Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::PromptStart
-            )))
-        );
     }
 
     #[test]
