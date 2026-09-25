@@ -2444,6 +2444,26 @@ mod tests {
     }
 
     #[test]
+    fn erased_cells_keep_only_background() {
+        let mut term = Terminal::new((6, 1), None);
+
+        feed(&mut term, "ab");
+        term.execute(sgr(SetUnderline));
+        term.execute(sgr(SetInverse));
+        term.execute(sgr(SetBackgroundColor(Color::Indexed(4))));
+        term.execute(El(ElScope::ToRight));
+
+        let line = term.view().next().unwrap();
+
+        for cell in &line.cells()[2..] {
+            let pen = cell.pen();
+            assert_eq!(pen.background(), Some(Color::Indexed(4)));
+            assert!(!pen.is_underline());
+            assert!(!pen.is_inverse());
+        }
+    }
+
+    #[test]
     fn execute_el() {
         let mut term = build_term(4, 2, 2, 0, "abcd");
 
@@ -2853,9 +2873,12 @@ mod tests {
         let mut term = Terminal::new((4, 6), None);
         feed(&mut term, "aa\r\nbb\r\ncc\r\ndd\r\nee\r\nff");
         term.execute(sgr(SetBoldIntensity));
+        term.execute(sgr(SetBackgroundColor(Color::Indexed(2))));
         term.execute(Su(2));
         assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
-        assert!(term.view().last().unwrap()[0].pen().is_bold());
+        let blank = term.view().last().unwrap()[0].pen();
+        assert_eq!(blank.background(), Some(Color::Indexed(2)));
+        assert!(!blank.is_bold());
 
         let mut term = Terminal::new((4, 6), None);
 

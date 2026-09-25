@@ -25,7 +25,16 @@ impl Cell {
         Cell(ch, occupancy, pen)
     }
 
+    /// A blank (erased) cell. Like xterm and other terminals with
+    /// background color erase, only the pen's background carries over.
+    /// Underline, inverse, bold and other attributes don't apply to blank
+    /// space.
     pub(crate) fn blank(pen: Pen) -> Self {
+        let pen = Pen {
+            background: pen.background,
+            ..Pen::default()
+        };
+
         Cell(' ', Occupancy::Single, pen)
     }
 

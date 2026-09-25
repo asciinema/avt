@@ -48,14 +48,14 @@ impl Line {
         let end_col = range.end;
 
         if self.cells[start_col].occupancy() == Occupancy::WideTail {
-            self.cells[start_col - 1].set(' ', Occupancy::Single, *pen);
+            self.cells[start_col - 1] = Cell::blank(*pen);
         }
 
         self.cells[range].fill(Cell::blank(*pen));
 
         if let Some(next_cell) = self.cells.get_mut(end_col) {
             if next_cell.occupancy() == Occupancy::WideTail {
-                next_cell.set(' ', Occupancy::Single, *pen);
+                *next_cell = Cell::blank(*pen);
             }
         }
     }
@@ -154,8 +154,8 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
-            cur_cell.set(' ', Occupancy::Single, pen);
-            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+            *cur_cell = Cell::blank(pen);
+            self.cells[col - 1] = Cell::blank(pen);
         }
 
         self.cells[col..].rotate_right(n);
@@ -163,17 +163,14 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
-            cur_cell.set(' ', Occupancy::Single, pen);
-            self.cells
-                .last_mut()
-                .unwrap()
-                .set(' ', Occupancy::Single, pen);
+            *cur_cell = Cell::blank(pen);
+            *self.cells.last_mut().unwrap() = Cell::blank(pen);
         }
     }
 
     pub(crate) fn delete(&mut self, col: usize, n: usize, pen: &Pen) {
         if self.cells[col].occupancy() == Occupancy::WideTail {
-            self.cells[col - 1].set(' ', Occupancy::Single, *pen);
+            self.cells[col - 1] = Cell::blank(*pen);
         }
 
         self.cells[col..].rotate_left(n);
@@ -181,7 +178,7 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
-            cur_cell.set(' ', Occupancy::Single, *pen);
+            *cur_cell = Cell::blank(*pen);
         }
 
         let fill_start = self.cells.len() - n;
