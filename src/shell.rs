@@ -188,28 +188,32 @@ impl Observer for ShellTracker {
         } else if matches!(function, Function::Print(_) | Function::Rep(_)) {
             // Reject hard multiline input or writing before a known boundary.
             // For example, resize can clamp the cursor before a trailing anchor.
-            if let Some(start) = self
-                .input
-                .as_ref()
-                .and_then(|anchor| context.resolve(anchor))
-            {
-                let terminal = context.terminal();
-                let cursor = terminal.cursor();
+            let Some(anchor) = &self.input else {
+                return;
+            };
 
-                if start.screen == terminal.active_screen_kind() && start.row >= 0 {
-                    let before_start = (cursor.row as isize, cursor.col) < (start.row, start.col);
+            let Some(start) = context.resolve(anchor) else {
+                self.input = None;
 
-                    let hard_break = cursor.row as isize > start.row
-                        && terminal
-                            .screen()
-                            .visible_lines()
-                            .skip(start.row as usize)
-                            .take(cursor.row - start.row as usize)
-                            .any(|line| !line.is_wrapped());
+                return;
+            };
 
-                    if before_start || hard_break {
-                        self.input = None;
-                    }
+            let terminal = context.terminal();
+            let cursor = terminal.cursor();
+
+            if start.screen == terminal.active_screen_kind() && start.row >= 0 {
+                let before_start = (cursor.row as isize, cursor.col) < (start.row, start.col);
+
+                let hard_break = cursor.row as isize > start.row
+                    && terminal
+                        .screen()
+                        .visible_lines()
+                        .skip(start.row as usize)
+                        .take(cursor.row - start.row as usize)
+                        .any(|line| !line.is_wrapped());
+
+                if before_start || hard_break {
+                    self.input = None;
                 }
             }
         }
@@ -317,6 +321,7 @@ mod tests {
             format!("missing B{SUBMIT}"),
             format!("{PROMPT}first\r\nsecond{SUBMIT}"),
             format!("{PROMPT}lost\x1b[2J{SUBMIT}"),
+            format!("{PROMPT}draft\r\x1b[2Knew{SUBMIT}"),
             format!("{PROMPT}long enough to evict the start of input completely{SUBMIT}"),
         ] {
             let mut terminal = Terminal::new(8, 3).unwrap();
