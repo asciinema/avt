@@ -607,18 +607,16 @@ impl Engine {
 
     // buffer switching
 
-    fn switch_to_alternate_buffer(&mut self, observer: &mut impl Observer) {
+    fn switch_to_alternate_buffer(&mut self) {
         if let ScreenKind::Primary = self.active {
             self.active = ScreenKind::Alternate;
             self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
-            observer.dirty(0..self.rows);
         }
     }
 
-    fn switch_to_primary_buffer(&mut self, observer: &mut impl Observer) {
+    fn switch_to_primary_buffer(&mut self) {
         if let ScreenKind::Alternate = self.active {
             self.active = ScreenKind::Primary;
-            observer.dirty(0..self.rows);
         }
     }
 
@@ -626,7 +624,10 @@ impl Engine {
 
     pub fn resize_with(&mut self, cols: usize, rows: usize, observer: &mut impl Observer) {
         debug_assert!(cols > 0 && rows > 0, "terminal size must be at least 1x1");
-        let resized = (cols, rows) != self.size();
+
+        if (cols, rows) == self.size() {
+            return;
+        }
 
         match cols.cmp(&self.cols) {
             Ordering::Less => self.tabs.contract(cols),
@@ -644,10 +645,7 @@ impl Engine {
         self.cols = cols;
         self.rows = rows;
 
-        if resized {
-            observer.resized(cols, rows);
-        }
-
+        observer.resized(cols, rows);
         self.reflow(observer);
     }
 
@@ -1325,7 +1323,7 @@ impl Engine {
                 }
 
                 AltScreenBuffer => {
-                    self.switch_to_alternate_buffer(observer);
+                    self.switch_to_alternate_buffer();
                     self.reflow(observer);
                 }
 
@@ -1335,7 +1333,7 @@ impl Engine {
 
                 SaveCursorAltScreenBuffer => {
                     self.save_cursor();
-                    self.switch_to_alternate_buffer(observer);
+                    self.switch_to_alternate_buffer();
                     self.reflow(observer);
                 }
             }
@@ -1365,7 +1363,7 @@ impl Engine {
                 }
 
                 AltScreenBuffer => {
-                    self.switch_to_primary_buffer(observer);
+                    self.switch_to_primary_buffer();
                     self.reflow(observer);
                 }
 
@@ -1374,7 +1372,7 @@ impl Engine {
                 }
 
                 SaveCursorAltScreenBuffer => {
-                    self.switch_to_primary_buffer(observer);
+                    self.switch_to_primary_buffer();
                     self.restore_cursor();
                     self.reflow(observer);
                 }

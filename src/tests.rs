@@ -522,8 +522,7 @@ fn tuple_observers_preserve_call_lifecycle_and_output_order() {
     assert_eq!(resize.before, resize.after);
     assert_eq!(resize.hooks, ["begin", "before", "after", "end"]);
     assert_eq!(resize.operations, [Operation::Resize { cols: 3, rows: 2 }]);
-    // The engine requests a repaint even when the requested size is unchanged.
-    assert_eq!(resize.notifications, [Notification::Dirty(0..2)]);
+    assert!(resize.notifications.is_empty());
 
     let (reset, other) = terminal.execute_with(Function::Ris, (&mut first, &mut second));
     assert_eq!(reset, other);

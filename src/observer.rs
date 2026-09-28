@@ -47,7 +47,8 @@ pub trait Observer {
 
     /// Actual geometry changes from caller-requested resize actions. Runs
     /// before dirty notifications referring to the new dimensions. An
-    /// unchanged-size request still has action hooks but no `resized` callback.
+    /// unchanged-size request still has action hooks but no resize or dirty
+    /// callbacks.
     fn resized(&mut self, _cols: usize, _rows: usize) {}
 
     /// Visible rows that may need repainting. Ranges can overlap or repeat, and
