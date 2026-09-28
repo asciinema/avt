@@ -247,10 +247,6 @@ impl Line {
     pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> (bool, Option<Line>) {
         let mut needed = len - self.len();
 
-        if needed == 0 {
-            return (true, Some(other));
-        }
-
         if !self.wrapped {
             self.expand(len, &Pen::default());
 

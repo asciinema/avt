@@ -79,10 +79,6 @@ impl Buffer {
             }
         }
 
-        if !current.is_empty() {
-            text.push(current.trim_end().to_owned());
-        }
-
         text
     }
 
@@ -525,12 +521,9 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
 
                 Greater => match self.iter.next() {
                     Some(next_line) => match line.extend(next_line, self.cols) {
-                        (true, Some(rest)) => {
-                            self.rest = Some(rest);
-                            return Some(line);
-                        }
+                        (true, rest) => {
+                            self.rest = rest;
 
-                        (true, None) => {
                             return Some(line);
                         }
 

@@ -18,10 +18,6 @@ impl Transcript {
             self.push(line);
         }
 
-        if !self.pending.is_empty() {
-            self.ready.push(self.pending.trim_end().to_owned());
-        }
-
         while self.ready.last().is_some_and(String::is_empty) {
             self.ready.pop();
         }
