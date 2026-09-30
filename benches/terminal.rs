@@ -81,6 +81,30 @@ pub fn criterion_benchmark(c: &mut Criterion) {
             black_box(&terminal);
         });
     });
+
+    terminal.feed("\x1b[?1049h");
+
+    c.bench_function(
+        "terminal: resize height with hidden primary scrollback",
+        |b| {
+            b.iter(|| {
+                terminal.resize(80, 25);
+                terminal.resize(80, 24);
+                black_box(&terminal);
+            });
+        },
+    );
+
+    c.bench_function(
+        "terminal: resize width with hidden primary scrollback",
+        |b| {
+            b.iter(|| {
+                terminal.resize(79, 24);
+                terminal.resize(80, 24);
+                black_box(&terminal);
+            });
+        },
+    );
 }
 
 fn setup_feed(filename: &str) -> impl Fn() -> (Terminal, Vec<String>) + use<> {

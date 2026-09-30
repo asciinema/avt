@@ -661,6 +661,7 @@ fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
         anchors: Vec<crate::Anchor>,
         addresses: Vec<*const crate::Cell>,
         lines: Vec<String>,
+        active: crate::ScreenKind,
     }
 
     impl Observer for Evictions {
@@ -673,6 +674,7 @@ fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
         }
 
         fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+            assert_eq!(context.terminal().active_screen_kind(), self.active);
             let index = self.lines.len();
             assert_eq!(line.cells().as_ptr(), self.addresses[index]);
             assert!(context.resolve(&self.anchors[index]).is_none());
@@ -704,16 +706,24 @@ fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
         }
     }
 
-    for (operation, expected, visible) in [
+    for (operation, expected, visible, alternate) in [
         (
             Operation::Resize { cols: 6, rows: 1 },
             vec!["first", "second", "third"],
             vec!["last"],
+            false,
+        ),
+        (
+            Operation::Resize { cols: 6, rows: 1 },
+            vec!["first", "second", "third"],
+            vec!["last"],
+            true,
         ),
         (
             Function::Ed(EdScope::All).into(),
             vec!["first", "second", "third", "last"],
             vec!["", "", "", ""],
+            false,
         ),
     ] {
         let mut terminal = Terminal::new(6, 4).unwrap();
@@ -739,13 +749,23 @@ fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
                 .map(|line| line.cells().as_ptr())
                 .collect(),
             lines: Vec::new(),
+            active: if alternate {
+                crate::ScreenKind::Alternate
+            } else {
+                crate::ScreenKind::Primary
+            },
         };
 
         let mut other = Evictions {
             anchors: evictions.anchors.clone(),
             addresses: evictions.addresses.clone(),
             lines: Vec::new(),
+            active: evictions.active,
         };
+
+        if alternate {
+            terminal.feed("\x1b[?1047h");
+        }
 
         let (rows, (lines, other_lines)) =
             terminal.execute_with(operation, (DirtyRows::new(), (&mut evictions, &mut other)));
@@ -753,7 +773,7 @@ fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
         assert_eq!(lines, other_lines);
         assert_eq!(lines, expected);
         assert_eq!(rows, (0..visible.len()).collect::<Vec<_>>());
-        assert_eq!(terminal.screen().text(), visible);
+        assert_eq!(terminal.primary_screen().text(), visible);
     }
 }
 
@@ -920,6 +940,38 @@ fn retention_controls_eviction_anchors_and_transcript_delivery() {
         }
 
         text.extend(terminal.resize_with(4, 1, &mut transcript));
+        text.extend(transcript.finish(&terminal));
+        assert_eq!(text, ["aa", "bb", "cc", "dd"]);
+    }
+}
+
+#[test]
+fn hidden_primary_resize_emits_evicted_transcript_immediately() {
+    for (limit, evicted, retained) in [
+        (Some(0), vec!["aa", "bb", "cc"], 1),
+        (Some(1), vec!["aa", "bb"], 2),
+        (None, vec![], 4),
+    ] {
+        let mut terminal = Terminal::with_scrollback(4, 4, limit).unwrap();
+        let anchor = terminal.anchor_at_cursor();
+        let mut transcript = Transcript::new();
+        terminal.feed_with("aa\r\nbb\r\ncc\r\ndd\x1b[?1049h", &mut transcript);
+        let mut text = terminal.resize_with(4, 1, &mut transcript);
+        assert_eq!(text, evicted);
+        assert_eq!(terminal.primary_screen().all_lines().count(), retained);
+
+        if limit.is_none() {
+            assert_eq!(terminal.resolve(&anchor).unwrap().row, -3);
+        } else {
+            assert!(terminal.resolve(&anchor).is_none());
+        }
+
+        assert!(
+            terminal
+                .feed_with("\x1b[?1049l", &mut transcript)
+                .is_empty()
+        );
+
         text.extend(transcript.finish(&terminal));
         assert_eq!(text, ["aa", "bb", "cc", "dd"]);
     }

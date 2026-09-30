@@ -191,8 +191,11 @@ impl Terminal {
     }
 
     /// Changes the virtual terminal's dimensions. Dimensions are clamped to at
-    /// least one. Reflow to one column erases wide characters that cannot fit,
-    /// preserving their style and invalidating anchors in the erased cells.
+    /// least one. The primary screen reflows even while the alternate screen is
+    /// active. Intermediate resizes can discard content even if the original
+    /// size is restored. Reflow to one column erases wide characters that
+    /// cannot fit, preserving their style and invalidating anchors in the
+    /// erased cells.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.resize_with(cols, rows, ());
     }
@@ -280,8 +283,9 @@ impl Terminal {
     }
 
     /// Escape-sequence initialization for a terminal of the same size, including
-    /// visible buffers, terminal modes, and unfinished parsing. Retained scrollback
-    /// and observer/anchor state are omitted; this is not a full-state snapshot.
+    /// visible buffers, cursor state, terminal modes, and unfinished parsing.
+    /// Retained scrollback and observer/anchor state are omitted; this is not a
+    /// full-state snapshot.
     pub fn dump(&self) -> String {
         let mut dump = parser::dump(&self.engine.dump());
         dump.push_str(&self.parser.dump());

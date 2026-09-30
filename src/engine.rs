@@ -23,6 +23,8 @@ pub(crate) struct Engine {
     active: ScreenKind,
     scrollback_limit: Option<usize>,
     cursor: Cursor,
+    // Live primary position while alternate is active, separate from DECSC state.
+    primary_cursor: (usize, usize),
     pen: Pen,
     charsets: [Charset; 2],
     active_charset: usize,
@@ -157,6 +159,7 @@ impl Engine {
             scrollback_limit,
             tabs: Tabs::new(cols),
             cursor: Cursor::default(),
+            primary_cursor: (0, 0),
             pen: Pen::default(),
             charsets: [Charset::Ascii, Charset::Ascii],
             active_charset: 0,
@@ -342,8 +345,6 @@ impl Engine {
     pub fn pop_evicted(&mut self) -> Option<Line> {
         if self.active == ScreenKind::Alternate {
             while self.alternate_buffer.pop_evicted().is_some() {}
-
-            return None;
         }
 
         self.primary_buffer.pop_evicted()
@@ -500,6 +501,7 @@ impl Engine {
 
     fn switch_to_alternate_buffer(&mut self) {
         if let ScreenKind::Primary = self.active {
+            self.primary_cursor = (self.cursor.col, self.cursor.row);
             self.active = ScreenKind::Alternate;
             self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
         }
@@ -537,27 +539,23 @@ impl Engine {
         self.rows = rows;
 
         observer.resized(cols, rows);
-        self.reflow(observer);
-    }
-
-    fn reflow(&mut self, observer: &mut impl Observer) {
-        let cols = self.cols;
-        let rows = self.rows;
         let cursor = (self.cursor.col, self.cursor.row);
 
         (self.cursor.col, self.cursor.row) = self.active_buffer_mut().resize(cols, rows, cursor);
 
+        if self.active == ScreenKind::Alternate {
+            self.primary_cursor = self.primary_buffer.resize(cols, rows, self.primary_cursor);
+        }
+
+        for saved in [
+            &mut self.primary_saved_cursor,
+            &mut self.alternate_saved_cursor,
+        ] {
+            saved.cursor_col = saved.cursor_col.min(cols - 1);
+            saved.cursor_row = saved.cursor_row.min(rows - 1);
+        }
+
         observer.dirty(0..rows);
-
-        let saved = self.active_saved_cursor_mut();
-
-        if saved.cursor_col >= cols {
-            saved.cursor_col = cols - 1;
-        }
-
-        if saved.cursor_row >= rows {
-            saved.cursor_row = rows - 1;
-        }
     }
 
     // resetting
@@ -599,22 +597,32 @@ impl Engine {
     pub(crate) fn verify(&self) {
         assert!(self.cursor.row < self.rows);
         assert!(self.cursor.col <= self.cols);
-        assert!(
-            self.active_buffer()
-                .lines()
-                .all(|line| line.len() == self.cols)
-        );
-        assert!(!self.active_buffer().lines().last().unwrap().wrapped);
 
-        for line in self.active_buffer().lines() {
-            for i in 0..self.cols {
-                let occupancy = line[i].occupancy();
+        if self.active == ScreenKind::Alternate {
+            assert!(self.primary_cursor.0 <= self.cols);
+            assert!(self.primary_cursor.1 < self.rows);
+        }
 
-                if occupancy == Occupancy::WideTail {
-                    assert!(i > 0);
-                    assert!(line[i - 1].occupancy() == Occupancy::WideHead);
-                } else if occupancy == Occupancy::WideHead {
-                    assert!(line[i + 1].occupancy() == Occupancy::WideTail, "{:?}", line);
+        for saved in [&self.primary_saved_cursor, &self.alternate_saved_cursor] {
+            assert!(saved.cursor_col < self.cols);
+            assert!(saved.cursor_row < self.rows);
+        }
+
+        for buffer in [&self.primary_buffer, self.active_buffer()] {
+            assert_eq!(buffer.view().len(), self.rows);
+            assert!(buffer.lines().all(|line| line.len() == self.cols));
+            assert!(!buffer.lines().last().unwrap().wrapped);
+
+            for line in buffer.lines() {
+                for i in 0..self.cols {
+                    let occupancy = line[i].occupancy();
+
+                    if occupancy == Occupancy::WideTail {
+                        assert!(i > 0);
+                        assert!(line[i - 1].occupancy() == Occupancy::WideHead);
+                    } else if occupancy == Occupancy::WideHead {
+                        assert!(line[i + 1].occupancy() == Occupancy::WideTail, "{:?}", line);
+                    }
                 }
             }
         }
@@ -645,6 +653,8 @@ impl Engine {
         );
 
         if self.active == ScreenKind::Alternate {
+            assert_eq!(self.primary_cursor, other.primary_cursor);
+
             assert_eq!(
                 self.alternate_buffer.view().collect::<Vec<_>>(),
                 other.alternate_buffer.view().collect::<Vec<_>>()
@@ -1215,7 +1225,7 @@ impl Engine {
 
                 AltScreenBuffer => {
                     self.switch_to_alternate_buffer();
-                    self.reflow(observer);
+                    observer.dirty(0..self.rows);
                 }
 
                 SaveCursor => {
@@ -1225,7 +1235,7 @@ impl Engine {
                 SaveCursorAltScreenBuffer => {
                     self.save_cursor();
                     self.switch_to_alternate_buffer();
-                    self.reflow(observer);
+                    observer.dirty(0..self.rows);
                 }
             }
         }
@@ -1255,7 +1265,7 @@ impl Engine {
 
                 AltScreenBuffer => {
                     self.switch_to_primary_buffer();
-                    self.reflow(observer);
+                    observer.dirty(0..self.rows);
                 }
 
                 SaveCursor => {
@@ -1265,7 +1275,7 @@ impl Engine {
                 SaveCursorAltScreenBuffer => {
                     self.switch_to_primary_buffer();
                     self.restore_cursor();
-                    self.reflow(observer);
+                    observer.dirty(0..self.rows);
                 }
             }
         }
@@ -1296,6 +1306,13 @@ impl Engine {
         // 3. configure the primary saved cursor while its buffer is active
 
         primary_ctx.dump(&mut funs);
+
+        if self.active == ScreenKind::Alternate {
+            let (col, row) = self.primary_cursor;
+
+            funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
+            dump_pending_wrap(&self.primary_buffer, col, row, self.cols, &mut funs);
+        }
 
         // Reset the pen before switching: the alternate buffer is created with it.
         funs.push(to_sgr(&Pen::default()));
@@ -1390,22 +1407,13 @@ impl Engine {
             funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
         }
 
-        if self.cursor.col >= self.cols {
-            // Restore pending wrap by reprinting the character at the right edge.
-            let last_cell = self.active_buffer()[(self.cols - 1, self.cursor.row)];
-            let occupancy = last_cell.occupancy();
-
-            if occupancy == Occupancy::Single {
-                funs.push(to_sgr(last_cell.pen()));
-                funs.push(Function::Print(last_cell.char()));
-            } else if occupancy == Occupancy::WideTail {
-                let prev_cell = self.active_buffer()[(self.cols - 2, self.cursor.row)];
-
-                funs.push(Function::Cub(1));
-                funs.push(to_sgr(prev_cell.pen()));
-                funs.push(Function::Print(prev_cell.char()));
-            }
-        }
+        dump_pending_wrap(
+            self.active_buffer(),
+            self.cursor.col,
+            self.cursor.row,
+            self.cols,
+            &mut funs,
+        );
 
         // configure pen
         funs.push(to_sgr(&self.pen));
@@ -1463,6 +1471,33 @@ impl Engine {
         }
 
         funs
+    }
+}
+
+fn dump_pending_wrap(
+    buffer: &Buffer,
+    col: usize,
+    row: usize,
+    cols: usize,
+    funs: &mut Vec<Function>,
+) {
+    if col < cols {
+        return;
+    }
+
+    // Restore pending wrap by reprinting the character at the right edge.
+    let last_cell = buffer[(cols - 1, row)];
+    let occupancy = last_cell.occupancy();
+
+    if occupancy == Occupancy::Single {
+        funs.push(to_sgr(last_cell.pen()));
+        funs.push(Function::Print(last_cell.char()));
+    } else if occupancy == Occupancy::WideTail {
+        let prev_cell = buffer[(cols - 2, row)];
+
+        funs.push(Function::Cub(1));
+        funs.push(to_sgr(prev_cell.pen()));
+        funs.push(Function::Print(prev_cell.char()));
     }
 }
 
@@ -2950,7 +2985,8 @@ mod tests {
 
         term.execute(Decrst(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
 
-        assert_eq!(text(&term), "bbb\nc\ndd|d");
+        // The saved cursor was clamped by each intermediate resize.
+        assert_eq!(text(&term), "bbb\nc|\nddd");
     }
 
     #[test]

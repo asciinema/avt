@@ -42,15 +42,104 @@ fn screens_address_buffers_explicitly() {
 }
 
 #[test]
-fn primary_reflows_when_reactivated_after_alternate_resize() {
+fn primary_reflows_while_alternate_is_active() {
     let mut terminal = Terminal::new(4, 2).unwrap();
-    terminal.feed(["abcd", "\x1b[?1047h"]);
+    terminal.feed(["abcd\x1b[H", "\x1b[?1047h"]);
     terminal.resize(2, 2);
     assert_eq!(terminal.size(), (2, 2));
-    assert_eq!(terminal.primary_screen().line(0).unwrap().len(), 4);
+    assert_eq!(terminal.primary_screen().line(0).unwrap().text(), "ab");
+    assert_eq!(terminal.primary_screen().line(1).unwrap().text(), "cd");
     terminal.feed("\x1b[?1047l");
     assert_eq!(terminal.screen().line(0).unwrap().text(), "ab");
     assert_eq!(terminal.screen().line(1).unwrap().text(), "cd");
+}
+
+#[test]
+fn hidden_primary_resize_uses_its_live_cursor() {
+    for mode in [1047, 1049] {
+        let mut terminal = Terminal::new(4, 3).unwrap();
+        terminal.feed("abcd\r\nefgh\r\nijkl\x1b7\x1b[H");
+        terminal.feed(format!("\x1b[?{mode}h\x1b[3;1H"));
+        terminal.resize(4, 1);
+        terminal.resize(4, 3);
+        assert_eq!(terminal.primary_screen().text(), ["abcd", "", ""]);
+        terminal.feed(format!("\x1b[3;1H\x1b[?{mode}l"));
+        assert_eq!(terminal.screen().text(), ["abcd", "", ""]);
+
+        // 1047 carries the alternate cursor back; 1049 restores the saved one.
+        assert_eq!(terminal.cursor().row, if mode == 1047 { 2 } else { 0 });
+    }
+}
+
+#[test]
+fn dump_restores_primary_after_alternate_resize() {
+    for mode in [1047, 1049] {
+        let mut original = Terminal::new(4, 2).unwrap();
+        original.feed("abcd\r\nefgh\x1b[H");
+        original.feed(format!("\x1b[?{mode}h"));
+        original.resize(2, 2);
+        let mut restored = Terminal::new(2, 2).unwrap();
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+
+        for terminal in [&mut original, &mut restored] {
+            terminal.feed(format!("\x1b[?{mode}l"));
+            assert_eq!(terminal.screen().text(), ["abcd"]);
+        }
+
+        assert_dump_equivalent(&original, &restored);
+    }
+}
+
+#[test]
+fn dump_preserves_hidden_primary_cursor_for_further_resizes() {
+    for mode in [1047, 1049] {
+        for text in ["abcd", "ab界", "ab\x1b[31m界", "abcd\x1b[H", "ab\x1b[3;4H"] {
+            let mut original = Terminal::new(4, 3).unwrap();
+            original.feed(text);
+            original.feed(format!("\x1b[?{mode}h\x1b[2;2Halt"));
+            let mut restored = Terminal::new(4, 3).unwrap();
+            restored.feed(original.dump());
+            assert_dump_equivalent(&original, &restored);
+
+            for (cols, rows) in [(4, 1), (2, 3), (4, 3), (1, 2), (4, 3)] {
+                original.resize(cols, rows);
+                restored.resize(cols, rows);
+                original.engine.verify();
+                restored.engine.verify();
+                assert_dump_equivalent(&original, &restored);
+            }
+
+            original.feed(format!("\x1b[?{mode}lX"));
+            restored.feed(format!("\x1b[?{mode}lX"));
+            assert_dump_equivalent(&original, &restored);
+        }
+    }
+}
+
+#[test]
+fn resize_clamps_saved_cursors_in_both_buffers() {
+    for alternate in [false, true] {
+        let mut original = Terminal::new(8, 4).unwrap();
+        original.feed("\x1b[4;8H\x1b7\x1b[?1047h\x1b[4;8H\x1b7");
+
+        if !alternate {
+            original.feed("\x1b[?1047l");
+        }
+
+        original.resize(2, 2);
+        original.resize(8, 4);
+        let mut restored = Terminal::new(8, 4).unwrap();
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+
+        for input in ["\x1b[?1047h\x1b8", "\x1b[?1047l\x1b8"] {
+            original.feed(input);
+            restored.feed(input);
+            assert_eq!(original.cursor().position(), Some((1, 1)));
+            assert_dump_equivalent(&original, &restored);
+        }
+    }
 }
 
 #[test]
@@ -332,6 +421,27 @@ proptest! {
         original.feed(input);
         restored.feed(original.dump());
         assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
+    fn prop_dump_with_resizes(
+        steps in prop::collection::vec((gen_input(8), 1..15usize, 1..8usize), 1..8)
+    ) {
+        let mut original = Terminal::new(10, 5).unwrap();
+        let mut restored = Terminal::new(10, 5).unwrap();
+
+        for (input, cols, rows) in steps {
+            original.feed(&input);
+            restored.feed(&input);
+            original.resize(cols, rows);
+            restored.resize(cols, rows);
+            original.engine.verify();
+            restored.engine.verify();
+            assert_dump_equivalent(&original, &restored);
+            restored = Terminal::new(cols, rows).unwrap();
+            restored.feed(original.dump());
+            assert_dump_equivalent(&original, &restored);
+        }
     }
 }
 

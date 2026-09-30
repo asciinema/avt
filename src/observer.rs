@@ -58,6 +58,7 @@ pub trait Observer {
     fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation) {}
 
     /// A primary line evicted by the scrollback limit, immediately after removal.
+    /// Resizing can evict primary lines while the alternate screen is active.
     /// Lines awaiting eviction remain available for inspection. All observers
     /// borrow the original line; it is dropped after their callbacks return.
     fn evicted(&mut self, _context: &mut Observation<'_>, _line: &Line) {}
