@@ -50,7 +50,9 @@ impl Observer for Transcript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tests::{PROMPT, SUBMIT};
+
+    const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
+    const SUBMIT: &str = "\x1b]133;C\x07";
 
     #[test]
     fn joins_wrapped_rows_preserving_internal_spaces() {

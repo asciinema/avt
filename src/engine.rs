@@ -1704,7 +1704,6 @@ fn as_usize(value: u16, default: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{Engine, ScreenKind};
-    use crate::Terminal;
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
@@ -1713,6 +1712,7 @@ mod tests {
     };
     use crate::pen::Intensity;
     use crate::pen::Pen;
+    use crate::{DirtyRows, Terminal};
     use Function::*;
     use SgrOp::*;
 
@@ -1724,10 +1724,225 @@ mod tests {
         term
     }
 
+    #[test]
+    fn primary_reflows_while_alternate_is_active() {
+        let mut terminal = Terminal::new(4, 2).unwrap();
+        terminal.feed(["abcd\x1b[H", "\x1b[?1047h"]);
+        terminal.resize(2, 2);
+        assert_eq!(terminal.size(), (2, 2));
+        assert_eq!(terminal.primary_screen().line(0).unwrap().text(), "ab");
+        assert_eq!(terminal.primary_screen().line(1).unwrap().text(), "cd");
+        terminal.feed("\x1b[?1047l");
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "ab");
+        assert_eq!(terminal.screen().line(1).unwrap().text(), "cd");
+    }
+
+    #[test]
+    fn hidden_primary_resize_uses_its_live_cursor() {
+        for mode in [1047, 1049] {
+            let mut terminal = Terminal::new(4, 3).unwrap();
+            terminal.feed("abcd\r\nefgh\r\nijkl\x1b7\x1b[H");
+            terminal.feed(format!("\x1b[?{mode}h\x1b[3;1H"));
+            terminal.resize(4, 1);
+            terminal.resize(4, 3);
+            assert_eq!(terminal.primary_screen().text(), ["abcd", "", ""]);
+            terminal.feed(format!("\x1b[3;1H\x1b[?{mode}l"));
+            assert_eq!(terminal.screen().text(), ["abcd", "", ""]);
+
+            // 1047 carries the alternate cursor back; 1049 restores the saved one.
+            assert_eq!(terminal.cursor().row, if mode == 1047 { 2 } else { 0 });
+        }
+    }
+
+    #[test]
+    fn resizing_a_wide_character_to_one_column_erases_it() {
+        for cols in [0, 1] {
+            let mut terminal = Terminal::new(2, 2).unwrap();
+            terminal.feed("界");
+            terminal.resize(cols, 2);
+            terminal.engine.verify();
+            assert_eq!(terminal.size(), (1, 2));
+            assert_eq!(terminal.screen().text(), ["", ""]);
+            terminal.feed("a");
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "a");
+        }
+    }
+
+    #[test]
+    fn alternate_saved_cursor_persists_across_sessions() {
+        let mut terminal = Terminal::new(8, 4).unwrap();
+
+        terminal.feed([
+            "\x1b[?1047h",
+            "\x1b[2;3H\x1b7",
+            "\x1b[?1047l",
+            "\x1b[?1047h",
+            "\x1b8",
+        ]);
+
+        assert_eq!(terminal.cursor().position(), Some((2, 1)));
+    }
+
+    #[test]
+    fn alternate_buffer_starts_blank_on_each_entry() {
+        let mut terminal = Terminal::new(8, 2).unwrap();
+
+        terminal.feed(["\x1b[?1047h", "hello", "\x1b[?1047l", "\x1b[41m\x1b[?1047h"]);
+
+        assert_eq!(terminal.screen().line(0).unwrap().text().trim_end(), "");
+        let pen = *terminal.screen().line(0).unwrap().cells()[0].pen();
+        assert_eq!(pen.background(), Some(crate::Color::Indexed(1)));
+    }
+
+    #[test]
+    fn reselecting_active_buffer_preserves_content_and_dirty_state() {
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        terminal.feed(["\x1b[?1047h", "hello", "\x1b[?1047h"]);
+
+        assert_eq!(
+            terminal.screen().line(0).unwrap().text().trim_end(),
+            "hello"
+        );
+    }
+
     fn text(term: &Terminal) -> String {
         let cursor = term.cursor();
 
         buffer_text(term.screen().visible_lines(), cursor.col, cursor.row)
+    }
+
+    #[test]
+    fn ed2_archives_rows_and_anchors_preserving_cursor_and_margins() {
+        let mut terminal = Terminal::with_scrollback(8, 6, None).unwrap();
+        terminal.feed("one\r\n\r\nthree\x1b[2;4r\x1b[?6h\x1b[2;5H\x1b[?25l\x1b7");
+        let cursor = terminal.cursor();
+
+        let occupied = terminal
+            .anchor_at(crate::Position {
+                screen: crate::ScreenKind::Primary,
+                col: 1,
+                row: 2,
+            })
+            .unwrap();
+
+        let blank = terminal
+            .anchor_at(crate::Position {
+                screen: crate::ScreenKind::Primary,
+                col: 0,
+                row: 5,
+            })
+            .unwrap();
+
+        let addresses: Vec<_> = terminal
+            .screen()
+            .visible_lines()
+            .take(3)
+            .map(|line| line.cells().as_ptr())
+            .collect();
+
+        let mut dirty = DirtyRows::new();
+        terminal.feed_with("", &mut dirty);
+
+        assert_eq!(
+            terminal.feed_with("\x1b[2J", &mut dirty),
+            [0, 1, 2, 3, 4, 5]
+        );
+
+        assert_eq!(terminal.cursor(), cursor);
+        assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+
+        assert_eq!(
+            terminal
+                .primary_screen()
+                .all_lines()
+                .take(3)
+                .map(|line| line.cells().as_ptr())
+                .collect::<Vec<_>>(),
+            addresses
+        );
+
+        assert_eq!(
+            terminal.screen().text(),
+            ["one", "", "three", "", "", "", "", "", ""]
+        );
+
+        assert!(
+            terminal
+                .screen()
+                .visible_lines()
+                .all(|line| line.is_blank())
+        );
+
+        assert_eq!(terminal.resolve(&occupied).unwrap().row, -1);
+        assert!(terminal.resolve(&blank).is_none());
+        terminal.feed("\x1b[2J");
+        assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+        terminal.feed("\x1b[H\x1b8");
+        assert_eq!(terminal.cursor(), cursor);
+        terminal.feed("\x1b[H");
+        assert_eq!(terminal.cursor().row, 1); // Origin mode still uses the top margin.
+        terminal.feed("\x1b[99B");
+        assert_eq!(terminal.cursor().row, 3); // The bottom margin also survives.
+    }
+
+    #[test]
+    fn ed2_counts_styled_blanks_but_not_default_spaces_as_occupied() {
+        for style in ["0", "31", "41", "1", "2", "3", "4", "5", "7", "9"] {
+            let mut terminal = Terminal::with_scrollback(6, 5, None).unwrap();
+            terminal.feed(format!("one\x1b[4;1H\x1b[{style}m \x1b[0m\x1b[2J"));
+            let preserved = if style == "0" { 1 } else { 4 };
+            assert_eq!(terminal.primary_screen().all_lines().count(), 5 + preserved);
+
+            assert!(
+                terminal
+                    .screen()
+                    .visible_lines()
+                    .all(|line| line.is_blank())
+            );
+
+            if style != "0" {
+                let line = terminal.primary_screen().all_lines().nth(3).unwrap();
+                assert!(!line.cells()[0].pen().is_default());
+                assert_eq!(line.text(), "      ");
+            }
+        }
+    }
+
+    #[test]
+    fn ed2_uses_erase_pen_and_skips_default_blank_screens() {
+        let mut terminal = Terminal::with_scrollback(6, 3, None).unwrap();
+        terminal.feed("\x1b[2J\x1b[2J\x1b[41m\x1b[2J");
+        assert_eq!(terminal.primary_screen().all_lines().count(), 3);
+
+        assert!(terminal.screen().visible_lines().all(|line| {
+            line.cells()
+                .iter()
+                .all(|cell| cell.pen().background() == Some(crate::Color::Indexed(1)))
+        }));
+
+        terminal.feed("\x1b[0m\x1b[2J\x1b[2J");
+        assert_eq!(terminal.primary_screen().all_lines().count(), 6);
+
+        assert!(
+            terminal
+                .screen()
+                .visible_lines()
+                .all(|line| line.is_blank())
+        );
+    }
+
+    #[test]
+    fn ed2_preserves_pending_wrap() {
+        let mut terminal = Terminal::with_scrollback(4, 2, None).unwrap();
+        terminal.feed("abcd");
+        let cursor = terminal.cursor();
+        assert_eq!(cursor.col, 4);
+        terminal.feed("\x1b[2J");
+        assert_eq!(terminal.cursor(), cursor);
+        terminal.feed("X");
+        assert_eq!(terminal.cursor().position(), Some((1, 1)));
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "    ");
+        assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
     }
 
     fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(

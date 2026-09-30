@@ -4,6 +4,7 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
+cc e86a0ea92a56ae3d372ebdf29c57e295ab1db64fc1dbb4283059887a12d44c0e # shrinks to first = "\u{1b}[2M\u{1b}[?1049h", second = "\u{1b}[?1049l", cols = 2, rows = 6
 cc 791b949c88e57339204034bffc3ab511776a8acfa2179cbcbfb2189aaaf7e128 # shrinks to input = ['\u{7f}']
 cc a7bc637f151f86c16e7c29ceeb1b79f1a1cf031d96f0ce7226646406800fb0ec # shrinks to input = ['\u{1b}', '[', 'T']
 cc 26181df8251cbd2d0674bb18faacb994edde64b6feed249ba34d3bdcce3b093d # shrinks to input = ['\u{1b}', '[', 'T']
