@@ -242,205 +242,96 @@ impl Engine {
         use Function::*;
 
         match *function {
-            Bs => {
-                self.bs();
-            }
+            Bs => self.bs(),
 
-            Cbt(n) => {
-                self.cbt(n);
-            }
+            Cbt(n) => self.cbt(n),
 
-            Cha(n) => {
-                self.cha(n);
-            }
+            Cha(n) => self.cha(n),
 
-            Cht(n) => {
-                self.cht(n);
-            }
+            Cht(n) => self.cht(n),
 
-            Cnl(n) => {
-                self.cnl(n);
-            }
+            Cnl(n) => self.cnl(n),
 
-            Cpl(n) => {
-                self.cpl(n);
-            }
+            Cpl(n) => self.cpl(n),
 
-            Cr => {
-                self.cr();
-            }
+            Cr => self.cr(),
 
-            Ctc(ref mode) => {
-                self.ctc(mode);
-            }
+            Ctc(ref mode) => self.ctc(mode),
 
-            Cub(n) => {
-                self.cub(n);
-            }
+            Cub(n) => self.cub(n),
 
-            Cud(n) => {
-                self.cud(n);
-            }
+            Cud(n) => self.cud(n),
 
-            Cuf(n) => {
-                self.cuf(n);
-            }
+            Cuf(n) => self.cuf(n),
 
-            Cup(row, col) => {
-                self.cup(row, col);
-            }
+            Cup(row, col) => self.cup(row, col),
 
-            Cuu(n) => {
-                self.cuu(n);
-            }
+            Cuu(n) => self.cuu(n),
 
-            Dch(n) => {
-                self.dch(n, observer);
-            }
+            Dch(n) => self.dch(n, observer),
 
-            Decaln => {
-                self.decaln(observer);
-            }
+            Decaln => self.decaln(observer),
+            Decrc | Scorc => self.rc(),
+            Decrst(ref modes) => self.decrst(modes, observer),
+            Decsc | Scosc => self.sc(),
+            Decset(ref modes) => self.decset(modes, observer),
 
-            Decrc => {
-                self.rc();
-            }
+            Decstbm(top, bottom) => self.decstbm(top, bottom),
 
-            Decrst(ref modes) => {
-                self.decrst(modes, observer);
-            }
+            Decstr => self.decstr(),
 
-            Decsc => {
-                self.sc();
-            }
+            Dl(n) => self.dl(n, observer),
 
-            Decset(ref modes) => {
-                self.decset(modes, observer);
-            }
+            Ech(n) => self.ech(n, observer),
 
-            Decstbm(top, bottom) => {
-                self.decstbm(top, bottom);
-            }
+            Ed(ref mode) => self.ed(mode, observer),
 
-            Decstr => {
-                self.decstr();
-            }
+            El(ref mode) => self.el(mode, observer),
 
-            Dl(n) => {
-                self.dl(n, observer);
-            }
+            G1d4(charset) => self.g1d4(charset),
 
-            Ech(n) => {
-                self.ech(n, observer);
-            }
+            Gzd4(charset) => self.gzd4(charset),
 
-            Ed(ref mode) => {
-                self.ed(mode, observer);
-            }
+            Ht => self.ht(),
 
-            El(ref mode) => {
-                self.el(mode, observer);
-            }
+            Hts => self.hts(),
 
-            G1d4(charset) => {
-                self.g1d4(charset);
-            }
+            Ich(n) => self.ich(n, observer),
 
-            Gzd4(charset) => {
-                self.gzd4(charset);
-            }
+            Il(n) => self.il(n, observer),
 
-            Ht => {
-                self.ht();
-            }
+            Lf => self.lf(observer),
 
-            Hts => {
-                self.hts();
-            }
+            Nel => self.nel(observer),
 
-            Ich(n) => {
-                self.ich(n, observer);
-            }
+            Print(ch) => self.print(ch, observer),
 
-            Il(n) => {
-                self.il(n, observer);
-            }
+            Rep(n) => self.rep(n, observer),
 
-            Lf => {
-                self.lf(observer);
-            }
+            Ri => self.ri(observer),
 
-            Nel => {
-                self.nel(observer);
-            }
+            Ris => self.ris(observer),
 
-            Osc(_) => {}
+            Rm(ref modes) => self.rm(modes),
+            Sd(n) => self.sd(n, observer),
 
-            Print(ch) => {
-                self.print(ch, observer);
-            }
+            Sgr(ref params) => self.sgr(params),
 
-            Rep(n) => {
-                self.rep(n, observer);
-            }
+            Si => self.si(),
 
-            Ri => {
-                self.ri(observer);
-            }
+            Sm(ref modes) => self.sm(modes),
 
-            Ris => {
-                self.ris(observer);
-            }
+            So => self.so(),
 
-            Rm(ref modes) => {
-                self.rm(modes);
-            }
+            Su(n) => self.su(n, observer),
 
-            Scorc => {
-                self.rc();
-            }
+            Tbc(ref mode) => self.tbc(mode),
 
-            Scosc => {
-                self.sc();
-            }
+            Vpa(n) => self.vpa(n),
 
-            Sd(n) => {
-                self.sd(n, observer);
-            }
+            Vpr(n) => self.vpr(n),
 
-            Sgr(ref params) => {
-                self.sgr(params);
-            }
-
-            Si => {
-                self.si();
-            }
-
-            Sm(ref modes) => {
-                self.sm(modes);
-            }
-
-            So => {
-                self.so();
-            }
-
-            Su(n) => {
-                self.su(n, observer);
-            }
-
-            Tbc(ref mode) => {
-                self.tbc(mode);
-            }
-
-            Vpa(n) => {
-                self.vpa(n);
-            }
-
-            Vpr(n) => {
-                self.vpr(n);
-            }
-
-            Xtwinops(_) => {}
+            Osc(_) | Xtwinops(_) => (),
         }
     }
 
