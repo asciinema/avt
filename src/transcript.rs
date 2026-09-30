@@ -1,7 +1,9 @@
-use crate::{Line, Observation, Observer, Terminal};
+use crate::parser::Function;
+use crate::{Line, Observation, Observer, Operation, Terminal};
 
 /// Plain text from primary-buffer eviction and final retained content.
 /// ED2-cleared content follows the normal history path, including editable prompts.
+/// Hard reset (RIS) finishes retained primary text before clearing the terminal.
 #[derive(Default)]
 pub struct Transcript {
     pending: String,
@@ -14,15 +16,22 @@ impl Transcript {
     }
 
     pub fn finish(mut self, terminal: &Terminal) -> Vec<String> {
+        self.finish_primary(terminal);
+
+        self.ready
+    }
+
+    fn finish_primary(&mut self, terminal: &Terminal) {
+        let start = self.ready.len();
+
         for line in terminal.primary_screen().all_lines() {
             self.push(line);
         }
 
-        while self.ready.last().is_some_and(String::is_empty) {
+        // Trim screen padding without removing output from earlier in this call.
+        while self.ready.len() > start && self.ready.last().is_some_and(String::is_empty) {
             self.ready.pop();
         }
-
-        self.ready
     }
 
     fn push(&mut self, line: &Line) {
@@ -37,6 +46,12 @@ impl Transcript {
 
 impl Observer for Transcript {
     type Output = Vec<String>;
+
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+        if matches!(operation, Operation::Function(Function::Ris)) {
+            self.finish_primary(context.terminal());
+        }
+    }
 
     fn evicted(&mut self, _: &mut Observation<'_>, line: &Line) {
         self.push(line);
@@ -148,6 +163,62 @@ mod tests {
         assert!(terminal.feed_with("abcdE", &mut transcript).is_empty());
         assert!(terminal.feed_with("", &mut transcript).is_empty());
         assert_eq!(terminal.feed_with("F\r\n", &mut transcript), ["abcdEF"]);
+        assert!(transcript.finish(&terminal).is_empty());
+    }
+
+    #[test]
+    fn hard_reset_flushes_primary_text_across_retention_and_chunking() {
+        for limit in [Some(0), Some(1), None] {
+            for text in ["abcdE", "abcdefghi"] {
+                for alternate in ["", "\x1b[?1049halt"] {
+                    let input = format!("{text}{alternate}\x1bc\x1bcnew");
+
+                    for split in 0..=input.len() {
+                        let mut terminal = Terminal::with_scrollback(4, 1, limit).unwrap();
+                        let mut transcript = Transcript::new();
+                        let mut lines = Vec::new();
+
+                        for chunk in [&input[..split], &input[split..]] {
+                            lines.extend(terminal.feed_with(chunk, &mut transcript));
+                        }
+
+                        lines.extend(transcript.finish(&terminal));
+                        assert_eq!(lines, [text, "new"], "{limit:?}, {input:?}, {split}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hard_reset_preserves_already_queued_blank_lines_in_the_same_feed() {
+        let input = "old\r\n\r\n\x1bcnew";
+
+        for split in 0..=input.len() {
+            let mut terminal = Terminal::new(4, 1).unwrap();
+            let mut transcript = Transcript::new();
+            let mut lines = Vec::new();
+
+            for chunk in [&input[..split], &input[split..]] {
+                lines.extend(terminal.feed_with(chunk, &mut transcript));
+            }
+
+            lines.extend(transcript.finish(&terminal));
+            assert_eq!(lines, ["old", "", "new"], "split at {split}");
+        }
+    }
+
+    #[test]
+    fn explicit_hard_reset_returns_retained_text_without_screen_padding() {
+        let mut terminal = Terminal::with_scrollback(4, 4, None).unwrap();
+        let mut transcript = Transcript::new();
+        terminal.feed_with("one\r\n\r\ntwo", &mut transcript);
+
+        assert_eq!(
+            terminal.execute_with(Function::Ris, &mut transcript),
+            ["one", "", "two"]
+        );
+
         assert!(transcript.finish(&terminal).is_empty());
     }
 
