@@ -986,10 +986,8 @@ impl Parser {
 
         assert_eq!(self.state, other.state);
 
-        if matches!(
-            self.state,
-            CsiParam | CsiIntermediate | DcsParam | DcsIntermediate
-        ) {
+        // Supported intermediate sequences do not use collected parameters.
+        if matches!(self.state, CsiParam | DcsParam) {
             assert_eq!(self.cur_param, other.cur_param);
 
             assert_eq!(
@@ -2291,6 +2289,27 @@ mod tests {
         }
 
         assert_eq!(parser.dump(), "\u{9b}0;1;0;38:2:1:2:3;0");
+    }
+
+    #[test]
+    fn dump_resumes_intermediates_with_prior_parameters() {
+        for (prefix, suffix, expected) in [
+            ("\x1b[1;2!", "pX", vec![Decstr, Print('X')]),
+            ("\x1bP1;2 ", "qignored\x1b\\X", vec![Print('X')]),
+        ] {
+            let mut original = Parser::new();
+            feed(&mut original, prefix);
+            let mut restored = Parser::new();
+            feed(&mut restored, &original.dump());
+            original.assert_continuation_equivalent(&restored);
+
+            for parser in [&mut original, &mut restored] {
+                let output: Vec<_> = suffix.chars().filter_map(|ch| parser.feed(ch)).collect();
+                assert_eq!(output, expected);
+            }
+
+            original.assert_continuation_equivalent(&restored);
+        }
     }
 
     #[test]
