@@ -499,17 +499,19 @@ impl Engine {
 
     // buffer switching
 
-    fn switch_to_alternate_buffer(&mut self) {
+    fn switch_to_alternate_buffer(&mut self, observer: &mut impl Observer) {
         if let ScreenKind::Primary = self.active {
             self.primary_cursor = (self.cursor.col, self.cursor.row);
             self.active = ScreenKind::Alternate;
             self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
+            observer.dirty(0..self.rows);
         }
     }
 
-    fn switch_to_primary_buffer(&mut self) {
+    fn switch_to_primary_buffer(&mut self, observer: &mut impl Observer) {
         if let ScreenKind::Alternate = self.active {
             self.active = ScreenKind::Primary;
+            observer.dirty(0..self.rows);
         }
     }
 
@@ -1224,8 +1226,7 @@ impl Engine {
                 }
 
                 AltScreenBuffer => {
-                    self.switch_to_alternate_buffer();
-                    observer.dirty(0..self.rows);
+                    self.switch_to_alternate_buffer(observer);
                 }
 
                 SaveCursor => {
@@ -1234,8 +1235,7 @@ impl Engine {
 
                 SaveCursorAltScreenBuffer => {
                     self.save_cursor();
-                    self.switch_to_alternate_buffer();
-                    observer.dirty(0..self.rows);
+                    self.switch_to_alternate_buffer(observer);
                 }
             }
         }
@@ -1264,8 +1264,7 @@ impl Engine {
                 }
 
                 AltScreenBuffer => {
-                    self.switch_to_primary_buffer();
-                    observer.dirty(0..self.rows);
+                    self.switch_to_primary_buffer(observer);
                 }
 
                 SaveCursor => {
@@ -1273,9 +1272,8 @@ impl Engine {
                 }
 
                 SaveCursorAltScreenBuffer => {
-                    self.switch_to_primary_buffer();
+                    self.switch_to_primary_buffer(observer);
                     self.restore_cursor();
-                    observer.dirty(0..self.rows);
                 }
             }
         }
@@ -1796,13 +1794,34 @@ mod tests {
 
     #[test]
     fn reselecting_active_buffer_preserves_content_and_dirty_state() {
-        let mut terminal = Terminal::new(8, 2).unwrap();
-        terminal.feed(["\x1b[?1047h", "hello", "\x1b[?1047h"]);
+        for mode in [1047, 1049] {
+            let mut terminal = Terminal::new(8, 2).unwrap();
+            let mut dirty = DirtyRows::new();
+            terminal.feed_with("", &mut dirty);
+            let enter = format!("\x1b[?{mode}h");
+            let leave = format!("\x1b[?{mode}l");
+            assert_eq!(terminal.feed_with(&enter, &mut dirty), [0, 1]);
+            terminal.feed_with("hello", &mut dirty);
+            assert!(terminal.feed_with(&enter, &mut dirty).is_empty());
 
-        assert_eq!(
-            terminal.screen().line(0).unwrap().text().trim_end(),
-            "hello"
-        );
+            assert_eq!(
+                terminal.screen().line(0).unwrap().text().trim_end(),
+                "hello"
+            );
+
+            if mode == 1049 {
+                terminal.feed_with("\x1b[2;1H\x1b8", &mut dirty);
+                assert_eq!(terminal.cursor().position(), Some((5, 0)));
+            }
+
+            assert_eq!(terminal.feed_with(&leave, &mut dirty), [0, 1]);
+            terminal.feed_with("\x1b[2;1H", &mut dirty);
+            assert!(terminal.feed_with(&leave, &mut dirty).is_empty());
+
+            if mode == 1049 {
+                assert_eq!(terminal.cursor().position(), Some((0, 0)));
+            }
+        }
     }
 
     fn text(term: &Terminal) -> String {
