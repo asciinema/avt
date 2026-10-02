@@ -261,6 +261,8 @@ impl Buffer {
         new_rows: usize,
         mut cursor: VisualPosition,
     ) -> VisualPosition {
+        debug_assert!(cursor.0 <= self.cols && cursor.1 < self.rows);
+
         let old_cols = self.cols;
         let mut old_rows = self.rows;
 
@@ -311,9 +313,7 @@ impl Buffer {
                 let cursor_row_shift = scrollback_size.min(height_delta);
                 height_delta -= cursor_row_shift;
 
-                if cursor.1 < old_rows {
-                    cursor.1 += cursor_row_shift;
-                }
+                cursor.1 += cursor_row_shift;
 
                 if height_delta > 0 {
                     self.extend(height_delta, new_cols, &Pen::default());
@@ -334,8 +334,7 @@ impl Buffer {
         let vis_row_offset = self.lines.len() - rows;
         let mut log_col_offset = 0;
         let abs_row = pos.1 + vis_row_offset;
-        let last_available_row = abs_row.min(self.lines.len());
-        let mut log_row = abs_row - last_available_row;
+        let mut log_row = 0;
 
         for line in self.lines.iter().take(abs_row) {
             if line.wrapped {
@@ -788,14 +787,6 @@ mod tests {
             view,
             vec!["ssss", "ssss", "aa  ", "bbbb", "bbbb", "bb  ", "cc  "]
         );
-
-        // cursor below last row
-
-        for scrollback in [0, 20] {
-            let (_, cursor) = resize_buffer(scrollback, content.clone(), 4, 8, (2, 6));
-
-            assert_eq!(cursor, (2, 6));
-        }
     }
 
     #[test]

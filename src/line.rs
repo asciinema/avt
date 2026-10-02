@@ -337,13 +337,9 @@ impl Line {
                 rest.trim();
             }
 
-            if rest.cells.is_empty() {
-                None
-            } else {
-                self.wrapped = true;
+            self.wrapped = true;
 
-                Some(rest)
-            }
+            Some(rest)
         } else {
             None
         }
