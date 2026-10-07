@@ -415,14 +415,13 @@ impl Buffer {
     }
 
     fn clear(&mut self, range: Range<usize>, pen: &Pen) {
-        let cols = self.cols;
         let offset = self.view_offset();
 
         for line in self
             .lines
             .range_mut(offset + range.start..offset + range.end)
         {
-            line.reset(cols, *pen);
+            line.reset(*pen);
         }
     }
 
@@ -511,6 +510,7 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
             match self.cols.cmp(&line.len()) {
                 Less => {
                     self.rest = line.contract(self.cols);
+
                     return Some(line);
                 }
 
@@ -519,21 +519,20 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
                 }
 
                 Greater => match self.iter.next() {
-                    Some(next_line) => match line.extend(next_line, self.cols) {
-                        (true, rest) => {
-                            self.rest = rest;
+                    Some(next_line) => {
+                        self.rest = line.extend(next_line, self.cols);
 
+                        if line.len() == self.cols {
                             return Some(line);
                         }
 
-                        (false, _) => {
-                            self.rest = Some(line);
-                        }
-                    },
+                        self.rest = Some(line);
+                    }
 
                     None => {
-                        line.expand(self.cols, &Pen::default());
+                        line.expand(self.cols);
                         line.wrapped = false;
+
                         return Some(line);
                     }
                 },

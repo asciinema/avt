@@ -52,10 +52,9 @@ impl Line {
         }
     }
 
-    pub(crate) fn reset(&mut self, cols: usize, pen: Pen) {
+    pub(crate) fn reset(&mut self, pen: Pen) {
         self.marks.clear();
-        self.cells.clear();
-        self.cells.resize(cols, Cell::blank(pen));
+        self.cells.fill(Cell::blank(pen));
         self.wrapped = false;
     }
 
@@ -244,13 +243,13 @@ impl Line {
         self.cells[fill_start..].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> (bool, Option<Line>) {
+    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> Option<Line> {
         let mut needed = len - self.len();
 
         if !self.wrapped {
-            self.expand(len, &Pen::default());
+            self.expand(len);
 
-            return (true, Some(other));
+            return Some(other);
         }
 
         if !other.wrapped {
@@ -271,14 +270,11 @@ impl Line {
             cells.rotate_left(needed);
             cells.truncate(cells.len() - needed);
 
-            return (
-                true,
-                Some(Line {
-                    cells,
-                    wrapped: other.wrapped,
-                    marks: rest_marks,
-                }),
-            );
+            return Some(Line {
+                cells,
+                wrapped: other.wrapped,
+                marks: rest_marks,
+            });
         }
 
         self.append_marks(&mut other, self.len());
@@ -286,20 +282,14 @@ impl Line {
 
         if !other.wrapped {
             self.wrapped = false;
-
-            if self.len() < len {
-                self.expand(len, &Pen::default());
-            }
-
-            (true, None)
-        } else {
-            (false, None)
+            self.expand(len);
         }
+
+        None
     }
 
-    pub(crate) fn expand(&mut self, len: usize, pen: &Pen) {
-        let tpl = Cell::blank(*pen);
-        let filler = std::iter::repeat_n(tpl, len - self.len());
+    pub(crate) fn expand(&mut self, len: usize) {
+        let filler = std::iter::repeat_n(Cell::blank(Pen::default()), len - self.len());
         self.cells.extend(filler);
     }
 
