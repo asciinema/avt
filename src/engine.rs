@@ -274,9 +274,13 @@ impl Engine {
             Dch(n) => self.dch(n, observer),
 
             Decaln => self.decaln(observer),
-            Decrc | Scorc => self.rc(),
+
+            Decrc => self.decrc(),
+
             Decrst(ref modes) => self.decrst(modes, observer),
-            Decsc | Scosc => self.sc(),
+
+            Decsc => self.decsc(),
+
             Decset(ref modes) => self.decset(modes, observer),
 
             Decstbm(top, bottom) => self.decstbm(top, bottom),
@@ -316,6 +320,11 @@ impl Engine {
             Ris => self.ris(observer),
 
             Rm(ref modes) => self.rm(modes),
+
+            Scorc => self.scorc(),
+
+            Scosc => self.scosc(),
+
             Sd(n) => self.sd(n, observer),
 
             Sgr(ref params) => self.sgr(params),
@@ -610,7 +619,10 @@ impl Engine {
             assert!(saved.cursor_row < self.rows);
         }
 
-        for buffer in [&self.primary_buffer, self.active_buffer()] {
+        let buffers = std::iter::once(&self.primary_buffer)
+            .chain((self.active == ScreenKind::Alternate).then_some(&self.alternate_buffer));
+
+        for buffer in buffers {
             assert_eq!(buffer.view().len(), self.rows);
             assert!(buffer.lines().all(|line| line.len() == self.cols));
             assert!(!buffer.lines().last().unwrap().wrapped);
@@ -812,11 +824,11 @@ impl Engine {
         }
     }
 
-    fn sc(&mut self) {
+    fn decsc(&mut self) {
         self.save_cursor();
     }
 
-    fn rc(&mut self) {
+    fn decrc(&mut self) {
         self.restore_cursor();
     }
 
@@ -1197,6 +1209,14 @@ impl Engine {
         }
 
         self.move_cursor_home();
+    }
+
+    fn scosc(&mut self) {
+        self.save_cursor();
+    }
+
+    fn scorc(&mut self) {
+        self.restore_cursor();
     }
 
     fn decstr(&mut self) {
