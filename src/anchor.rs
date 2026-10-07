@@ -26,6 +26,15 @@ pub struct Position {
 #[derive(Clone, Debug)]
 pub struct Anchor(pub(crate) Arc<()>);
 
+impl Anchor {
+    /// Whether a line still holds this registration.
+    /// This includes removed lines during eviction callbacks, when the terminal
+    /// can no longer resolve the anchor.
+    pub(crate) fn is_registered(&self) -> bool {
+        Arc::weak_count(&self.0) != 0
+    }
+}
+
 /// An anchor registration stored on a line.
 /// The containing line determines its row and buffer.
 #[derive(Debug)]

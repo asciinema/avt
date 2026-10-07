@@ -105,14 +105,18 @@ impl ShellTracker {
                 self.editing = true;
                 self.input = None;
                 self.running = None;
-                let position = context.terminal().cursor_position();
+                let terminal = context.terminal();
+                let cursor = terminal.cursor();
+                let line = terminal.screen().line(cursor.row).unwrap();
 
-                // Reclaim lost annotations once per prompt, not on every printed
-                // character. Queries always resolve against current terminal state.
+                // Previous operations have finished eviction. Drop lost registrations
+                // and annotations at this position without resolving against history.
                 self.markers.retain(|marker| {
-                    context
-                        .resolve(&marker.anchor)
-                        .is_some_and(|existing| existing != position)
+                    marker.anchor.is_registered()
+                        && !line
+                            .marks
+                            .iter()
+                            .any(|mark| mark.col == cursor.col && mark.matches(&marker.anchor))
                 });
 
                 self.markers.push(PromptMarker {
@@ -461,6 +465,41 @@ mod tests {
         assert_eq!(prompts.len(), 1);
         assert_eq!(prompts[0].id, PromptId(1));
         assert_eq!(prompts[0].outcome, PromptOutcome::Editing);
+    }
+
+    #[test]
+    fn prompt_cleanup_retains_history_and_removes_erased_markers() {
+        for limit in [Some(0), Some(1), None] {
+            let mut terminal = Terminal::with_scrollback(8, 2, limit).unwrap();
+            let mut shell = ShellTracker::new();
+            terminal.feed_with([PROMPT, "one\x1b[H\x1b[2J", PROMPT], &mut shell);
+            let expected = if limit == Some(0) { 1 } else { 2 };
+            assert_eq!(shell.markers.len(), expected);
+
+            terminal.feed_with(["\r\x1b[2K", PROMPT], &mut shell);
+            assert_eq!(shell.markers.len(), expected);
+            let prompts: Vec<_> = shell.visible_prompts(&terminal).collect();
+            assert_eq!(prompts.len(), 1);
+            assert_eq!(prompts[0].id, PromptId(2));
+        }
+    }
+
+    #[test]
+    fn prompt_replacement_only_affects_the_active_buffer() {
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        let mut shell = ShellTracker::new();
+        terminal.feed_with(PROMPT, &mut shell);
+
+        for (index, switch) in ["\x1b[?1047h", "\x1b[?1047l", "\x1b[?1047h"]
+            .into_iter()
+            .enumerate()
+        {
+            terminal.feed_with([switch, "\x1b[H", PROMPT], &mut shell);
+            assert_eq!(shell.markers.len(), 2);
+            let prompts: Vec<_> = shell.visible_prompts(&terminal).collect();
+            assert_eq!(prompts.len(), 1);
+            assert_eq!(prompts[0].id, PromptId(index as u64 + 1));
+        }
     }
 
     #[test]
