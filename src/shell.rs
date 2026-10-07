@@ -76,17 +76,14 @@ impl ShellTracker {
         terminal: &'a Terminal,
     ) -> impl Iterator<Item = VisiblePrompt> + 'a {
         self.markers.iter().filter_map(|marker| {
-            let position = terminal.resolve(&marker.anchor)?;
-            let row = usize::try_from(position.row).ok()?;
+            let (col, row) = terminal.screen().resolve(&marker.anchor)?;
 
-            (position.screen == terminal.active_screen_kind() && row < terminal.size().1).then_some(
-                VisiblePrompt {
-                    id: marker.id,
-                    row,
-                    col: position.col,
-                    outcome: marker.outcome,
-                },
-            )
+            Some(VisiblePrompt {
+                id: marker.id,
+                row,
+                col,
+                outcome: marker.outcome,
+            })
         })
     }
 
@@ -196,29 +193,36 @@ impl Observer for ShellTracker {
                 return;
             };
 
-            let Some(start) = context.resolve(anchor) else {
+            if !anchor.is_registered() {
                 self.input = None;
 
                 return;
-            };
+            }
 
             let terminal = context.terminal();
+
+            if terminal.active_screen_kind() != ScreenKind::Primary {
+                return;
+            }
+
+            // A retained boundary may return from history after a resize.
+            let Some((col, row)) = terminal.primary_screen().resolve(anchor) else {
+                return;
+            };
+
             let cursor = terminal.cursor();
+            let before_start = (cursor.row, cursor.col) < (row, col);
 
-            if start.screen == terminal.active_screen_kind() && start.row >= 0 {
-                let before_start = (cursor.row as isize, cursor.col) < (start.row, start.col);
+            let hard_break = cursor.row > row
+                && terminal
+                    .primary_screen()
+                    .visible_lines()
+                    .skip(row)
+                    .take(cursor.row - row)
+                    .any(|line| !line.is_wrapped());
 
-                let hard_break = cursor.row as isize > start.row
-                    && terminal
-                        .screen()
-                        .visible_lines()
-                        .skip(start.row as usize)
-                        .take(cursor.row - start.row as usize)
-                        .any(|line| !line.is_wrapped());
-
-                if before_start || hard_break {
-                    self.input = None;
-                }
+            if before_start || hard_break {
+                self.input = None;
             }
         }
     }
@@ -229,14 +233,12 @@ impl Observer for ShellTracker {
 }
 
 fn command_text(terminal: &Terminal, anchor: &Anchor) -> Option<String> {
-    let start = terminal.resolve(anchor)?;
-
-    if start.screen != ScreenKind::Primary || terminal.active_screen_kind() != ScreenKind::Primary {
+    if terminal.active_screen_kind() != ScreenKind::Primary {
         return None;
     }
 
+    let (start_col, start_row) = terminal.primary_screen().resolve(anchor)?;
     let mut text = String::new();
-    let start_row = usize::try_from(start.row).ok()?;
 
     for (index, line) in terminal
         .primary_screen()
@@ -244,7 +246,7 @@ fn command_text(terminal: &Terminal, anchor: &Anchor) -> Option<String> {
         .skip(start_row)
         .enumerate()
     {
-        let col = if index == 0 { start.col } else { 0 };
+        let col = if index == 0 { start_col } else { 0 };
         let cells = line.cells().get(col..)?;
 
         if cells.first().is_some_and(|cell| cell.width() == 0) {
@@ -394,6 +396,36 @@ mod tests {
         assert!(events.iter().any(
             |event| matches!(event, ShellEvent::CommandSubmitted(command) if command.text.is_none())
         ));
+    }
+
+    #[test]
+    fn hidden_primary_resize_restores_retained_input_and_prompt() {
+        for limit in [Some(4), None] {
+            let mut terminal = Terminal::with_scrollback(8, 2, limit).unwrap();
+            let mut shell = ShellTracker::new();
+            terminal.feed_with([PROMPT, "abcdefghijklmno"], &mut shell);
+            assert_eq!(shell.visible_prompts(&terminal).count(), 0);
+            terminal.feed_with("p\x1b[?1049h\x1b[Halternate", &mut shell);
+            terminal.resize_with(8, 4, &mut shell);
+            assert_eq!(shell.visible_prompts(&terminal).count(), 0);
+            let events = terminal.feed_with(["\x1b[?1049l", SUBMIT], &mut shell);
+
+            assert!(matches!(
+                &events[0],
+                ShellEvent::CommandSubmitted(command)
+                    if command.text.as_deref() == Some("abcdefghijklmnop")
+            ));
+
+            assert_eq!(
+                shell.visible_prompts(&terminal).collect::<Vec<_>>(),
+                [VisiblePrompt {
+                    id: PromptId(0),
+                    row: 0,
+                    col: 0,
+                    outcome: PromptOutcome::Running,
+                }]
+            );
+        }
     }
 
     #[test]

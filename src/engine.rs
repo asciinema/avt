@@ -136,6 +136,15 @@ impl<'a> Screen<'a> {
         self.buffer.view().nth(n)
     }
 
+    pub(crate) fn resolve(self, anchor: &Anchor) -> Option<(usize, usize)> {
+        self.visible_lines().enumerate().find_map(|(row, line)| {
+            line.marks
+                .iter()
+                .find(|mark| mark.matches(anchor))
+                .map(|mark| (mark.col, row))
+        })
+    }
+
     /// Logical text lines: scrollback included, soft-wrapped rows joined,
     /// trailing whitespace trimmed.
     pub fn text(self) -> Vec<String> {
