@@ -88,7 +88,13 @@ impl ShellTracker {
     }
 
     fn set_outcome(&mut self, id: Option<PromptId>, outcome: PromptOutcome) {
-        if let Some(marker) = self.markers.iter_mut().find(|marker| Some(marker.id) == id) {
+        // Starting a prompt replaces the editing and running state, so only
+        // the newest marker can receive an outcome.
+        if let Some(marker) = self
+            .markers
+            .last_mut()
+            .filter(|marker| Some(marker.id) == id)
+        {
             marker.outcome = outcome;
         }
     }
