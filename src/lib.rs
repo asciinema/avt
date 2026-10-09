@@ -601,29 +601,24 @@ mod tests {
 
     proptest! {
         #[test]
-        fn prop_sanity_checks_infinite_scrollback(input in gen_input(25)) {
-            let mut terminal = Terminal::with_scrollback(10, 5, None).unwrap();
-            terminal.feed(input);
-            terminal.engine.verify();
-            assert!(terminal.screen().all_lines().count() >= terminal.size().1);
-        }
+        fn prop_sanity_checks_across_retention_policies(input in gen_input(25)) {
+            for limit in [Some(0), Some(3), None] {
+                let mut terminal = Terminal::with_scrollback(10, 5, limit).unwrap();
+                terminal.feed(&input);
+                terminal.engine.verify();
+                let (_, rows) = terminal.size();
+                let retained = terminal.primary_screen().all_lines().count();
 
-        #[test]
-        fn prop_sanity_checks_no_scrollback(input in gen_input(25)) {
-            let mut terminal = Terminal::new(10, 5).unwrap();
-            terminal.feed(input);
-            terminal.engine.verify();
-            assert_eq!(terminal.screen().all_lines().count(), terminal.size().1);
-        }
+                match limit {
+                    Some(limit) => assert!((rows..=rows + limit).contains(&retained)),
 
-        #[test]
-        fn prop_sanity_checks_fixed_scrollback(input in gen_input(25)) {
-            let limit = 3;
-            let mut terminal = Terminal::with_scrollback(10, 5, Some(limit)).unwrap();
-            terminal.feed(input);
-            let (_, rows) = terminal.size();
-            terminal.engine.verify();
-            assert!((rows..=rows + limit).contains(&terminal.screen().all_lines().count()));
+                    None => assert!(retained >= rows),
+                }
+
+                if terminal.active_screen_kind() == ScreenKind::Alternate {
+                    assert_eq!(terminal.screen().all_lines().count(), rows);
+                }
+            }
         }
 
         #[test]
@@ -638,7 +633,7 @@ mod tests {
             terminal.resize(new_cols, new_rows);
             terminal.feed(input2);
             terminal.engine.verify();
-            assert!(terminal.screen().all_lines().count() >= terminal.size().1);
+            assert!(terminal.primary_screen().all_lines().count() >= terminal.size().1);
         }
 
         #[test]
