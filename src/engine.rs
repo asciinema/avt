@@ -2798,6 +2798,11 @@ mod tests {
 
         assert_save_restore(Decsc, Decrc);
         assert_save_restore(Scosc, Scorc);
+
+        assert_save_restore(
+            Decset(dec_modes([DecMode::SaveCursor])),
+            Decrst(dec_modes([DecMode::SaveCursor])),
+        );
     }
 
     #[test]
@@ -3327,32 +3332,6 @@ mod tests {
 
         assert_eq!(term.active_screen_kind(), ScreenKind::Primary);
         assert_eq!(text(&term), "ab\ncd  |\n");
-    }
-
-    #[test]
-    fn execute_save_cursor_mode() {
-        let mut term = Engine::new((4, 4), None);
-
-        for function in [
-            Decrst(dec_modes([DecMode::AutoWrap])),
-            Decstbm(2, 4),
-            Decset(dec_modes([DecMode::Origin])),
-            Cup(2, 3),
-            sgr(SetBoldIntensity),
-            Decset(dec_modes([DecMode::SaveCursor])),
-            Decset(dec_modes([DecMode::AutoWrap])),
-            Decrst(dec_modes([DecMode::Origin])),
-            Cup(4, 4),
-            sgr(Reset),
-            Decrst(dec_modes([DecMode::SaveCursor])),
-        ] {
-            term.execute_with(&function, &mut ());
-        }
-
-        assert_eq!(term.cursor().position().unwrap(), (2, 2));
-        assert_eq!(term.pen.intensity, Intensity::Bold);
-        assert!(term.origin_mode);
-        assert!(!term.auto_wrap_mode);
     }
 
     #[test]
