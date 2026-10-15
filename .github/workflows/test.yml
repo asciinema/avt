@@ -26,3 +26,10 @@ jobs:
         primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
     - run: nix develop .#${{ matrix.shell }} --command cargo test
+    - name: Run examples
+      run: |
+        nix develop .#${{ matrix.shell }} --command bash -ec '
+          for source in examples/*.rs; do
+            cargo run --quiet --example "$(basename "$source" .rs)" </dev/null
+          done
+        '
