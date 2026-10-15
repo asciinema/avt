@@ -312,7 +312,7 @@ impl Line {
                 len -= 1;
             }
 
-            let mut rest = Line {
+            let rest = Line {
                 cells: self.cells.split_off(len),
                 wrapped: self.wrapped,
                 marks: self.split_marks(len),
@@ -321,10 +321,6 @@ impl Line {
             if wide_char_boundary {
                 let pen = self.cells[self.cells.len() - 1].pen();
                 self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
-            }
-
-            if !self.wrapped {
-                rest.trim();
             }
 
             self.wrapped = true;
