@@ -386,22 +386,21 @@ mod tests {
             )));
         }
 
-        let mut terminal = Terminal::new(6, 5).unwrap();
-        let mut shell = ShellTracker::new();
+        for command in ["echox", "echo ok"] {
+            let mut terminal = Terminal::new(6, 5).unwrap();
+            let mut shell = ShellTracker::new();
 
-        let events = terminal.feed_with(
-            ["\x1b[2;4r\x1b[4;1H", PROMPT, "echo ok", SUBMIT],
-            &mut shell,
-        );
+            let events =
+                terminal.feed_with(["\x1b[2;4r\x1b[4;1H", PROMPT, command, SUBMIT], &mut shell);
 
-        // Scrolling a region above the screen bottom breaks the logical wrap link.
-        // Reconstruction must stay unknown rather than return a partial command.
-        assert!(!terminal.screen().line(2).unwrap().is_wrapped());
-        assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
+            assert!(terminal.screen().line(2).unwrap().is_wrapped());
+            assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
 
-        assert!(events.iter().any(
-            |event| matches!(event, ShellEvent::CommandSubmitted(command) if command.text.is_none())
-        ));
+            assert!(events.iter().any(|event| matches!(
+                event,
+                ShellEvent::CommandSubmitted(submitted) if submitted.text.as_deref() == Some(command)
+            )));
+        }
     }
 
     #[test]

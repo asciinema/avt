@@ -736,26 +736,21 @@ impl Engine {
 
     fn wrap_and_print_at_line_start(&mut self, ch: char, observer: &mut impl Observer) {
         let row = self.cursor.row;
+        let pen = self.pen;
 
-        let marks = if row == self.bottom_margin {
-            let marks = self.active_buffer_mut().wrap(row);
-            self.scroll_up_in_region(1, observer);
+        if row == self.bottom_margin {
+            let range = self.top_margin..self.bottom_margin + 1;
 
-            marks
+            self.active_buffer_mut()
+                .wrap_and_scroll_up(range.clone(), &pen);
+
+            observer.dirty(range);
         } else if row < self.rows - 1 {
-            let marks = self.active_buffer_mut().wrap(row);
+            self.active_buffer_mut().wrap_to_next_row(row);
             self.cursor.row += 1;
-
-            marks
-        } else {
-            Vec::new()
-        };
-
-        let row = self.cursor.row;
-        self.active_buffer_mut().attach_marks(row, marks);
+        }
 
         let pos = (0, self.cursor.row);
-        let pen = self.pen;
 
         if let Some(width) = self.active_buffer_mut().print(pos, ch, pen) {
             self.cursor.col = width;
@@ -2576,14 +2571,6 @@ mod tests {
         let mut term = Terminal::with_scrollback(4, 4, None).unwrap();
 
         term.feed("abcdefghijklmn");
-        term.execute([Decstbm(1, 3), Cup(2, 1), Dl(0)]);
-
-        assert_eq!(text(&term), "abcd\n|ijkl\n\nmn");
-        assert_eq!(wrapped(&term), vec![false, false, false, false]);
-
-        let mut term = Terminal::with_scrollback(4, 4, None).unwrap();
-
-        term.feed("abcdefghijklmn");
         term.execute([Decstbm(1, 2), Cup(4, 1), Dl(0)]);
 
         assert_eq!(text(&term), "abcd\nefgh\nijkl\n|");
@@ -2823,6 +2810,135 @@ mod tests {
     }
 
     #[test]
+    fn autowrap_preserves_continuation_at_scrolling_margins() {
+        for (top, bottom) in [(1, 5), (1, 4), (2, 4), (2, 5)] {
+            for alternate in [false, true] {
+                let limits: &[Option<usize>] = if top == 1 && !alternate {
+                    &[Some(0), Some(2), None]
+                } else {
+                    &[Some(0)]
+                };
+
+                for &limit in limits {
+                    let mut terminal = Terminal::with_scrollback(4, 5, limit).unwrap();
+
+                    if alternate {
+                        terminal.feed("\x1b[?1047h");
+                    }
+
+                    terminal.feed("1111\r\n2222\r\n3333\r\n4444\r\n5555");
+                    terminal.execute([Decstbm(top, bottom), Cup(bottom, 1)]);
+                    terminal.feed("ABCD");
+
+                    assert!(
+                        !terminal
+                            .screen()
+                            .line(bottom as usize - 1)
+                            .unwrap()
+                            .is_wrapped()
+                    );
+
+                    let before: Vec<_> = terminal.screen().visible_lines().cloned().collect();
+                    let mut dirty = DirtyRows::new();
+                    terminal.feed_with("", &mut dirty);
+                    let rows = terminal.feed_with("E", &mut dirty);
+                    let range = top as usize - 1..bottom as usize;
+                    assert_eq!(rows, range.clone().collect::<Vec<_>>());
+                    assert_eq!(terminal.cursor().position(), Some((1, range.end - 1)));
+
+                    for (row, line) in terminal.screen().visible_lines().enumerate() {
+                        let expected = if row == range.end - 1 {
+                            "E   ".to_owned()
+                        } else if range.contains(&row) {
+                            before[row + 1].text()
+                        } else {
+                            before[row].text()
+                        };
+
+                        assert_eq!(line.text(), expected);
+                        assert_eq!(line.is_wrapped(), row == range.end - 2);
+                    }
+
+                    assert!(terminal.screen().text().iter().any(|line| line == "ABCDE"));
+                    terminal.engine.verify();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn restricted_margin_wrap_survives_dump_and_resize() {
+        for alternate in [false, true] {
+            let mut terminal = Terminal::new(4, 5).unwrap();
+
+            if alternate {
+                terminal.feed("\x1b[?1047h");
+            }
+
+            terminal.execute([Decstbm(2, 4), Cup(4, 1)]);
+            terminal.feed("ABCDE");
+            let mut restored = Terminal::new(4, 5).unwrap();
+            restored.feed(terminal.dump());
+            terminal.engine.assert_dump_equivalent(&restored.engine);
+            terminal.resize(8, 5);
+            restored.resize(8, 5);
+            terminal.engine.assert_dump_equivalent(&restored.engine);
+            let screen = terminal.screen();
+            let line = screen.line(2).unwrap();
+            assert_eq!(line.text().trim_end(), "ABCDE");
+            assert!(!line.is_wrapped());
+        }
+    }
+
+    #[test]
+    fn autowrap_scroll_breaks_only_the_displaced_upper_connection() {
+        let mut terminal = Terminal::new(4, 5).unwrap();
+        terminal.feed("abcdefghijklmnopq");
+        terminal.execute([Decstbm(2, 4), Cup(4, 1)]);
+        terminal.feed("ABCD");
+        terminal.execute(Rep(1));
+        assert_eq!(wrapped(&terminal), [false, true, true, false, false]);
+        assert_eq!(terminal.screen().text(), ["abcd", "ijklABCDD", "q"]);
+        assert_eq!(terminal.cursor().position(), Some((1, 3)));
+    }
+
+    #[test]
+    fn ordinary_scrolling_breaks_displaced_wrap_connections() {
+        for (function, top, row) in [(Su(1), 2, 1), (Dl(1), 1, 2), (Lf, 2, 4), (Nel, 2, 4)] {
+            let mut terminal = Terminal::new(4, 5).unwrap();
+            terminal.feed("abcdefghijklmnopq");
+            terminal.execute([Decstbm(top, 4), Cup(row, 1)]);
+            terminal.execute(function);
+            assert_eq!(wrapped(&terminal), [false, true, false, false, false]);
+            assert_eq!(terminal.screen().text(), ["abcd", "ijklmnop", "", "q"]);
+            assert_eq!(terminal.cursor().position(), Some((0, row as usize - 1)));
+        }
+    }
+
+    #[test]
+    fn wide_character_autowrap_preserves_continuation_at_bottom_margin() {
+        for source in ["abc ", "abcd"] {
+            let mut terminal = Terminal::new(4, 4).unwrap();
+            terminal.execute([Decstbm(2, 3), Cup(3, 1)]);
+            terminal.feed(source);
+            terminal.execute(Cup(3, 4));
+            terminal.feed("界");
+            terminal.engine.verify();
+            let expected = format!("{source}界");
+            assert_eq!(wrapped(&terminal), [false, true, false, false]);
+            assert_eq!(terminal.screen().text(), ["", &expected, ""]);
+            assert_eq!(terminal.cursor().position(), Some((2, 2)));
+            terminal.resize(8, 4);
+            terminal.engine.verify();
+
+            assert_eq!(
+                terminal.screen().line(1).unwrap().text().trim_end(),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn insert_mode() {
         let mut term = Terminal::with_scrollback(4, 4, None).unwrap();
 
@@ -2993,18 +3109,6 @@ mod tests {
 
         assert_eq!(text(&term), "bbbb\nbb\ncccc\ncc\n\n  |");
         assert_eq!(wrapped(&term), vec![true, false, true, false, false, false]);
-
-        let mut term = Terminal::with_scrollback(4, 6, None).unwrap();
-
-        term.feed("aaaaaa\r\nbbbbbb\r\ncccccc");
-        term.execute([Decstbm(2, 5), Cup(1, 1), Su(2)]);
-
-        assert_eq!(text(&term), "|aaaa\nbb\ncccc\n\n\ncc");
-
-        assert_eq!(
-            wrapped(&term),
-            vec![false, false, false, false, false, false]
-        );
     }
 
     #[test]

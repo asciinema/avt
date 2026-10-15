@@ -55,7 +55,7 @@ impl Mark {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Anchor, Position, ScreenKind, Terminal};
+    use crate::{Anchor, Line, Observation, Observer, Operation, Position, ScreenKind, Terminal};
     use proptest::prelude::*;
 
     fn at(terminal: &mut Terminal, col: usize, row: isize) -> Anchor {
@@ -172,6 +172,108 @@ mod tests {
         assert_eq!(pos(&terminal, &anchor), Some((0, 1)));
         terminal.feed("bcd!"); // Wrap again, evicting the row before the anchor.
         assert_eq!(pos(&terminal, &anchor), Some((0, 0)));
+    }
+
+    #[test]
+    fn autowrap_scroll_relocates_cell_and_boundary_anchors() {
+        for (top, bottom) in [(1, 5), (1, 4), (2, 4), (2, 5)] {
+            for alternate in [false, true] {
+                let mut terminal = Terminal::new(4, 5).unwrap();
+
+                if alternate {
+                    terminal.feed("\x1b[?1047h");
+                }
+
+                terminal.feed(format!("\x1b[{top};{bottom}r\x1b[{bottom};1HABCD"));
+                let source = at(&mut terminal, 1, bottom - 1);
+                let boundary = terminal.anchor_at_cursor();
+                terminal.feed("E");
+                assert_eq!(pos(&terminal, &source), Some((1, bottom - 2)));
+                assert_eq!(pos(&terminal, &boundary), Some((0, bottom - 1)));
+                terminal.resize(8, 5);
+                let source = terminal.resolve(&source).unwrap();
+                let boundary = terminal.resolve(&boundary).unwrap();
+                assert_eq!(source.col, 1);
+                assert_eq!(boundary.col, 4);
+                assert_eq!(source.row, boundary.row);
+                assert_eq!(source.screen, terminal.active_screen_kind());
+                assert_eq!(boundary.screen, source.screen);
+            }
+        }
+    }
+
+    #[test]
+    fn one_row_wrap_relocates_boundary_anchors_before_callbacks() {
+        struct WrapObserver {
+            source: Anchor,
+            boundary: Anchor,
+            after: bool,
+            evicted: bool,
+        }
+
+        impl Observer for WrapObserver {
+            type Output = ();
+
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation) {
+                let terminal = context.terminal();
+                assert_eq!(pos(terminal, &self.source), Some((0, -1)));
+                assert_eq!(pos(terminal, &self.boundary), Some((0, 0)));
+                assert!(terminal.screen().all_lines().next().unwrap().is_wrapped());
+                assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+                assert_eq!(terminal.cursor().position(), Some((1, 0)));
+                terminal.engine.verify();
+                self.after = true;
+            }
+
+            fn evicted(&mut self, context: &mut Observation<'_>, line: &Line) {
+                assert!(self.after);
+                assert!(!self.evicted);
+                assert!(line.is_wrapped());
+                assert!(context.resolve(&self.source).is_none());
+                assert!(self.source.is_registered());
+                assert_eq!(pos(context.terminal(), &self.boundary), Some((0, 0)));
+                self.evicted = true;
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) {}
+        }
+
+        for cols in [1, 4] {
+            for (alternate, limit) in [
+                (false, Some(0)),
+                (false, Some(1)),
+                (false, None),
+                (true, Some(0)),
+            ] {
+                let mut terminal = Terminal::with_scrollback(cols, 1, limit).unwrap();
+
+                if alternate {
+                    terminal.feed("\x1b[?1047h");
+                }
+
+                terminal.feed("A".repeat(cols));
+
+                let mut observer = WrapObserver {
+                    source: at(&mut terminal, 0, 0),
+                    boundary: terminal.anchor_at_cursor(),
+                    after: false,
+                    evicted: false,
+                };
+
+                terminal.feed_with("B", &mut observer);
+                assert!(observer.after);
+                assert_eq!(observer.evicted, !alternate && limit == Some(0));
+                let retained = !alternate && limit != Some(0);
+
+                assert_eq!(
+                    pos(&terminal, &observer.source),
+                    retained.then_some((0, -1))
+                );
+
+                assert_eq!(observer.source.is_registered(), retained);
+                assert_eq!(pos(&terminal, &observer.boundary), Some((0, 0)));
+            }
+        }
     }
 
     #[test]

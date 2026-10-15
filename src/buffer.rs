@@ -86,15 +86,23 @@ impl Buffer {
         self[row].print(col, ch, pen)
     }
 
-    pub fn wrap(&mut self, row: usize) -> Vec<Mark> {
+    pub fn wrap_to_next_row(&mut self, row: usize) {
+        let marks = self.wrap(row);
+        self[row + 1].marks.extend(marks);
+    }
+
+    pub fn wrap_and_scroll_up(&mut self, range: Range<usize>, pen: &Pen) {
+        let row = range.end - 1;
+        let marks = self.wrap(row);
+        self.scroll_up_preserving_bottom_wrap(range, 1, pen);
+        self[row].marks.extend(marks);
+    }
+
+    fn wrap(&mut self, row: usize) -> Vec<Mark> {
         self[row].wrapped = true;
         let cols = self.cols;
 
         self[row].split_marks(cols)
-    }
-
-    pub fn attach_marks(&mut self, row: usize, marks: Vec<Mark>) {
-        self[row].marks.extend(marks);
     }
 
     pub fn anchor_at(&mut self, col: usize, row: isize) -> Option<Anchor> {
@@ -193,12 +201,17 @@ impl Buffer {
         }
     }
 
-    pub fn scroll_up(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
-        n = n.min(range.end - range.start);
-
-        if range.end - 1 < self.rows - 1 {
+    pub fn scroll_up(&mut self, range: Range<usize>, n: usize, pen: &Pen) {
+        if range.end < self.rows {
             self[range.end - 1].wrapped = false;
         }
+
+        self.scroll_up_preserving_bottom_wrap(range, n, pen);
+    }
+
+    // Callers decide whether the old bottom row continues into the newly exposed row.
+    fn scroll_up_preserving_bottom_wrap(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
+        n = n.min(range.end - range.start);
 
         if range.start == 0 {
             if range.end == self.rows {

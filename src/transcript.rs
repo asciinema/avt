@@ -79,6 +79,23 @@ mod tests {
     }
 
     #[test]
+    fn joins_restricted_margin_wraps_across_eviction() {
+        for limit in [Some(0), Some(1), None] {
+            let mut terminal = Terminal::with_scrollback(4, 4, limit).unwrap();
+            let mut transcript = Transcript::new();
+            terminal.feed_with("\x1b[1;3r", &mut transcript);
+
+            for chunk in ["abcdefghijklm", "nopqrstu"] {
+                assert!(terminal.feed_with(chunk, &mut transcript).is_empty());
+            }
+
+            let mut lines = terminal.feed_with("\r\nnext\r\n\r\n", &mut transcript);
+            lines.extend(transcript.finish(&terminal));
+            assert_eq!(lines, ["abcdefghijklmnopqrstu", "next"]);
+        }
+    }
+
+    #[test]
     fn finish_reads_primary_content_while_alternate_is_active() {
         let mut terminal = Terminal::with_scrollback(10, 2, None).unwrap();
         let mut transcript = Transcript::new();
