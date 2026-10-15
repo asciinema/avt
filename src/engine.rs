@@ -156,8 +156,8 @@ impl Engine {
     pub fn new((cols, rows): (usize, usize), scrollback_limit: Option<usize>) -> Self {
         assert!(cols > 0 && rows > 0, "terminal size must be at least 1x1");
 
-        let primary_buffer = Buffer::new(cols, rows, scrollback_limit, None);
-        let alternate_buffer = Buffer::new(cols, rows, Some(0), None);
+        let primary_buffer = Buffer::new(cols, rows, scrollback_limit, Pen::default());
+        let alternate_buffer = Buffer::new(cols, rows, Some(0), Pen::default());
 
         Engine {
             cols,
@@ -521,7 +521,7 @@ impl Engine {
         if let ScreenKind::Primary = self.active {
             self.primary_cursor = (self.cursor.col, self.cursor.row);
             self.active = ScreenKind::Alternate;
-            self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), Some(&self.pen));
+            self.alternate_buffer = Buffer::new(self.cols, self.rows, Some(0), self.pen);
             observer.dirty(0..self.rows);
         }
     }

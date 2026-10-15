@@ -34,27 +34,14 @@ type RelativePosition = (usize, isize);
 type VisualPosition = (usize, usize);
 
 impl Buffer {
-    pub fn new(
-        cols: usize,
-        rows: usize,
-        scrollback_limit: Option<usize>,
-        pen: Option<&Pen>,
-    ) -> Self {
-        let default_pen = Pen::default();
-        let pen = pen.unwrap_or(&default_pen);
+    pub fn new(cols: usize, rows: usize, scrollback_limit: Option<usize>, pen: Pen) -> Self {
         let mut lines = VecDeque::with_capacity(rows);
 
         for _ in 0..rows {
-            lines.push_back(Line::blank(cols, *pen));
+            lines.push_back(Line::blank(cols, pen));
         }
 
-        if let Some(limit) = scrollback_limit {
-            if limit > 0 {
-                lines.reserve(limit);
-            }
-        } else {
-            lines.reserve(1000);
-        }
+        lines.reserve(scrollback_limit.unwrap_or(1000));
 
         Buffer {
             lines,
@@ -566,7 +553,7 @@ mod tests {
 
     #[test]
     fn text() {
-        let mut buffer = Buffer::new(10, 5, None, None);
+        let mut buffer = Buffer::new(10, 5, None, Pen::default());
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
 
@@ -931,7 +918,7 @@ mod tests {
         fn prop_cursor_translation(scrollback_size in 0..20usize, wrapped in prop::collection::vec(prop::bool::ANY, 5), col in 0..10usize, row in 0..5usize) {
             let cols = 10;
             let rows = 5;
-            let mut buffer = Buffer::new(cols, rows, None, None);
+            let mut buffer = Buffer::new(cols, rows, None, Pen::default());
             buffer.add_scrollback(scrollback_size);
 
             for (i, w) in wrapped.iter().enumerate() {
@@ -968,7 +955,7 @@ mod tests {
     ) -> Buffer {
         let cols = content[0].0.len();
         let rows = content.len();
-        let mut buffer = Buffer::new(cols, rows, scrollback_limit, None);
+        let mut buffer = Buffer::new(cols, rows, scrollback_limit, Pen::default());
 
         if !matches!(scrollback_limit, Some(0)) {
             buffer.add_scrollback(scrollback_size);
