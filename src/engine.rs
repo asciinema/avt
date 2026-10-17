@@ -1716,15 +1716,16 @@ fn as_usize(value: u16, default: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::{Engine, ScreenKind};
+    use crate::Terminal;
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
+    use crate::observer::DirtyRows;
     use crate::parser::{
         AnsiMode, AnsiModes, DecMode, DecModes, EdScope, ElScope, Function, SgrOp, SgrOps,
     };
     use crate::pen::Intensity;
     use crate::pen::Pen;
-    use crate::{DirtyRows, Terminal};
     use Function::*;
     use SgrOp::*;
 

@@ -1,4 +1,5 @@
-use avt::{Terminal, Transcript};
+use avt::Terminal;
+use avt::observer::Transcript;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::io::stdin();

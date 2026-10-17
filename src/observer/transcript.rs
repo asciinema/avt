@@ -1,5 +1,6 @@
+use super::{Observation, Observer};
 use crate::parser::Function;
-use crate::{Line, Observation, Observer, Operation, Terminal};
+use crate::{Line, Operation, Terminal};
 
 /// Plain text from primary-buffer eviction and final retained content.
 /// ED2-cleared content follows the normal history path, including editable prompts.

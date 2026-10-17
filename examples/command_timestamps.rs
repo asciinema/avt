@@ -1,6 +1,6 @@
 //! Associate submitted commands with application-provided prompt-start times.
 use avt::Terminal;
-use avt::{ShellEvent, ShellTracker};
+use avt::observer::{ShellEvent, ShellTracker};
 use std::collections::HashMap;
 
 fn main() {

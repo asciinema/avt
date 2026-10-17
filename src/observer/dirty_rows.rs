@@ -1,6 +1,6 @@
 use std::ops::Range;
 
-use crate::{Observation, Observer};
+use super::{Observation, Observer};
 
 /// Accumulates repaint rows for one terminal, returning sorted, unique indices.
 /// The first observed call requests a full repaint. Pass this observer through

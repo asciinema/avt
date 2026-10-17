@@ -1,6 +1,6 @@
 //! Preserve primary text across scrolling, reflow, and a screen clear.
 use avt::Terminal;
-use avt::Transcript;
+use avt::observer::Transcript;
 
 fn main() {
     let mut terminal = Terminal::new(24, 2).unwrap();

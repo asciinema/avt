@@ -1,6 +1,6 @@
 //! Repaint changed rows, including the old and new cursor positions.
-use avt::DirtyRows;
 use avt::Terminal;
+use avt::observer::DirtyRows;
 
 fn main() {
     let mut terminal = Terminal::new(16, 3).unwrap();

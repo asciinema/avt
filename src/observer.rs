@@ -1,3 +1,18 @@
+//! Synchronous terminal observation and built-in observers.
+//!
+//! Implement [`Observer`] for custom analysis, or compose [`DirtyRows`],
+//! [`Transcript`], and [`ShellTracker`] using tuples.
+
+mod dirty_rows;
+mod shell;
+mod transcript;
+
+pub use dirty_rows::DirtyRows;
+pub use shell::{
+    Command, CommandId, PromptId, PromptOutcome, ShellEvent, ShellTracker, VisiblePrompt,
+};
+pub use transcript::Transcript;
+
 use crate::{Anchor, Line, Operation, Position, Terminal};
 use std::ops::Range;
 

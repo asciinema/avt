@@ -1,8 +1,8 @@
 //! Compose a custom primary-text indexer with shell tracking.
 use std::collections::BTreeSet;
 
+use avt::observer::{ShellEvent, ShellTracker, Transcript};
 use avt::{Line, Observation, Observer, Operation, Terminal};
-use avt::{ShellEvent, ShellTracker, Transcript};
 
 #[derive(Default)]
 struct TextIndex {

@@ -1,6 +1,6 @@
 //! Locate prompt annotations beside visible screen rows, including after reflow.
-use avt::ShellTracker;
 use avt::Terminal;
+use avt::observer::ShellTracker;
 
 fn main() {
     let mut terminal = Terminal::new(24, 6).unwrap();

@@ -10,7 +10,8 @@
 //! do not finish parsing or logical lines.
 //!
 //! ```
-//! use avt::{DirtyRows, Terminal};
+//! use avt::observer::DirtyRows;
+//! use avt::Terminal;
 //!
 //! let mut terminal = Terminal::new(80, 24)?;
 //! let mut dirty = DirtyRows::new();
@@ -32,23 +33,19 @@ mod buffer;
 mod cell;
 mod charset;
 mod color;
-mod dirty_rows;
 mod engine;
 pub mod input;
 mod line;
-mod observer;
+pub mod observer;
 pub mod operation;
 pub mod parser;
 mod pen;
-mod shell;
 mod tabs;
-mod transcript;
 
 pub use anchor::{Anchor, Position};
 pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
-pub use dirty_rows::DirtyRows;
 pub use engine::{Cursor, Screen, ScreenKind};
 pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
@@ -56,10 +53,6 @@ pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
 pub use parser::{Parser, ShellIntegration};
 pub use pen::Pen;
-pub use shell::{
-    Command, CommandId, PromptId, PromptOutcome, ShellEvent, ShellTracker, VisiblePrompt,
-};
-pub use transcript::Transcript;
 
 /// Rejected terminal dimensions. Both columns and rows must be positive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -298,11 +291,9 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
 
+    use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
     use crate::parser::{EdScope, Function};
-    use crate::{
-        DirtyRows, Input, IntoInputs, Observation, Observer, Operation, ScreenKind, ShellEvent,
-        ShellTracker, Terminal, Transcript,
-    };
+    use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use proptest::prelude::*;
     use std::{env, fs};
 
@@ -1106,8 +1097,8 @@ mod tests {
         assert_eq!(
             commands,
             [
-                (Some(crate::PromptId(0)), Some("echo")),
-                (Some(crate::PromptId(1)), Some("pwd")),
+                (Some(PromptId(0)), Some("echo")),
+                (Some(PromptId(1)), Some("pwd")),
             ]
         );
 
@@ -1141,15 +1132,12 @@ mod tests {
         let restored_events = restored.feed_with(tail, &mut restored_shell);
         assert_eq!(original_events, restored_events);
 
-        assert_eq!(
-            restored_events[0],
-            ShellEvent::PromptStarted(crate::PromptId(0))
-        );
+        assert_eq!(restored_events[0], ShellEvent::PromptStarted(PromptId(0)));
 
         assert!(matches!(
             &restored_events[1],
             ShellEvent::CommandSubmitted(command)
-                if command.prompt == Some(crate::PromptId(0))
+                if command.prompt == Some(PromptId(0))
                     && command.text.as_deref() == Some("cmd")
         ));
 
