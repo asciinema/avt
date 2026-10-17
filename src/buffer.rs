@@ -302,6 +302,7 @@ impl Buffer {
         }
 
         let line_count = self.lines.len();
+        debug_assert!(old_rows <= line_count);
 
         match new_rows.cmp(&old_rows) {
             Ordering::Less => {
@@ -319,7 +320,7 @@ impl Buffer {
 
             Ordering::Greater => {
                 let mut height_delta = new_rows - old_rows;
-                let scrollback_size = line_count - old_rows.min(line_count);
+                let scrollback_size = line_count - old_rows;
                 let cursor_row_shift = scrollback_size.min(height_delta);
                 height_delta -= cursor_row_shift;
 
@@ -367,9 +368,13 @@ impl Buffer {
         let mut rel_col = pos.0;
         let mut rel_row = 0;
         let mut r = 0;
-        let last_row = self.lines.len() - 1;
 
-        while r < pos.1 && rel_row < last_row {
+        while r < pos.1 {
+            debug_assert!(
+                rel_row + 1 < self.lines.len(),
+                "logical cursor row must survive reflow"
+            );
+
             if !self.lines[rel_row].wrapped {
                 r += 1;
             }
