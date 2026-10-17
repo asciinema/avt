@@ -1524,17 +1524,7 @@ fn dump_pending_wrap(
 }
 
 fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
-    let mut cutoff = 0;
-    let mut wrapped = false;
-
-    for (i, line) in buffer.view().enumerate() {
-        if wrapped || line.wrapped || !line.is_blank() {
-            cutoff = i + 1;
-        }
-
-        wrapped = line.wrapped;
-    }
-
+    let cutoff = buffer.occupied_prefix_len(false);
     let last = buffer.rows - 1;
     let mut pen = Pen::default();
 

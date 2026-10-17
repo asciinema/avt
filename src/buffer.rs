@@ -221,25 +221,35 @@ impl Buffer {
         self.trim_needed = true;
     }
 
+    /// Counts visible rows through the last occupied row or soft-wrap terminator.
+    /// `previous_wrapped` indicates a continuation entering the first visible row.
+    pub fn occupied_prefix_len(&self, mut previous_wrapped: bool) -> usize {
+        let mut end = 0;
+
+        for (row, line) in self.view().enumerate() {
+            if previous_wrapped || line.wrapped || !line.is_blank() {
+                end = row + 1;
+            }
+
+            previous_wrapped = line.wrapped;
+        }
+
+        end
+    }
+
     /// Moves the occupied screen prefix into history, including blank rows that
     /// finish a soft-wrapped line. Trailing ordinary blank rows stay on screen.
     pub fn scroll_out(&mut self, pen: &Pen) {
-        let mut end = 0;
-
-        let mut wrapped = self
+        let previous_wrapped = self
             .view_offset()
             .checked_sub(1)
             .map_or(self.front_wrapped, |row| self.lines[row].wrapped);
 
-        for (row, line) in self.view().enumerate() {
-            if wrapped || line.wrapped || !line.is_blank() {
-                end = row + 1;
-            }
+        let end = self.occupied_prefix_len(previous_wrapped);
 
-            wrapped = line.wrapped;
+        if end > 0 {
+            self.scroll_up(0..self.rows, end, pen);
         }
-
-        self.scroll_up(0..self.rows, end, pen);
     }
 
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
