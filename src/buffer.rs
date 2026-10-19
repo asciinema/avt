@@ -270,13 +270,14 @@ impl Buffer {
         new_cols: usize,
         new_rows: usize,
         mut cursor: VisualPosition,
+        reflow_enabled: bool,
     ) -> VisualPosition {
         debug_assert!(cursor.0 <= self.cols && cursor.1 < self.rows);
 
         let old_cols = self.cols;
         let mut old_rows = self.rows;
 
-        if new_cols != old_cols {
+        if new_cols != old_cols && reflow_enabled {
             let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
             self.lines = reflow(self.lines.drain(..), new_cols);
 
@@ -299,6 +300,12 @@ impl Buffer {
                 cursor.1 = 0;
                 old_rows += (-cursor_rel_pos.1) as usize;
             }
+        } else if new_cols != old_cols {
+            for line in &mut self.lines {
+                line.resize(new_cols);
+            }
+
+            cursor.0 = cursor.0.min(new_cols - 1);
         }
 
         let line_count = self.lines.len();
@@ -956,7 +963,7 @@ mod tests {
         mut cursor: VisualPosition,
     ) -> (Vec<String>, VisualPosition) {
         let mut buffer = buffer(&content, None, scrollback_size);
-        cursor = buffer.resize(new_cols, new_rows, cursor);
+        cursor = buffer.resize(new_cols, new_rows, cursor, true);
 
         let view = buffer.view().map(|line| line.text()).collect::<Vec<_>>();
 

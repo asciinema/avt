@@ -288,6 +288,19 @@ impl Line {
         None
     }
 
+    /// Resizes a row without reflow, preserving its soft-wrap relationship.
+    pub(crate) fn resize(&mut self, len: usize) {
+        debug_assert!(len > 0);
+
+        if len < self.len() {
+            let pen = *self.cells[len - 1].pen();
+            self.clear(len..self.len(), &pen);
+            self.cells.truncate(len);
+        } else {
+            self.expand(len);
+        }
+    }
+
     pub(crate) fn expand(&mut self, len: usize) {
         let filler = std::iter::repeat_n(Cell::blank(Pen::default()), len - self.len());
         self.cells.extend(filler);

@@ -161,6 +161,46 @@ mod tests {
     }
 
     #[test]
+    fn alternate_resize_invalidates_clipped_and_split_wide_anchors() {
+        for cols in [0usize, 1, 3] {
+            let width = cols.max(1);
+            let mut terminal = Terminal::new(6, 2).unwrap();
+            terminal.feed("\x1b[?1047h");
+            terminal.feed("a".repeat(width - 1));
+            terminal.feed("\x1b[41m界cd");
+            let head = at(&mut terminal, width - 1, 0);
+            let tail = at(&mut terminal, width, 0);
+            let clipped = at(&mut terminal, width + 1, 0);
+            let boundary = at(&mut terminal, 6, 0);
+            let retained = at(&mut terminal, 0, 1);
+            terminal.resize(cols, 2);
+            terminal.engine.verify();
+
+            for anchor in [&head, &tail, &clipped, &boundary] {
+                assert!(terminal.resolve(anchor).is_none());
+            }
+
+            assert_eq!(pos(&terminal, &retained), Some((0, 1)));
+            let cell = terminal.screen().line(0).unwrap().cells()[width - 1];
+            assert_eq!(cell.char(), ' ');
+            assert_eq!(cell.width(), 1);
+            assert_eq!(cell.pen().background(), Some(crate::Color::Indexed(1)));
+            terminal.resize(6, 2);
+            assert_eq!(pos(&terminal, &retained), Some((0, 1)));
+
+            assert_eq!(
+                terminal.screen().line(0).unwrap().text().trim_end(),
+                "a".repeat(width - 1)
+            );
+
+            assert_eq!(
+                *terminal.screen().line(0).unwrap().cells()[width].pen(),
+                crate::Pen::default()
+            );
+        }
+    }
+
+    #[test]
     fn cursor_end_boundary_moves_to_next_row_on_wrap() {
         let mut terminal = Terminal::new(4, 2).unwrap();
         terminal.feed("1234");
@@ -194,8 +234,15 @@ mod tests {
                 let source = terminal.resolve(&source).unwrap();
                 let boundary = terminal.resolve(&boundary).unwrap();
                 assert_eq!(source.col, 1);
-                assert_eq!(boundary.col, 4);
-                assert_eq!(source.row, boundary.row);
+
+                if alternate {
+                    assert_eq!(boundary.col, 0);
+                    assert_eq!(source.row + 1, boundary.row);
+                } else {
+                    assert_eq!(boundary.col, 4);
+                    assert_eq!(source.row, boundary.row);
+                }
+
                 assert_eq!(source.screen, terminal.active_screen_kind());
                 assert_eq!(boundary.screen, source.screen);
             }

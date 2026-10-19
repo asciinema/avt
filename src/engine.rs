@@ -557,11 +557,15 @@ impl Engine {
 
         observer.resized(cols, rows);
         let cursor = (self.cursor.col, self.cursor.row);
+        let reflow = self.active == ScreenKind::Primary;
 
-        (self.cursor.col, self.cursor.row) = self.active_buffer_mut().resize(cols, rows, cursor);
+        (self.cursor.col, self.cursor.row) =
+            self.active_buffer_mut().resize(cols, rows, cursor, reflow);
 
         if self.active == ScreenKind::Alternate {
-            self.primary_cursor = self.primary_buffer.resize(cols, rows, self.primary_cursor);
+            self.primary_cursor = self
+                .primary_buffer
+                .resize(cols, rows, self.primary_cursor, true);
         }
 
         for saved in [
@@ -1748,6 +1752,73 @@ mod tests {
     }
 
     #[test]
+    fn alternate_resize_clips_and_pads_rows_without_reflow() {
+        for mode in [1047, 1049] {
+            let mut terminal = Terminal::new(4, 3).unwrap();
+            terminal.feed(format!("\x1b[?{mode}habcdef\r\ngh"));
+
+            for (cols, expected, cursor_col) in [
+                (6, ["abcd  ", "ef    ", "gh    "], 2),
+                (2, ["ab", "ef", "gh"], 1),
+                (4, ["ab  ", "ef  ", "gh  "], 1),
+            ] {
+                terminal.resize(cols, 3);
+                terminal.engine.verify();
+
+                let lines: Vec<_> = terminal.screen().visible_lines().map(Line::text).collect();
+
+                assert_eq!(lines, expected);
+                assert_eq!(wrapped(&terminal), [true, false, false]);
+                assert_eq!(terminal.cursor().position(), Some((cursor_col, 2)));
+                assert_eq!(terminal.screen().all_lines().count(), 3);
+            }
+
+            assert_eq!(terminal.screen().text(), ["ab  ef", "gh"]);
+            terminal.feed("X");
+            assert_eq!(terminal.screen().line(2).unwrap().text(), "gX  ");
+        }
+    }
+
+    #[test]
+    fn alternate_resize_keeps_cursor_visible_when_shrinking_height() {
+        for (row, expected) in [(0, ["aa", "bb"]), (2, ["bb", "cc"])] {
+            let mut terminal = Terminal::new(4, 3).unwrap();
+            terminal.feed("\x1b[?1047haaaa\r\nbbbb\r\ncccc");
+            terminal.feed(format!("\x1b[{};1H", row + 1));
+            terminal.resize(2, 2);
+            terminal.engine.verify();
+
+            let lines: Vec<_> = terminal.screen().visible_lines().map(Line::text).collect();
+
+            assert_eq!(lines, expected);
+            assert_eq!(terminal.cursor().position(), Some((0, row.min(1))));
+            assert_eq!(terminal.screen().all_lines().count(), 2);
+            terminal.resize(4, 3);
+            assert_eq!(terminal.screen().text(), [expected[0], expected[1], ""]);
+        }
+    }
+
+    #[test]
+    fn alternate_width_resize_clears_pending_wrap() {
+        for cols in [1, 2, 6] {
+            let mut terminal = Terminal::new(4, 2).unwrap();
+            terminal.feed("\x1b[?1047habcd");
+            terminal.resize(cols, 2);
+            assert_eq!(terminal.cursor().position(), Some((4.min(cols - 1), 0)));
+            terminal.feed("X");
+            terminal.engine.verify();
+            assert_eq!(terminal.cursor().row, 0);
+
+            assert_eq!(
+                terminal.screen().line(0).unwrap().cells()[4.min(cols - 1)].char(),
+                'X'
+            );
+
+            assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+        }
+    }
+
+    #[test]
     fn hidden_primary_resize_uses_its_live_cursor() {
         for mode in [1047, 1049] {
             let mut terminal = Terminal::new(4, 3).unwrap();
@@ -2873,8 +2944,19 @@ mod tests {
             terminal.engine.assert_dump_equivalent(&restored.engine);
             let screen = terminal.screen();
             let line = screen.line(2).unwrap();
-            assert_eq!(line.text().trim_end(), "ABCDE");
-            assert!(!line.is_wrapped());
+
+            if alternate {
+                assert_eq!(line.text().trim_end(), "ABCD");
+                assert_eq!(screen.line(3).unwrap().text().trim_end(), "E");
+                assert!(line.is_wrapped());
+            } else {
+                assert_eq!(line.text().trim_end(), "ABCDE");
+                assert!(!line.is_wrapped());
+            }
+
+            let mut replayed = Terminal::new(8, 5).unwrap();
+            replayed.feed(terminal.dump());
+            terminal.engine.assert_dump_equivalent(&replayed.engine);
         }
     }
 

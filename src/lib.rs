@@ -182,10 +182,11 @@ impl Terminal {
 
     /// Changes the virtual terminal's dimensions. Dimensions are clamped to at
     /// least one. The primary screen reflows even while the alternate screen is
-    /// active. Intermediate resizes can discard content even if the original
-    /// size is restored. Reflow to one column erases wide characters that
-    /// cannot fit, preserving their style and invalidating anchors in the
-    /// erased cells.
+    /// active. The alternate screen clips or pads rows without reflow,
+    /// preserving soft-wrap flags. Intermediate resizes can discard content
+    /// even if the original size is restored. Reflow to one column erases wide
+    /// characters that cannot fit, preserving their style and invalidating
+    /// anchors in the erased cells.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.resize_with(cols, rows, ());
     }
@@ -343,7 +344,7 @@ mod tests {
         for mode in [1047, 1049] {
             let mut original = Terminal::new(4, 2).unwrap();
             original.feed("abcd\r\nefgh\x1b[H");
-            original.feed(format!("\x1b[?{mode}h"));
+            original.feed(format!("\x1b[?{mode}habcdEF"));
             original.resize(2, 2);
             let mut restored = Terminal::new(2, 2).unwrap();
             restored.feed(original.dump());
