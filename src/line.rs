@@ -1,6 +1,6 @@
 use unicode_width::UnicodeWidthChar;
 
-use crate::anchor::Mark;
+use crate::anchor::{Anchor, Mark};
 use crate::cell::{Cell, Occupancy};
 use crate::pen::Pen;
 use std::ops::{Index, Range, RangeFull};
@@ -333,6 +333,13 @@ impl Line {
 
     pub fn len(&self) -> usize {
         self.cells.len()
+    }
+
+    pub(crate) fn anchor_column(&self, anchor: &Anchor) -> Option<usize> {
+        self.marks
+            .iter()
+            .find(|mark| mark.matches(anchor))
+            .map(|mark| mark.col)
     }
 
     pub(crate) fn split_marks(&mut self, col: usize) -> Vec<Mark> {

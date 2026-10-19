@@ -117,10 +117,7 @@ impl ShellTracker {
                 // and annotations at this position without resolving against history.
                 self.markers.retain(|marker| {
                     marker.anchor.is_registered()
-                        && !line
-                            .marks
-                            .iter()
-                            .any(|mark| mark.col == cursor.col && mark.matches(&marker.anchor))
+                        && line.anchor_column(&marker.anchor) != Some(cursor.col)
                 });
 
                 self.markers.push(PromptMarker {

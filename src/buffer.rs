@@ -113,8 +113,8 @@ impl Buffer {
 
     pub fn resolve(&self, anchor: &Anchor) -> Option<(usize, isize)> {
         for (row, line) in self.lines.iter().enumerate() {
-            if let Some(mark) = line.marks.iter().find(|mark| mark.matches(anchor)) {
-                return Some((mark.col, row as isize - self.view_offset() as isize));
+            if let Some(col) = line.anchor_column(anchor) {
+                return Some((col, row as isize - self.view_offset() as isize));
             }
         }
 
