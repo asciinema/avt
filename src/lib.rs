@@ -51,7 +51,7 @@ pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
 pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
-pub use parser::{Parser, ShellIntegration};
+pub use parser::Parser;
 pub use pen::Pen;
 
 /// Rejected terminal dimensions. Both columns and rows must be positive.

@@ -1,6 +1,6 @@
 use super::{Observation, Observer};
-use crate::parser::{Function, Osc};
-use crate::{Anchor, Operation, ScreenKind, ShellIntegration, Terminal};
+use crate::parser::{Function, Osc, ShellIntegration};
+use crate::{Anchor, Operation, ScreenKind, Terminal};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PromptId(pub u64);
