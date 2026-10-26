@@ -3127,7 +3127,7 @@ mod tests {
     }
 
     #[test]
-    fn print_wide_char_in_occupied_last_column_preserves_cell_before_wrap() {
+    fn wide_char_wrap_preserves_occupied_last_column() {
         let mut term = Terminal::with_scrollback(4, 2, None).unwrap();
 
         term.feed("abcz");
