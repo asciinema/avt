@@ -8,7 +8,7 @@ use crate::parser::{
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
-use crate::{Anchor, Observer, Position};
+use crate::{Anchor, Observer};
 use std::cmp::Ordering;
 
 #[derive(Debug)]
@@ -42,6 +42,16 @@ pub(crate) struct Engine {
 pub enum ScreenKind {
     Primary,
     Alternate,
+}
+
+/// A screen-relative coordinate value at a particular moment.
+/// Negative rows address retained scrollback. `col` may equal the line width,
+/// representing the boundary after its last cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Position {
+    pub screen: ScreenKind,
+    pub col: usize,
+    pub row: isize,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]

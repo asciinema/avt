@@ -42,11 +42,11 @@ pub mod parser;
 mod pen;
 mod tabs;
 
-pub use anchor::{Anchor, Position};
+pub use anchor::Anchor;
 pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
-pub use engine::{Cursor, Screen, ScreenKind};
+pub use engine::{Cursor, Position, Screen, ScreenKind};
 pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
 pub use observer::{Observation, Observer};

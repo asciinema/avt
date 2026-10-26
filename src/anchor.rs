@@ -1,17 +1,5 @@
 use std::sync::{Arc, Weak};
 
-use crate::ScreenKind;
-
-/// A screen-relative coordinate value at a particular moment.
-/// Negative rows address retained scrollback. `col` may equal the line width,
-/// representing the boundary after its last cell.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Position {
-    pub screen: ScreenKind,
-    pub col: usize,
-    pub row: isize,
-}
-
 /// An owned handle to a position tracked through editing, scrolling, and
 /// reflow. Only the originating terminal can resolve it.
 ///
