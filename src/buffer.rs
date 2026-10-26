@@ -81,8 +81,8 @@ impl Buffer {
         text
     }
 
-    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> Option<usize> {
-        self[row].print(col, ch, pen)
+    pub fn print(&mut self, (col, row): VisualPosition, cluster: &str, pen: Pen) -> Option<usize> {
+        self[row].print(col, cluster, pen)
     }
 
     pub fn wrap(&mut self, row: usize) {
@@ -374,7 +374,7 @@ impl Buffer {
         let mut line = Line::blank(self.cols, Pen::default());
 
         for col in 0..self.cols {
-            line.print(col, 's', Pen::default());
+            line.print(col, "s", Pen::default());
         }
 
         for _ in 0..n {
@@ -508,11 +508,11 @@ mod tests {
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
 
-        buffer.print((0, 0), 'x', Pen::default());
-        buffer.print((1, 1), 'x', Pen::default());
-        buffer.print((2, 2), 'x', Pen::default());
-        buffer.print((3, 3), 'x', Pen::default());
-        buffer.print((4, 4), 'x', Pen::default());
+        buffer.print((0, 0), "x", Pen::default());
+        buffer.print((1, 1), "x", Pen::default());
+        buffer.print((2, 2), "x", Pen::default());
+        buffer.print((3, 3), "x", Pen::default());
+        buffer.print((4, 4), "x", Pen::default());
         assert_eq!(buffer.text(), vec!["x", " x", "  x", "   x", "    x"]);
 
         buffer.wrap(0);
@@ -922,7 +922,8 @@ mod tests {
 
         for (row, (line, wrapped)) in content.iter().enumerate() {
             for (col, ch) in line.chars().enumerate() {
-                buffer.print((col, row), ch, Pen::default());
+                let mut buf = [0u8; 4];
+                buffer.print((col, row), ch.encode_utf8(&mut buf), Pen::default());
             }
 
             if *wrapped {

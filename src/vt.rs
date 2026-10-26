@@ -1,6 +1,7 @@
 use crate::line::Line;
 use crate::parser::{self, Parser};
 use crate::terminal::{Cursor, Terminal};
+use unicode_segmentation::UnicodeSegmentation;
 
 #[derive(Debug)]
 pub struct Vt {
@@ -18,9 +19,20 @@ impl Vt {
     }
 
     pub fn feed_str(&mut self, s: &str) -> Changes<'_> {
-        s.chars()
-            .filter_map(|ch| self.parser.feed(ch))
-            .for_each(|op| self.terminal.execute(op));
+        let mut printable = String::new();
+
+        for ch in s.chars() {
+            if let Some(op) = self.parser.feed(ch) {
+                if let parser::Function::Print(ch) = op {
+                    printable.push(ch);
+                } else {
+                    self.print_graphemes(&mut printable);
+                    self.terminal.execute(op);
+                }
+            }
+        }
+
+        self.print_graphemes(&mut printable);
 
         let lines = self.terminal.changes();
         let scrollback = self.terminal.gc();
@@ -32,6 +44,13 @@ impl Vt {
         if let Some(op) = self.parser.feed(input) {
             self.terminal.execute(op);
         }
+    }
+
+    fn print_graphemes(&mut self, printable: &mut String) {
+        for cluster in UnicodeSegmentation::graphemes(printable.as_str(), true) {
+            self.terminal.print_grapheme(cluster);
+        }
+        printable.clear();
     }
 
     pub fn size(&self) -> (usize, usize) {
@@ -147,6 +166,120 @@ mod tests {
 
         assert_eq!(lines, vec![0, 1]);
         assert_eq!(scrollback, Vec::<String>::new());
+    }
+
+    #[test]
+    fn zwj_emoji_is_stored_in_one_two_column_cell() {
+        let mut vt = Vt::new(8, 1);
+
+        vt.feed_str("🐻‍❄️x");
+
+        let line = vt.line(0);
+        assert_eq!(line.text().trim_end(), "🐻‍❄️x");
+        assert_eq!(line.cells()[0].contents(), "🐻‍❄️");
+        assert_eq!(line.cells()[0].width(), 2);
+        assert_eq!(line.cells()[1].width(), 0);
+        assert_eq!(vt.cursor(), (3, 0));
+    }
+
+    #[test]
+    fn multi_codepoint_graphemes_never_exceed_two_columns() {
+        let mut vt = Vt::new(5, 1);
+
+        vt.feed_str("👨‍👩‍👧‍👦A");
+
+        let line = vt.line(0);
+        assert_eq!(line.cells()[0].contents(), "👨‍👩‍👧‍👦");
+        assert_eq!(line.cells()[0].width(), 2);
+        assert_eq!(vt.cursor(), (3, 0));
+    }
+
+    #[test]
+    fn controls_keep_a_combining_only_cell_separate() {
+        let mut original = Vt::new(8, 1);
+        let mut restored = Vt::new(8, 1);
+
+        original.feed_str(" \x1b[50m\u{f71}");
+        restored.feed_str(&original.dump());
+
+        assert_vts_eq(&original, &restored);
+    }
+
+    #[test]
+    fn dump_preserves_grapheme_clusters() {
+        let mut original = Vt::new(8, 1);
+        let mut restored = Vt::new(8, 1);
+
+        original.feed_str("🐻‍❄️x");
+        restored.feed_str(&original.dump());
+
+        assert_vts_eq(&original, &restored);
+    }
+
+    #[test]
+    fn dump_does_not_attach_combining_mark_across_wrap() {
+        let mut original = Vt::new(10, 5);
+        let mut restored = Vt::new(10, 5);
+
+        original.feed_str("⺀\x1b[5b\r\u{2de0}");
+        restored.feed_str(&original.dump());
+
+        assert_vts_eq(&original, &restored);
+    }
+
+    #[test]
+    fn feed_clusters_graphemes_like_feed_str() {
+        let cluster = "🐻‍❄️";
+        let mut via_str = Vt::new(8, 1);
+        let mut via_feed = Vt::new(8, 1);
+
+        via_str.feed_str(cluster);
+        for ch in cluster.chars() {
+            via_feed.feed(ch);
+        }
+
+        assert_eq!(via_feed.line(0).cells()[0].contents(), cluster);
+        assert_eq!(via_feed.line(0).cells()[0].width(), 2);
+        assert_vts_eq(&via_str, &via_feed);
+    }
+
+    #[test]
+    fn zwj_grapheme_spans_feed_str_calls() {
+        let mut vt = Vt::new(8, 1);
+
+        vt.feed_str("🐻");
+        vt.feed_str("\u{200d}❄️");
+
+        let line = vt.line(0);
+        assert_eq!(line.cells()[0].contents(), "🐻‍❄️");
+        assert_eq!(line.cells()[0].width(), 2);
+        assert_eq!(vt.cursor(), (2, 0));
+    }
+
+    #[test]
+    fn combining_mark_spans_feed_str_calls() {
+        let mut vt = Vt::new(8, 1);
+
+        vt.feed_str("e");
+        vt.feed_str("\u{0301}");
+
+        let line = vt.line(0);
+        assert_eq!(line.cells()[0].contents(), "e\u{0301}");
+        assert_eq!(line.cells()[0].width(), 1);
+        assert_eq!(vt.cursor(), (1, 0));
+    }
+
+    #[test]
+    fn dump_plain_ascii_keeps_letters_contiguous() {
+        let mut vt = Vt::new(8, 1);
+
+        vt.feed_str("hello");
+
+        assert!(
+            vt.dump().contains("hello"),
+            "dump inserted SGR between same-pen ASCII cells: {:?}",
+            vt.dump()
+        );
     }
 
     #[test]

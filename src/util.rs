@@ -84,8 +84,8 @@ mod tests {
         let pen = Pen::default();
 
         let mut line = Line::blank(5, pen);
-        line.print(0, 'a', pen);
-        line.print(4, 'b', pen);
+        line.print(0, "a", pen);
+        line.print(4, "b", pen);
         line.wrapped = false;
 
         let text = tu.push(&line);
@@ -93,8 +93,8 @@ mod tests {
         assert!(matches!(text, Some(ref x) if x == "a   b"));
 
         let mut line = Line::blank(5, pen);
-        line.print(0, 'c', pen);
-        line.print(4, 'd', pen);
+        line.print(0, "c", pen);
+        line.print(4, "d", pen);
         line.wrapped = true;
 
         let text = tu.push(&line);
@@ -102,8 +102,8 @@ mod tests {
         assert!(text.is_none());
 
         let mut line = Line::blank(5, pen);
-        line.print(0, 'e', pen);
-        line.print(4, 'f', pen);
+        line.print(0, "e", pen);
+        line.print(4, "f", pen);
         line.wrapped = true;
 
         let text = tu.push(&line);
@@ -111,8 +111,8 @@ mod tests {
         assert!(text.is_none());
 
         let mut line = Line::blank(5, pen);
-        line.print(0, 'g', pen);
-        line.print(1, 'h', pen);
+        line.print(0, "g", pen);
+        line.print(1, "h", pen);
         line.wrapped = false;
 
         let text = tu.push(&line);
@@ -120,7 +120,7 @@ mod tests {
         assert!(matches!(text, Some(ref x) if x == "c   de   fgh"));
 
         let mut line = Line::blank(5, pen);
-        line.print(0, 'i', pen);
+        line.print(0, "i", pen);
         line.wrapped = true;
 
         let text = tu.push(&line);

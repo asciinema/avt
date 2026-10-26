@@ -4,7 +4,7 @@ mod dirty_lines;
 pub use self::cursor::Cursor;
 use self::dirty_lines::DirtyLines;
 use crate::buffer::{Buffer, EraseMode};
-use crate::cell::{Cell, Occupancy};
+use crate::cell::{clusters_form_one_grapheme, display_width, Cell, Occupancy, MAX_CLUSTER_BYTES};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
@@ -40,6 +40,7 @@ pub struct Terminal {
     alternate_saved_ctx: SavedCtx,
     dirty_lines: DirtyLines,
     xtwinops: bool,
+    last_was_print: bool,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq)]
@@ -119,6 +120,7 @@ impl Terminal {
             alternate_saved_ctx: SavedCtx::default(),
             dirty_lines,
             xtwinops: false,
+            last_was_print: false,
         }
     }
 
@@ -132,6 +134,10 @@ impl Terminal {
 
     pub fn execute(&mut self, fun: Function) {
         use Function::*;
+
+        if !matches!(fun, Print(_)) {
+            self.last_was_print = false;
+        }
 
         match fun {
             Bs => {
@@ -267,7 +273,7 @@ impl Terminal {
             }
 
             Print(ch) => {
-                self.print(ch);
+                self.print_char(ch);
             }
 
             Rep(n) => {
@@ -523,6 +529,7 @@ impl Terminal {
     // resizing
 
     pub fn resize(&mut self, cols: usize, rows: usize) -> bool {
+        self.last_was_print = false;
         let mut resized: bool = false;
 
         match cols.cmp(&self.cols) {
@@ -705,33 +712,96 @@ impl Terminal {
         }
     }
 
-    fn print(&mut self, mut ch: char) {
-        ch = self.charsets[self.active_charset].translate(ch);
+    pub(crate) fn print_grapheme(&mut self, cluster: &str) {
+        let mut buf = [0u8; MAX_CLUSTER_BYTES];
+        let mut len = 0usize;
 
-        match self.try_print(ch) {
+        for ch in cluster.chars() {
+            let translated = self.charsets[self.active_charset].translate(ch);
+            let n = translated.len_utf8();
+            if len + n > MAX_CLUSTER_BYTES {
+                break;
+            }
+            translated.encode_utf8(&mut buf[len..]);
+            len += n;
+        }
+
+        let cluster = std::str::from_utf8(&buf[..len]).unwrap_or(" ");
+
+        if self.try_compose(cluster) {
+            return;
+        }
+
+        self.print(cluster);
+        self.last_was_print = true;
+    }
+
+    fn try_compose(&mut self, cluster: &str) -> bool {
+        if !self.last_was_print || cluster.is_empty() || self.cursor.col == 0 {
+            return false;
+        }
+
+        let row = self.cursor.row;
+        let mut col = self.cursor.col - 1;
+
+        while col > 0 && self.buffer[(col, row)].occupancy() == Occupancy::WideTail {
+            col -= 1;
+        }
+
+        let existing = self.buffer[(col, row)].contents();
+
+        if !clusters_form_one_grapheme(existing, cluster) {
+            return false;
+        }
+
+        let mut combined = String::with_capacity(existing.len() + cluster.len());
+        combined.push_str(existing);
+        combined.push_str(cluster);
+
+        if display_width(&combined) != self.buffer[(col, row)].width() as usize {
+            return false;
+        }
+
+        let occupancy = self.buffer[(col, row)].occupancy();
+        let pen = *self.buffer[(col, row)].pen();
+        self.buffer[row][col].set(&combined, occupancy, pen);
+        self.dirty_lines.add(row);
+        true
+    }
+
+    fn print_char(&mut self, ch: char) {
+        let mut buf = [0u8; 4];
+        self.print_grapheme(ch.encode_utf8(&mut buf));
+    }
+
+    fn print(&mut self, cluster: &str) {
+        match self.try_print(cluster) {
             PrintResult::Printed(width) => self.advance_cursor_after_print(width),
             PrintResult::NeedsRelocation if self.auto_wrap_mode => {
-                self.wrap_and_print_at_line_start(ch)
+                self.wrap_and_print_at_line_start(cluster)
             }
-            PrintResult::NeedsRelocation => self.print_at_line_end(ch),
+            PrintResult::NeedsRelocation => self.print_at_line_end(cluster),
         }
 
         self.dirty_lines.add(self.cursor.row);
     }
 
-    fn try_print(&mut self, ch: char) -> PrintResult {
+    fn try_print(&mut self, cluster: &str) -> PrintResult {
         if self.cursor.col >= self.cols {
             return PrintResult::NeedsRelocation;
         }
 
         if self.insert_mode {
-            self.buffer
-                .shift_right((self.cursor.col, self.cursor.row), 1, self.pen);
+            self.buffer.shift_right(
+                (self.cursor.col, self.cursor.row),
+                display_width(cluster),
+                self.pen,
+            );
         }
 
         match self
             .buffer
-            .print((self.cursor.col, self.cursor.row), ch, self.pen)
+            .print((self.cursor.col, self.cursor.row), cluster, self.pen)
         {
             Some(width) => PrintResult::Printed(width),
             None => PrintResult::NeedsRelocation,
@@ -746,7 +816,7 @@ impl Terminal {
         }
     }
 
-    fn wrap_and_print_at_line_start(&mut self, ch: char) {
+    fn wrap_and_print_at_line_start(&mut self, cluster: &str) {
         if self.cursor.row == self.bottom_margin {
             self.buffer.wrap(self.cursor.row);
             self.scroll_up_in_region(1);
@@ -755,22 +825,22 @@ impl Terminal {
             self.cursor.row += 1;
         }
 
-        if let Some(width) = self.buffer.print((0, self.cursor.row), ch, self.pen) {
+        if let Some(width) = self.buffer.print((0, self.cursor.row), cluster, self.pen) {
             self.cursor.col = width;
         } else {
             self.cursor.col = 0;
         }
     }
 
-    fn print_at_line_end(&mut self, ch: char) {
+    fn print_at_line_end(&mut self, cluster: &str) {
         let row = self.cursor.row;
 
         if self.cursor.col > 0 {
             let col = self.cursor.col - 1;
-            let printed = self.buffer.print((col, row), ch, self.pen).is_some();
+            let printed = self.buffer.print((col, row), cluster, self.pen).is_some();
 
             if !printed && col > 0 {
-                self.buffer.print((col - 1, row), ch, self.pen);
+                self.buffer.print((col - 1, row), cluster, self.pen);
             }
         }
 
@@ -841,7 +911,7 @@ impl Terminal {
     fn decaln(&mut self) {
         for row in 0..self.rows {
             for col in 0..self.cols {
-                self.buffer.print((col, row), '\u{45}', Pen::default());
+                self.buffer.print((col, row), "\u{45}", Pen::default());
             }
 
             self.dirty_lines.add(row);
@@ -867,7 +937,7 @@ impl Terminal {
             .shift_right((self.cursor.col, self.cursor.row), n, self.pen);
 
         for col in self.cursor.col..self.cursor.col + n {
-            self.buffer.print((col, self.cursor.row), ' ', self.pen);
+            self.buffer.print((col, self.cursor.row), " ", self.pen);
         }
 
         self.dirty_lines.add(self.cursor.row);
@@ -1078,10 +1148,10 @@ impl Terminal {
                 col -= 1;
             }
 
-            let char = self.buffer[(col, row)].char();
+            let cluster = self.buffer[(col, row)].contents().to_owned();
 
             for _n in 0..n {
-                self.print(char);
+                self.print(&cluster);
             }
         }
     }
@@ -1513,18 +1583,18 @@ impl Terminal {
         if self.cursor.col >= self.cols {
             // move cursor past the right border by re-printing the character in
             // the last column
-            let last_cell = self.buffer[(self.cols - 1, self.cursor.row)];
+            let last_cell = &self.buffer[(self.cols - 1, self.cursor.row)];
             let occupancy = last_cell.occupancy();
 
             if occupancy == Occupancy::Single {
                 funs.push(to_sgr(last_cell.pen()));
-                funs.push(Function::Print(last_cell.char()));
+                funs.extend(last_cell.contents().chars().map(Function::Print));
             } else if occupancy == Occupancy::WideTail {
-                let prev_cell = self.buffer[(self.cols - 2, self.cursor.row)];
+                let prev_cell = &self.buffer[(self.cols - 2, self.cursor.row)];
 
                 funs.push(Function::Cub(1));
                 funs.push(to_sgr(prev_cell.pen()));
-                funs.push(Function::Print(prev_cell.char()));
+                funs.extend(prev_cell.contents().chars().map(Function::Print));
             }
         }
 
@@ -1601,8 +1671,24 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
 
     let last = buffer.rows - 1;
     let mut pen = Pen::default();
+    let mut prev_wrap_cluster: Option<String> = None;
 
     for (i, line) in buffer.view().take(cutoff).enumerate() {
+        if let Some(prev) = prev_wrap_cluster.take() {
+            if let Some(first) = line
+                .cells()
+                .iter()
+                .find(|cell| cell.occupancy() != Occupancy::WideTail)
+            {
+                // Wrapped lines are dumped as a continuous print stream. Insert
+                // SGR when the join would merge a combining mark onto the
+                // previous line's last cell.
+                if clusters_form_one_grapheme(&prev, first.contents()) {
+                    funs.push(to_sgr(&pen));
+                }
+            }
+        }
+
         for cells in line.chunks(|c1, c2| c1.pen() != c2.pen()) {
             if cells[0].pen() != &pen {
                 if let Some(sgr) = to_sgr_diff(&pen, cells[0].pen()) {
@@ -1612,10 +1698,17 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
                 pen = *cells[0].pen();
             }
 
-            dump_cells(&cells, funs);
+            dump_cells(&cells, cells[0].pen(), funs);
         }
 
-        if i < last && !line.wrapped {
+        if line.wrapped {
+            prev_wrap_cluster = line
+                .cells()
+                .iter()
+                .rev()
+                .find(|cell| cell.occupancy() != Occupancy::WideTail)
+                .map(|cell| cell.contents().to_owned());
+        } else if i < last {
             funs.push(Function::Cr);
             funs.push(Function::Lf);
         }
@@ -1708,27 +1801,42 @@ fn push_attr_diff(ops: &mut SgrOps, from: bool, to: bool, set: SgrOp, reset: Sgr
     }
 }
 
-fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
+fn dump_cells(cells: &[Cell], pen: &Pen, funs: &mut Vec<Function>) {
     let mut i = 0;
 
     while i < cells.len() {
-        let ch = cells[i].char();
+        let cluster = cells[i].contents();
         let mut run_len = 1;
 
-        while i + run_len < cells.len() && cells[i + run_len].char() == ch {
+        while i + run_len < cells.len() && cells[i + run_len].contents() == cluster {
             run_len += 1;
         }
 
-        if run_len > 5 {
-            funs.push(Function::Print(ch));
+        let next_i = i + run_len;
+        let merge_within_run = run_len > 1 && clusters_form_one_grapheme(cluster, cluster);
+        let merge_with_next =
+            next_i < cells.len() && clusters_form_one_grapheme(cluster, cells[next_i].contents());
+
+        if run_len > 5 && cluster.chars().count() == 1 {
+            funs.push(Function::Print(cluster.chars().next().unwrap()));
             funs.push(Function::Rep(as_u16(run_len - 1)));
         } else {
-            for _ in 0..run_len {
-                funs.push(Function::Print(ch));
+            for n in 0..run_len {
+                funs.extend(cluster.chars().map(Function::Print));
+
+                // Keep adjacent cells separate when concatenating them would
+                // form a single grapheme (for example a combining-only cell).
+                if merge_within_run && n + 1 < run_len {
+                    funs.push(to_sgr(pen));
+                }
             }
         }
 
-        i += run_len;
+        i = next_i;
+
+        if merge_with_next {
+            funs.push(to_sgr(pen));
+        }
     }
 }
 
@@ -1857,11 +1965,11 @@ mod tests {
             let width = cell.width() as usize;
 
             if offset + width <= cursor_col {
-                line.push(cell.char());
+                line.push_str(cell.contents());
                 offset += width;
             } else {
                 line.push('|');
-                line.push(cell.char());
+                line.push_str(cell.contents());
                 offset += width;
                 break;
             }
@@ -1871,7 +1979,7 @@ mod tests {
             line.push('|');
         }
 
-        line.extend(cells.map(|c| c.char()));
+        line.extend(cells.flat_map(|c| c.contents().chars()));
         lines.push(line);
         lines.extend(view.map(|l| l.text()));
 
@@ -2313,6 +2421,27 @@ mod tests {
         let funs = term.dump();
 
         assert_eq!(funs[..2], [Print('ハ'), Rep(5)]);
+    }
+
+    #[test]
+    fn dump_does_not_inject_sgr_between_plain_ascii_cells() {
+        let mut term = build_term(20, 2, 0, 0, "");
+
+        feed(&mut term, "hello");
+
+        let funs = term.dump();
+        let leading_prints: Vec<char> = funs
+            .iter()
+            .map_while(|fun| match fun {
+                Print(ch) => Some(*ch),
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            leading_prints.starts_with(&['h', 'e', 'l', 'l', 'o']),
+            "{leading_prints:?}"
+        );
     }
 
     #[test]
