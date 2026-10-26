@@ -1,7 +1,9 @@
 use std::cmp::Ordering;
 use std::collections::VecDeque;
 use std::ops::{Index, IndexMut, Range};
+use std::sync::Arc;
 
+use crate::anchor::{Anchor, Mark};
 use crate::cell::Cell;
 use crate::line::Line;
 use crate::pen::Pen;
@@ -13,6 +15,8 @@ pub(crate) struct Buffer {
     pub rows: usize,
     scrollback_limit: Option<usize>,
     trim_needed: bool,
+    // The first retained row continues the last evicted row's logical line.
+    front_wrapped: bool,
 }
 
 pub(crate) enum EraseMode {
@@ -30,27 +34,14 @@ type RelativePosition = (usize, isize);
 type VisualPosition = (usize, usize);
 
 impl Buffer {
-    pub fn new(
-        cols: usize,
-        rows: usize,
-        scrollback_limit: Option<usize>,
-        pen: Option<&Pen>,
-    ) -> Self {
-        let default_pen = Pen::default();
-        let pen = pen.unwrap_or(&default_pen);
+    pub fn new(cols: usize, rows: usize, scrollback_limit: Option<usize>, pen: Pen) -> Self {
         let mut lines = VecDeque::with_capacity(rows);
 
         for _ in 0..rows {
-            lines.push_back(Line::blank(cols, *pen));
+            lines.push_back(Line::blank(cols, pen));
         }
 
-        if let Some(limit) = scrollback_limit {
-            if limit > 0 {
-                lines.reserve(limit);
-            }
-        } else {
-            lines.reserve(1000);
-        }
+        lines.reserve(scrollback_limit.unwrap_or(1000));
 
         Buffer {
             lines,
@@ -58,6 +49,7 @@ impl Buffer {
             rows,
             scrollback_limit,
             trim_needed: false,
+            front_wrapped: false,
         }
     }
 
@@ -66,16 +58,12 @@ impl Buffer {
         let mut current = String::new();
 
         for line in &self.lines {
-            current.push_str(&line.text());
+            current.extend(line.chars());
 
             if !line.wrapped {
                 text.push(current.trim_end().to_owned());
                 current.clear();
             }
-        }
-
-        if !current.is_empty() {
-            text.push(current.trim_end().to_owned());
         }
 
         text
@@ -85,8 +73,52 @@ impl Buffer {
         self[row].print(col, cluster, pen)
     }
 
-    pub fn wrap(&mut self, row: usize) {
+    pub fn wrap_to_next_row(&mut self, row: usize) {
+        let marks = self.wrap(row);
+        self[row + 1].marks.extend(marks);
+    }
+
+    pub fn wrap_and_scroll_up(&mut self, range: Range<usize>, pen: &Pen) {
+        let row = range.end - 1;
+        let marks = self.wrap(row);
+        self.scroll_up_preserving_bottom_wrap(range, 1, pen);
+        self[row].marks.extend(marks);
+    }
+
+    fn wrap(&mut self, row: usize) -> Vec<Mark> {
         self[row].wrapped = true;
+        let cols = self.cols;
+
+        self[row].split_marks(cols)
+    }
+
+    pub fn anchor_at(&mut self, col: usize, row: isize) -> Option<Anchor> {
+        let index = self.view_offset().checked_add_signed(row)?;
+        let line = self.lines.get_mut(index)?;
+
+        if col > line.len() {
+            return None;
+        }
+
+        line.marks.retain(Mark::live);
+        let anchor = Anchor(Arc::new(()));
+
+        line.marks.push(Mark {
+            token: Arc::downgrade(&anchor.0),
+            col,
+        });
+
+        Some(anchor)
+    }
+
+    pub fn resolve(&self, anchor: &Anchor) -> Option<(usize, isize)> {
+        for (row, line) in self.lines.iter().enumerate() {
+            if let Some(col) = line.anchor_column(anchor) {
+                return Some((col, row as isize - self.view_offset() as isize));
+            }
+        }
+
+        None
     }
 
     pub fn shift_right(&mut self, (col, row): VisualPosition, mut n: usize, pen: Pen) {
@@ -156,12 +188,17 @@ impl Buffer {
         }
     }
 
-    pub fn scroll_up(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
-        n = n.min(range.end - range.start);
-
-        if range.end - 1 < self.rows - 1 {
+    pub fn scroll_up(&mut self, range: Range<usize>, n: usize, pen: &Pen) {
+        if range.end < self.rows {
             self[range.end - 1].wrapped = false;
         }
+
+        self.scroll_up_preserving_bottom_wrap(range, n, pen);
+    }
+
+    // Callers decide whether the old bottom row continues into the newly exposed row.
+    fn scroll_up_preserving_bottom_wrap(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
+        n = n.min(range.end - range.start);
 
         if range.start == 0 {
             if range.end == self.rows {
@@ -177,17 +214,48 @@ impl Buffer {
         } else {
             self[range.start - 1].wrapped = false;
             let end = range.end;
-            self[range].rotate_left(n);
+            self.visible_rows_mut(range).rotate_left(n);
             self.clear((end - n)..end, pen);
         }
 
         self.trim_needed = true;
     }
 
+    /// Counts visible rows through the last occupied row or soft-wrap terminator.
+    /// `previous_wrapped` indicates a continuation entering the first visible row.
+    pub fn occupied_prefix_len(&self, mut previous_wrapped: bool) -> usize {
+        let mut end = 0;
+
+        for (row, line) in self.view().enumerate() {
+            if previous_wrapped || line.wrapped || !line.is_blank() {
+                end = row + 1;
+            }
+
+            previous_wrapped = line.wrapped;
+        }
+
+        end
+    }
+
+    /// Moves the occupied screen prefix into history, including blank rows that
+    /// finish a soft-wrapped line. Trailing ordinary blank rows stay on screen.
+    pub fn scroll_out(&mut self, pen: &Pen) {
+        let previous_wrapped = self
+            .view_offset()
+            .checked_sub(1)
+            .map_or(self.front_wrapped, |row| self.lines[row].wrapped);
+
+        let end = self.occupied_prefix_len(previous_wrapped);
+
+        if end > 0 {
+            self.scroll_up(0..self.rows, end, pen);
+        }
+    }
+
     pub fn scroll_down(&mut self, range: Range<usize>, mut n: usize, pen: &Pen) {
         let (start, end) = (range.start, range.end);
         n = n.min(end - start);
-        self[range].rotate_right(n);
+        self.visible_rows_mut(range).rotate_right(n);
         self.clear(start..start + n, pen);
 
         if start > 0 {
@@ -202,13 +270,21 @@ impl Buffer {
         new_cols: usize,
         new_rows: usize,
         mut cursor: VisualPosition,
+        reflow_enabled: bool,
     ) -> VisualPosition {
+        debug_assert!(cursor.0 <= self.cols && cursor.1 < self.rows);
+
         let old_cols = self.cols;
         let mut old_rows = self.rows;
-        let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
 
-        if new_cols != old_cols {
+        if new_cols != old_cols && reflow_enabled {
+            let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
             self.lines = reflow(self.lines.drain(..), new_cols);
+
+            for line in &mut self.lines {
+                line.clip_marks();
+            }
+
             let line_count = self.lines.len();
 
             if line_count < old_rows {
@@ -224,9 +300,16 @@ impl Buffer {
                 cursor.1 = 0;
                 old_rows += (-cursor_rel_pos.1) as usize;
             }
+        } else if new_cols != old_cols {
+            for line in &mut self.lines {
+                line.resize(new_cols);
+            }
+
+            cursor.0 = cursor.0.min(new_cols - 1);
         }
 
         let line_count = self.lines.len();
+        debug_assert!(old_rows <= line_count);
 
         match new_rows.cmp(&old_rows) {
             Ordering::Less => {
@@ -244,13 +327,11 @@ impl Buffer {
 
             Ordering::Greater => {
                 let mut height_delta = new_rows - old_rows;
-                let scrollback_size = line_count - old_rows.min(line_count);
+                let scrollback_size = line_count - old_rows;
                 let cursor_row_shift = scrollback_size.min(height_delta);
                 height_delta -= cursor_row_shift;
 
-                if cursor.1 < old_rows {
-                    cursor.1 += cursor_row_shift;
-                }
+                cursor.1 += cursor_row_shift;
 
                 if height_delta > 0 {
                     self.extend(height_delta, new_cols, &Pen::default());
@@ -271,8 +352,7 @@ impl Buffer {
         let vis_row_offset = self.lines.len() - rows;
         let mut log_col_offset = 0;
         let abs_row = pos.1 + vis_row_offset;
-        let last_available_row = abs_row.min(self.lines.len());
-        let mut log_row = abs_row - last_available_row;
+        let mut log_row = 0;
 
         for line in self.lines.iter().take(abs_row) {
             if line.wrapped {
@@ -295,9 +375,13 @@ impl Buffer {
         let mut rel_col = pos.0;
         let mut rel_row = 0;
         let mut r = 0;
-        let last_row = self.lines.len() - 1;
 
-        while r < pos.1 && rel_row < last_row {
+        while r < pos.1 {
+            debug_assert!(
+                rel_row + 1 < self.lines.len(),
+                "logical cursor row must survive reflow"
+            );
+
             if !self.lines[rel_row].wrapped {
                 r += 1;
             }
@@ -316,7 +400,7 @@ impl Buffer {
         (rel_col, (rel_row as isize - rel_row_offset as isize))
     }
 
-    pub fn view(&self) -> impl Iterator<Item = &Line> {
+    pub fn view(&self) -> impl ExactSizeIterator<Item = &Line> {
         self.lines.iter().skip(self.view_offset())
     }
 
@@ -328,24 +412,38 @@ impl Buffer {
         self.lines.len() - self.rows
     }
 
-    pub fn gc(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
+    fn visible_rows_mut(&mut self, range: Range<usize>) -> &mut [Line] {
+        let offset = self.view_offset();
+
+        &mut self.lines.make_contiguous()[offset + range.start..offset + range.end]
+    }
+
+    pub fn pop_evicted(&mut self) -> Option<Line> {
         if self.trim_needed {
+            if self
+                .scrollback_limit
+                .is_some_and(|limit| self.lines.len() - self.rows > limit)
+            {
+                let line = self.lines.pop_front()?;
+                self.front_wrapped = line.wrapped;
+
+                return Some(line);
+            }
+
             self.trim_needed = false;
-            self.trim_scrollback()
-        } else {
-            None
         }
+
+        None
     }
 
     fn clear(&mut self, range: Range<usize>, pen: &Pen) {
-        let cols = self.cols;
         let offset = self.view_offset();
 
         for line in self
             .lines
             .range_mut(offset + range.start..offset + range.end)
         {
-            line.reset(cols, *pen);
+            line.reset(*pen);
         }
     }
 
@@ -355,18 +453,14 @@ impl Buffer {
         self.lines.extend(filler);
     }
 
-    fn trim_scrollback(&mut self) -> Option<impl Iterator<Item = Line> + '_> {
-        if let Some(limit) = &self.scrollback_limit {
-            let line_count = self.lines.len();
-            let scrollback_size = line_count - self.rows;
-
-            if scrollback_size > *limit {
-                let excess = scrollback_size - limit;
-                return Some(self.lines.drain(..excess));
-            }
-        }
-
-        None
+    #[cfg(test)]
+    pub(crate) fn assert_execution_equivalent(&self, other: &Self) {
+        assert_eq!((self.cols, self.rows), (other.cols, other.rows));
+        assert_eq!(self.scrollback_limit, other.scrollback_limit);
+        assert_eq!(self.front_wrapped, other.front_wrapped);
+        // Line equality excludes tracking registrations. Allocation layout and
+        // the trim optimization flag are not part of execution equivalence.
+        assert_eq!(self.lines, other.lines);
     }
 
     #[cfg(test)]
@@ -391,14 +485,6 @@ impl Index<usize> for Buffer {
     }
 }
 
-impl Index<Range<usize>> for Buffer {
-    type Output = [Line];
-
-    fn index(&self, _range: Range<usize>) -> &Self::Output {
-        panic!("impossible");
-    }
-}
-
 impl Index<VisualPosition> for Buffer {
     type Output = Cell;
 
@@ -411,13 +497,6 @@ impl IndexMut<usize> for Buffer {
     fn index_mut(&mut self, index: usize) -> &mut Self::Output {
         let idx = self.view_offset() + index;
         &mut self.lines[idx]
-    }
-}
-
-impl IndexMut<Range<usize>> for Buffer {
-    fn index_mut(&mut self, range: Range<usize>) -> &mut Self::Output {
-        let offset = self.view_offset();
-        &mut self.lines.make_contiguous()[offset + range.start..offset + range.end]
     }
 }
 
@@ -453,6 +532,7 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
             match self.cols.cmp(&line.len()) {
                 Less => {
                     self.rest = line.contract(self.cols);
+
                     return Some(line);
                 }
 
@@ -461,36 +541,27 @@ impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
                 }
 
                 Greater => match self.iter.next() {
-                    Some(next_line) => match line.extend(next_line, self.cols) {
-                        (true, Some(rest)) => {
-                            self.rest = Some(rest);
+                    Some(next_line) => {
+                        self.rest = line.extend(next_line, self.cols);
+
+                        if line.len() == self.cols {
                             return Some(line);
                         }
 
-                        (true, None) => {
-                            return Some(line);
-                        }
-
-                        (false, _) => {
-                            self.rest = Some(line);
-                        }
-                    },
+                        self.rest = Some(line);
+                    }
 
                     None => {
-                        line.expand(self.cols, &Pen::default());
+                        line.expand(self.cols);
                         line.wrapped = false;
+
                         return Some(line);
                     }
                 },
             }
         }
 
-        self.rest.take().map(|mut line| {
-            line.expand(self.cols, &Pen::default());
-            line.wrapped = false;
-
-            line
-        })
+        None
     }
 }
 
@@ -504,7 +575,7 @@ mod tests {
 
     #[test]
     fn text() {
-        let mut buffer = Buffer::new(10, 5, None, None);
+        let mut buffer = Buffer::new(10, 5, None, Pen::default());
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
 
@@ -603,7 +674,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc();
+        while buf.pop_evicted().is_some() {}
 
         assert_eq!(buf.lines.len(), 7);
 
@@ -615,7 +686,7 @@ mod tests {
 
         assert_eq!(buf.lines.len(), 12);
 
-        buf.gc();
+        while buf.pop_evicted().is_some() {}
 
         assert_eq!(buf.lines.len(), 10);
     }
@@ -737,14 +808,6 @@ mod tests {
             view,
             vec!["ssss", "ssss", "aa  ", "bbbb", "bbbb", "bb  ", "cc  "]
         );
-
-        // cursor below last row
-
-        for scrollback in [0, 20] {
-            let (_, cursor) = resize_buffer(scrollback, content.clone(), 4, 8, (2, 6));
-
-            assert_eq!(cursor, (2, 6));
-        }
     }
 
     #[test]
@@ -877,7 +940,7 @@ mod tests {
         fn prop_cursor_translation(scrollback_size in 0..20usize, wrapped in prop::collection::vec(prop::bool::ANY, 5), col in 0..10usize, row in 0..5usize) {
             let cols = 10;
             let rows = 5;
-            let mut buffer = Buffer::new(cols, rows, None, None);
+            let mut buffer = Buffer::new(cols, rows, None, Pen::default());
             buffer.add_scrollback(scrollback_size);
 
             for (i, w) in wrapped.iter().enumerate() {
@@ -900,7 +963,7 @@ mod tests {
         mut cursor: VisualPosition,
     ) -> (Vec<String>, VisualPosition) {
         let mut buffer = buffer(&content, None, scrollback_size);
-        cursor = buffer.resize(new_cols, new_rows, cursor);
+        cursor = buffer.resize(new_cols, new_rows, cursor, true);
 
         let view = buffer.view().map(|line| line.text()).collect::<Vec<_>>();
 
@@ -914,7 +977,7 @@ mod tests {
     ) -> Buffer {
         let cols = content[0].0.len();
         let rows = content.len();
-        let mut buffer = Buffer::new(cols, rows, scrollback_limit, None);
+        let mut buffer = Buffer::new(cols, rows, scrollback_limit, Pen::default());
 
         if !matches!(scrollback_limit, Some(0)) {
             buffer.add_scrollback(scrollback_size);

@@ -38,8 +38,8 @@ body:
       description: Provide a minimal code example or input byte/escape sequence that triggers the problem
       placeholder: |
         ```rust
-        let mut vt = avt::Vt::new(80, 24);
-        vt.feed_str("...");
+        let mut terminal = avt::Terminal::new(80, 24).unwrap();
+        terminal.feed("...");
         // observe incorrect terminal state
         ```
     validations:

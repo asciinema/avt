@@ -1,5 +1,5 @@
 use avt::parser::Parser;
-use criterion::{criterion_group, criterion_main, BatchSize, Criterion};
+use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::fs;
 
 pub fn criterion_benchmark(c: &mut Criterion) {
@@ -20,7 +20,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-fn setup(filename: &str) -> impl Fn() -> (Parser, String) {
+fn setup(filename: &str) -> impl Fn() -> (Parser, String) + use<> {
     let filename = filename.to_owned();
 
     move || {

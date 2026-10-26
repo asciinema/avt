@@ -99,7 +99,7 @@ impl Cell {
         Cell(Cluster::space(), Occupancy::Single, pen)
     }
 
-    pub fn is_default(&self) -> bool {
+    pub(crate) fn is_default(&self) -> bool {
         self.0.as_str() == " " && self.1 == Occupancy::Single && self.2.is_default()
     }
 

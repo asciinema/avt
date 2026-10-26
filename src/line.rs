@@ -1,3 +1,4 @@
+use crate::anchor::{Anchor, Mark};
 use crate::cell::{display_width, Cell, Occupancy};
 use crate::pen::Pen;
 use std::ops::{Index, IndexMut, Range, RangeFull};
@@ -17,10 +18,27 @@ impl CharWidth {
     }
 }
 
-#[derive(Clone, PartialEq)]
 pub struct Line {
     pub(crate) cells: Vec<Cell>,
     pub(crate) wrapped: bool,
+    pub(crate) marks: Vec<Mark>,
+}
+
+// Frames and evicted-line copies are visual values, not tracking registrations.
+impl Clone for Line {
+    fn clone(&self) -> Self {
+        Self {
+            cells: self.cells.clone(),
+            wrapped: self.wrapped,
+            marks: Vec::new(),
+        }
+    }
+}
+
+impl PartialEq for Line {
+    fn eq(&self, other: &Self) -> bool {
+        self.cells == other.cells && self.wrapped == other.wrapped
+    }
 }
 
 impl Line {
@@ -28,12 +46,13 @@ impl Line {
         Line {
             cells: vec![Cell::blank(pen); cols],
             wrapped: false,
+            marks: Vec::new(),
         }
     }
 
-    pub(crate) fn reset(&mut self, cols: usize, pen: Pen) {
-        self.cells.clear();
-        self.cells.resize(cols, Cell::blank(pen));
+    pub(crate) fn reset(&mut self, pen: Pen) {
+        self.marks.clear();
+        self.cells.fill(Cell::blank(pen));
         self.wrapped = false;
     }
 
@@ -42,20 +61,25 @@ impl Line {
             return;
         }
 
-        let start_col = range.start;
-        let end_col = range.end;
+        let width = self.len();
 
-        if self.cells[start_col].occupancy() == Occupancy::WideTail {
-            self.cells[start_col - 1].set(" ", Occupancy::Single, *pen);
-        }
+        let start =
+            if range.start < width && self.cells[range.start].occupancy() == Occupancy::WideTail {
+                range.start - 1
+            } else {
+                range.start
+            };
 
-        self.cells[range].fill(Cell::blank(*pen));
+        let end = if range.end < width && self.cells[range.end].occupancy() == Occupancy::WideTail {
+            range.end + 1
+        } else {
+            range.end
+        };
 
-        if let Some(next_cell) = self.cells.get_mut(end_col) {
-            if next_cell.occupancy() == Occupancy::WideTail {
-                next_cell.set(" ", Occupancy::Single, *pen);
-            }
-        }
+        self.marks
+            .retain(|mark| mark.live() && !(start <= mark.col && (mark.col < end || end == width)));
+
+        self.cells[start..end].fill(Cell::blank(*pen));
     }
 
     pub(crate) fn print(&mut self, col: usize, cluster: &str, pen: Pen) -> Option<usize> {
@@ -149,9 +173,24 @@ impl Line {
 
     pub(crate) fn shift_right(&mut self, col: usize, n: usize, pen: Pen) {
         let col = col.min(self.len() - 1);
+        let width = self.len();
+
+        self.marks.retain_mut(|mark| {
+            if mark.col > col {
+                mark.col += n;
+
+                if mark.col >= width {
+                    return false;
+                }
+            }
+
+            mark.live()
+        });
+
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != col - 1);
             cur_cell.set(" ", Occupancy::Single, pen);
             self.cells[col - 1].set(" ", Occupancy::Single, pen);
         }
@@ -161,7 +200,9 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != width - 1);
             cur_cell.set(" ", Occupancy::Single, pen);
+
             self.cells
                 .last_mut()
                 .unwrap()
@@ -170,7 +211,20 @@ impl Line {
     }
 
     pub(crate) fn delete(&mut self, col: usize, n: usize, pen: &Pen) {
+        self.marks.retain_mut(|mark| {
+            if (col..col + n).contains(&mark.col) {
+                return false;
+            }
+
+            if mark.col >= col + n {
+                mark.col -= n;
+            }
+
+            mark.live()
+        });
+
         if self.cells[col].occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != col - 1);
             self.cells[col - 1].set(" ", Occupancy::Single, *pen);
         }
 
@@ -179,6 +233,7 @@ impl Line {
         let cur_cell = &mut self.cells[col];
 
         if cur_cell.occupancy() == Occupancy::WideTail {
+            self.marks.retain(|mark| mark.col != col);
             cur_cell.set(" ", Occupancy::Single, *pen);
         }
 
@@ -186,17 +241,13 @@ impl Line {
         self.cells[fill_start..].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> (bool, Option<Line>) {
+    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> Option<Line> {
         let mut needed = len - self.len();
 
-        if needed == 0 {
-            return (true, Some(other));
-        }
-
         if !self.wrapped {
-            self.expand(len, &Pen::default());
+            self.expand(len);
 
-            return (true, Some(other));
+            return Some(other);
         }
 
         if !other.wrapped {
@@ -210,42 +261,56 @@ impl Line {
                 self.cells.push(Cell::new(" ", Occupancy::Single, *pen));
             }
 
-            self.cells.extend_from_slice(&other[0..needed]);
+            let rest_marks = other.split_marks(needed);
+            self.append_marks(&mut other, self.len());
+            self.cells.extend(&other[0..needed]);
             let mut cells = other.cells;
             cells.rotate_left(needed);
             cells.truncate(cells.len() - needed);
 
-            return (
-                true,
-                Some(Line {
-                    cells,
-                    wrapped: other.wrapped,
-                }),
-            );
+            return Some(Line {
+                cells,
+                wrapped: other.wrapped,
+                marks: rest_marks,
+            });
         }
 
-        self.cells.extend_from_slice(&other.cells);
+        self.append_marks(&mut other, self.len());
+        self.cells.extend(&other[..]);
 
         if !other.wrapped {
             self.wrapped = false;
+            self.expand(len);
+        }
 
-            if self.len() < len {
-                self.expand(len, &Pen::default());
-            }
+        None
+    }
 
-            (true, None)
+    /// Resizes a row without reflow, preserving its soft-wrap relationship.
+    pub(crate) fn resize(&mut self, len: usize) {
+        debug_assert!(len > 0);
+
+        if len < self.len() {
+            let pen = *self.cells[len - 1].pen();
+            self.clear(len..self.len(), &pen);
+            self.cells.truncate(len);
         } else {
-            (false, None)
+            self.expand(len);
         }
     }
 
-    pub(crate) fn expand(&mut self, len: usize, pen: &Pen) {
-        let tpl = Cell::blank(*pen);
-        let filler = std::iter::repeat_n(tpl, len - self.len());
+    pub(crate) fn expand(&mut self, len: usize) {
+        let filler = std::iter::repeat_n(Cell::blank(Pen::default()), len - self.len());
         self.cells.extend(filler);
     }
 
     pub(crate) fn contract(&mut self, mut len: usize) -> Option<Line> {
+        // A wide pair cannot fit on a one-column row, even after wrapping.
+        if len == 1 && self.cells[0].occupancy() == Occupancy::WideHead {
+            let pen = *self.cells[0].pen();
+            self.clear(0..2, &pen);
+        }
+
         if !self.wrapped {
             let trimmed_len = self.len() - self.trailers();
             self.cells.truncate(len.max(trimmed_len));
@@ -258,9 +323,10 @@ impl Line {
                 len -= 1;
             }
 
-            let mut rest = Line {
+            let rest = Line {
                 cells: self.cells.split_off(len),
                 wrapped: self.wrapped,
+                marks: self.split_marks(len),
             };
 
             if wide_char_boundary {
@@ -268,17 +334,9 @@ impl Line {
                 self.cells.push(Cell::new(" ", Occupancy::Single, *pen));
             }
 
-            if !self.wrapped {
-                rest.trim();
-            }
+            self.wrapped = true;
 
-            if rest.cells.is_empty() {
-                None
-            } else {
-                self.wrapped = true;
-
-                Some(rest)
-            }
+            Some(rest)
         } else {
             None
         }
@@ -288,6 +346,55 @@ impl Line {
         self.cells.len()
     }
 
+    pub(crate) fn anchor_column(&self, anchor: &Anchor) -> Option<usize> {
+        self.marks
+            .iter()
+            .find(|mark| mark.matches(anchor))
+            .map(|mark| mark.col)
+    }
+
+    pub(crate) fn split_marks(&mut self, col: usize) -> Vec<Mark> {
+        let mut rest = Vec::new();
+
+        self.marks.retain_mut(|mark| {
+            if !mark.live() {
+                return false;
+            }
+
+            if mark.col >= col {
+                rest.push(Mark {
+                    token: mark.token.clone(),
+                    col: mark.col - col,
+                });
+
+                false
+            } else {
+                true
+            }
+        });
+
+        rest
+    }
+
+    fn append_marks(&mut self, other: &mut Line, offset: usize) {
+        self.marks.extend(
+            other
+                .marks
+                .drain(..)
+                .filter(|mark| mark.live())
+                .map(|mut mark| {
+                    mark.col += offset;
+
+                    mark
+                }),
+        );
+    }
+
+    pub(crate) fn clip_marks(&mut self) {
+        let width = self.len();
+        self.marks.retain(|mark| mark.live() && mark.col <= width);
+    }
+
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
@@ -295,6 +402,11 @@ impl Line {
 
     pub fn cells(&self) -> &[Cell] {
         &self.cells
+    }
+
+    /// Whether this row continues onto the next row through a soft wrap.
+    pub fn is_wrapped(&self) -> bool {
+        self.wrapped
     }
 
     pub fn chunks<'a>(
@@ -341,9 +453,6 @@ impl Line {
     }
 
     fn cluster_display_width(&self, cluster: &str) -> CharWidth {
-        // A terminal cell is at most two columns wide. unicode-width can sum
-        // widths of all scalar values in a grapheme (for example a flag), so
-        // clamp the result after measuring the complete cluster.
         if display_width(cluster) == 2 {
             CharWidth::Double
         } else {

@@ -1,25 +1,29 @@
 [package]
 name = "avt"
-version = "0.18.0"
-edition = "2021"
+version = "0.19.0"
+edition = "2024"
 authors = ["Marcin Kulik <m@ku1ik.com>"]
 repository = "https://github.com/asciinema/avt"
 description = "asciinema virtual terminal"
 license = "Apache-2.0"
+exclude = [
+    "/.github/**",
+    "/.gitignore",
+    "/flake.lock",
+    "/flake.nix",
+    "/fuzz.sh",
+]
 
 # MSRV
-rust-version = "1.82.0"
+rust-version = "1.86.0"
 
 [dependencies]
-rgb = "0.8.33"
-unicode-width = "0.1.13"
+unicode-width = "0.2"
 unicode-segmentation = "1.12.0"
 
 [dev-dependencies]
-rand = "0.7"
-proptest = "=1.9.0"
-tempfile = "=3.24.0"
-criterion = "0.3"
+proptest = "1"
+criterion = "0.8"
 pretty_assertions = "1.0"
 
 [[bench]]
@@ -27,7 +31,7 @@ name = "parser"
 harness = false
 
 [[bench]]
-name = "vt"
+name = "terminal"
 harness = false
 
 [[bench]]

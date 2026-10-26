@@ -1,25 +1,42 @@
-use avt::util::TextCollector;
-use avt::Vt;
+//! Convert a UTF-8 terminal stream from stdin into plain text.
+//!
+//! ```sh
+//! printf '\033[31mHello\033[0m\r\nWorking...\rDone\033[K\033[H\033[2JAfter clear' \
+//!   | cargo run --quiet --example text
+//! ```
+//!
+//! Output:
+//!
+//! ```text
+//! Hello
+//! Done
+//! After clear
+//! ```
 
-fn main() {
-    let vt = Vt::builder().size(1000, 100).scrollback_limit(100).build();
+use avt::Terminal;
+use avt::observer::Transcript;
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
     let input = std::io::stdin();
     let mut buf = String::new();
-    let mut collector = TextCollector::new(vt);
 
-    while let Ok(n) = input.read_line(&mut buf) {
-        if n == 0 {
-            break;
-        };
+    // Use the source terminal's dimensions. No retained scrollback is needed.
+    let mut terminal = Terminal::new(80, 24)?;
+    let mut transcript = Transcript::new();
 
-        for line in collector.feed_str(&buf) {
+    while input.read_line(&mut buf)? != 0 {
+        // Emit completed logical lines as they leave the terminal buffer.
+        for line in terminal.feed_with(&buf, &mut transcript) {
             println!("{}", line);
         }
 
         buf.clear();
     }
 
-    for line in collector.flush() {
+    // Include the remaining primary-screen text at EOF.
+    for line in transcript.finish(&terminal) {
         println!("{}", line);
     }
+
+    Ok(())
 }
