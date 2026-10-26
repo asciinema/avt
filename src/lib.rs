@@ -453,7 +453,10 @@ mod tests {
         for ch in cluster.chars() {
             via_chars.feed(ch);
         }
-        assert_eq!(via_chars.screen().line(0).unwrap().cells()[0].contents(), cluster);
+        assert_eq!(
+            via_chars.screen().line(0).unwrap().cells()[0].contents(),
+            cluster
+        );
         via_str.engine.assert_dump_equivalent(&via_chars.engine);
     }
 

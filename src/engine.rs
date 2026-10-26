@@ -1,6 +1,6 @@
 use crate::Anchor;
 use crate::buffer::{Buffer, EraseMode};
-use crate::cell::{clusters_form_one_grapheme, display_width, Cell, Occupancy, MAX_CLUSTER_BYTES};
+use crate::cell::{Cell, MAX_CLUSTER_BYTES, Occupancy, clusters_form_one_grapheme, display_width};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
@@ -880,8 +880,7 @@ impl Engine {
                 .is_some();
 
             if !printed && col > 0 {
-                self.active_buffer_mut()
-                    .print((col - 1, row), cluster, pen);
+                self.active_buffer_mut().print((col - 1, row), cluster, pen);
             }
         }
 

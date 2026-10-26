@@ -1,5 +1,5 @@
 use crate::anchor::{Anchor, Mark};
-use crate::cell::{display_width, Cell, Occupancy};
+use crate::cell::{Cell, Occupancy, display_width};
 use crate::pen::Pen;
 use std::ops::{Index, IndexMut, Range, RangeFull};
 
