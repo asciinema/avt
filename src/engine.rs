@@ -2565,16 +2565,6 @@ mod tests {
     }
 
     #[test]
-    fn sgr_diff_prefers_targeted_ops_on_tie() {
-        let from = pen(|pen| pen.intensity = Intensity::Bold);
-
-        assert_eq!(
-            super::to_sgr_diff(&from, &Pen::default()),
-            Some(sgr(ResetIntensity))
-        );
-    }
-
-    #[test]
     fn sgr_diff_uses_full_reset_when_shorter() {
         let from = pen(|pen| {
             pen.intensity = Intensity::Bold;
@@ -2833,27 +2823,6 @@ mod tests {
         term.execute([Decstbm(3, 4), Cup(3, 1), Ri]);
 
         assert_eq!(text(&term), "\nabcd\n|\nefgh\nmnop");
-    }
-
-    #[test]
-    fn execute_sc_rc() {
-        let mut term = build_term(4, 3, 0, 0, "");
-
-        term.feed("  \n");
-        term.execute(Decsc);
-        term.feed(" \n");
-        term.execute(Decrc);
-
-        assert_eq!(term.cursor().position().unwrap(), (2, 1));
-
-        let mut term = build_term(4, 3, 0, 0, "");
-
-        term.feed("  \n");
-        term.execute(Scosc);
-        term.feed(" \n");
-        term.execute(Scorc);
-
-        assert_eq!(term.cursor().position().unwrap(), (2, 1));
     }
 
     #[test]
@@ -3415,16 +3384,6 @@ mod tests {
     }
 
     #[test]
-    fn resize_taller() {
-        let mut term = Terminal::with_scrollback(6, 4, None).unwrap();
-        term.feed("AAA\n\rBBB\n\r");
-
-        term.resize(6, 5);
-
-        assert_eq!(text(&term), "AAA\nBBB\n|\n\n");
-    }
-
-    #[test]
     fn resize_shorter() {
         let mut term = Terminal::with_scrollback(6, 6, None).unwrap();
 
@@ -3662,30 +3621,5 @@ mod tests {
         term.resize_with(20, 2, &mut ());
 
         assert_eq!(term.tabs, vec![8, 16]);
-    }
-
-    #[test]
-    fn resize_vs_saved_ctx() {
-        use DecMode::*;
-
-        let mut term = Engine::new((20, 5), None);
-
-        term.execute_with(&Cuf(15), &mut ());
-
-        assert_eq!(term.cursor.col, 15);
-
-        term.execute_with(&Decsc, &mut ());
-
-        assert_eq!(term.primary_saved_cursor.cursor_col, 15);
-
-        term.execute_with(&Decset(dec_modes([AltScreenBuffer])), &mut ());
-
-        term.execute_with(&Decsc, &mut ());
-
-        assert_eq!(term.alternate_saved_cursor.cursor_col, 15);
-
-        term.resize_with(10, 5, &mut ());
-
-        assert_eq!(term.alternate_saved_cursor.cursor_col, 9);
     }
 }

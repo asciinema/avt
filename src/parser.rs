@@ -1767,13 +1767,20 @@ mod tests {
         DecModes::from(&modes[..])
     }
 
-    fn assert_dump(input: &str, state: State, dump: &str) {
-        let mut parser = Parser::new();
+    fn assert_dump_continuation(input: &str, state: State, suffix: &str, expected: &[Function]) {
+        let mut original = Parser::new();
+        feed(&mut original, input);
+        assert_eq!(original.state, state);
+        let mut restored = Parser::new();
+        feed(&mut restored, &original.dump());
+        original.assert_continuation_equivalent(&restored);
 
-        feed(&mut parser, input);
+        for parser in [&mut original, &mut restored] {
+            let output: Vec<_> = suffix.chars().filter_map(|ch| parser.feed(ch)).collect();
+            assert_eq!(output, expected);
+        }
 
-        assert_eq!(parser.state, state);
-        assert_eq!(parser.dump(), dump);
+        original.assert_continuation_equivalent(&restored);
     }
 
     fn gen_parser_char() -> impl Strategy<Value = char> {
@@ -2265,30 +2272,92 @@ mod tests {
     }
 
     #[test]
-    fn dump_non_ground_states() {
-        assert_dump("\x1b", State::Escape, "\x1b");
-        assert_dump("\x1b(", State::EscapeIntermediate, "\x1b(");
-        assert_dump("\x1b[", State::CsiEntry, "\u{9b}");
-        assert_dump("\x1b[ ", State::CsiIntermediate, "\u{9b} ");
-        assert_dump("\x1b[:", State::CsiIgnore, "\u{9b}\u{3a}");
-        assert_dump("\x1bP", State::DcsEntry, "\u{90}");
-        assert_dump("\x1bP ", State::DcsIntermediate, "\u{90} ");
-        assert_dump("\x1bP1;2", State::DcsParam, "\u{90}1;2");
-        assert_dump("\x1bPz", State::DcsPassthrough, "\u{90}\u{40}");
-        assert_dump("\x1bP:", State::DcsIgnore, "\u{90}\u{3a}");
-        assert_dump("\x1b]", State::OscString, "\u{9d}");
-        assert_dump("\x1bX", State::SosPmApcString, "\u{98}");
+    fn dump_restores_non_ground_state_continuations() {
+        for (input, state, suffix, expected) in [
+            ("\x1b", State::Escape, "7X", vec![Decsc, Print('X')]),
+            (
+                "\x1b(",
+                State::EscapeIntermediate,
+                "0X",
+                vec![Gzd4(Charset::Drawing), Print('X')],
+            ),
+            (
+                "\x1b[",
+                State::CsiEntry,
+                "3;4HX",
+                vec![Cup(3, 4), Print('X')],
+            ),
+            ("\x1b[ ", State::CsiIntermediate, "qX", vec![Print('X')]),
+            ("\x1b[:", State::CsiIgnore, "mX", vec![Print('X')]),
+            (
+                "\x1bP",
+                State::DcsEntry,
+                "qignored\x1b\\X",
+                vec![Print('X')],
+            ),
+            (
+                "\x1bP ",
+                State::DcsIntermediate,
+                "qignored\x1b\\X",
+                vec![Print('X')],
+            ),
+            (
+                "\x1bP1;2",
+                State::DcsParam,
+                "qignored\x1b\\X",
+                vec![Print('X')],
+            ),
+            (
+                "\x1bPz",
+                State::DcsPassthrough,
+                "ignored\x1b\\X",
+                vec![Print('X')],
+            ),
+            (
+                "\x1bP:",
+                State::DcsIgnore,
+                "ignored\x1b\\X",
+                vec![Print('X')],
+            ),
+            (
+                "\x1b]",
+                State::OscString,
+                "133;A\x07X",
+                vec![
+                    Osc(super::Osc::ShellIntegration(
+                        super::ShellIntegration::PromptStart,
+                    )),
+                    Print('X'),
+                ],
+            ),
+            (
+                "\x1bX",
+                State::SosPmApcString,
+                "ignored\x1b\\X",
+                vec![Print('X')],
+            ),
+        ] {
+            assert_dump_continuation(input, state, suffix, &expected);
+        }
     }
 
     #[test]
-    fn dump() {
-        let mut parser = Parser::new();
-
-        for ch in "\x1b[;1;;38:2:1:2:3;".chars() {
-            parser.feed(ch);
-        }
-
-        assert_eq!(parser.dump(), "\u{9b}0;1;0;38:2:1:2:3;0");
+    fn dump_restores_empty_and_colon_separated_parameters() {
+        assert_dump_continuation(
+            "\x1b[;1;;38:2:1:2:3;",
+            State::CsiParam,
+            "mX",
+            &[
+                Sgr(sgr_ops([
+                    Reset,
+                    SetBoldIntensity,
+                    Reset,
+                    SetForegroundColor(Color::rgb(1, 2, 3)),
+                    Reset,
+                ])),
+                Print('X'),
+            ],
+        );
     }
 
     #[test]

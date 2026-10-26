@@ -296,7 +296,6 @@ mod tests {
     use crate::parser::{EdScope, Function};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use proptest::prelude::*;
-    use std::{env, fs};
 
     const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
     const SUBMIT: &str = "\x1b]133;C\x07";
@@ -446,23 +445,6 @@ mod tests {
 
         restored.feed(original.dump());
         assert_dump_equivalent(&original, &restored);
-    }
-
-    #[test]
-    fn dump_with_file() {
-        if let Ok((cols, rows, input, step)) = setup_dump_with_file() {
-            let mut original = Terminal::new(cols, rows).unwrap();
-
-            for (index, ch) in input.chars().take(1_000_000).enumerate() {
-                original.feed(ch);
-
-                if index % step == 0 {
-                    let mut restored = Terminal::new(cols, rows).unwrap();
-                    restored.feed(original.dump());
-                    assert_dump_equivalent(&original, &restored);
-                }
-            }
-        }
     }
 
     // Keep the original generators so the historical regression seeds are replayed.
@@ -667,17 +649,6 @@ mod tests {
                 assert_dump_equivalent(&original, &restored);
             }
         }
-    }
-
-    fn setup_dump_with_file() -> Result<(usize, usize, String, usize), env::VarError> {
-        let path = env::var("P")?;
-        let input = fs::read_to_string(path).unwrap();
-        let cols = env::var("W").unwrap().parse().unwrap();
-        let rows = env::var("H").unwrap().parse().unwrap();
-        let step = env::var("S").unwrap_or("1".to_owned()).parse().unwrap();
-        assert!(step > 0, "S must be positive");
-
-        Ok((cols, rows, input, step))
     }
 
     fn assert_dump_equivalent(original: &Terminal, restored: &Terminal) {
