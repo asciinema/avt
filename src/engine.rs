@@ -1,3 +1,4 @@
+use crate::Anchor;
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
@@ -8,8 +9,14 @@ use crate::parser::{
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
-use crate::{Anchor, Observer};
 use std::cmp::Ordering;
+use std::ops::Range;
+
+/// Synchronous notifications emitted while the engine mutates screen state.
+pub(crate) trait Effects {
+    fn dirty(&mut self, rows: Range<usize>);
+    fn resized(&mut self, cols: usize, rows: usize);
+}
 
 #[derive(Debug)]
 pub(crate) struct Engine {
@@ -281,7 +288,7 @@ impl Engine {
         self.active_buffer_mut().erase(pos, mode, &pen);
     }
 
-    pub fn execute_with(&mut self, function: &Function, observer: &mut impl Observer) {
+    pub fn execute_with(&mut self, function: &Function, observer: &mut impl Effects) {
         use Function::*;
 
         match *function {
@@ -470,7 +477,7 @@ impl Engine {
         self.move_cursor_to_col(prev_tab);
     }
 
-    fn move_cursor_down_with_scroll(&mut self, observer: &mut impl Observer) {
+    fn move_cursor_down_with_scroll(&mut self, observer: &mut impl Effects) {
         if self.cursor.row == self.bottom_margin {
             self.scroll_up_in_region(1, observer);
         } else if self.cursor.row < self.rows - 1 {
@@ -516,14 +523,14 @@ impl Engine {
         }
     }
 
-    fn scroll_up_in_region(&mut self, n: usize, observer: &mut impl Observer) {
+    fn scroll_up_in_region(&mut self, n: usize, observer: &mut impl Effects) {
         let range = self.top_margin..self.bottom_margin + 1;
         let pen = self.pen;
         self.active_buffer_mut().scroll_up(range.clone(), n, &pen);
         observer.dirty(range);
     }
 
-    fn scroll_down_in_region(&mut self, n: usize, observer: &mut impl Observer) {
+    fn scroll_down_in_region(&mut self, n: usize, observer: &mut impl Effects) {
         let range = self.top_margin..self.bottom_margin + 1;
         let pen = self.pen;
         self.active_buffer_mut().scroll_down(range.clone(), n, &pen);
@@ -548,7 +555,7 @@ impl Engine {
 
     // buffer switching
 
-    fn switch_to_alternate_buffer(&mut self, observer: &mut impl Observer) {
+    fn switch_to_alternate_buffer(&mut self, observer: &mut impl Effects) {
         if let ScreenKind::Primary = self.active {
             self.primary_cursor = (self.cursor.col, self.cursor.row);
             self.active = ScreenKind::Alternate;
@@ -557,7 +564,7 @@ impl Engine {
         }
     }
 
-    fn switch_to_primary_buffer(&mut self, observer: &mut impl Observer) {
+    fn switch_to_primary_buffer(&mut self, observer: &mut impl Effects) {
         if let ScreenKind::Alternate = self.active {
             self.active = ScreenKind::Primary;
             observer.dirty(0..self.rows);
@@ -566,7 +573,7 @@ impl Engine {
 
     // resizing
 
-    pub fn resize_with(&mut self, cols: usize, rows: usize, observer: &mut impl Observer) {
+    pub fn resize_with(&mut self, cols: usize, rows: usize, observer: &mut impl Effects) {
         debug_assert!(cols > 0 && rows > 0, "terminal size must be at least 1x1");
 
         if (cols, rows) == self.size() {
@@ -627,7 +634,7 @@ impl Engine {
         *self.active_saved_cursor_mut() = SavedCursorState::default();
     }
 
-    fn hard_reset(&mut self, observer: &mut impl Observer) {
+    fn hard_reset(&mut self, observer: &mut impl Effects) {
         *self = Self::new(self.size(), self.scrollback_limit);
         observer.dirty(0..self.rows);
     }
@@ -732,7 +739,7 @@ impl Engine {
             .assert_execution_equivalent(&other.alternate_buffer);
     }
 
-    fn print(&mut self, mut ch: char, observer: &mut impl Observer) {
+    fn print(&mut self, mut ch: char, observer: &mut impl Effects) {
         ch = self.charsets[self.active_charset].translate(ch);
 
         match self.try_print(ch) {
@@ -769,7 +776,7 @@ impl Engine {
         }
     }
 
-    fn wrap_and_print_at_line_start(&mut self, ch: char, observer: &mut impl Observer) {
+    fn wrap_and_print_at_line_start(&mut self, ch: char, observer: &mut impl Effects) {
         let row = self.cursor.row;
         let pen = self.pen;
 
@@ -826,7 +833,7 @@ impl Engine {
         self.move_cursor_to_next_tab(1);
     }
 
-    fn lf(&mut self, observer: &mut impl Observer) {
+    fn lf(&mut self, observer: &mut impl Effects) {
         self.move_cursor_down_with_scroll(observer);
 
         if self.new_line_mode {
@@ -846,7 +853,7 @@ impl Engine {
         self.active_charset = 0;
     }
 
-    fn nel(&mut self, observer: &mut impl Observer) {
+    fn nel(&mut self, observer: &mut impl Effects) {
         self.move_cursor_down_with_scroll(observer);
         self.cursor.col = 0;
     }
@@ -855,7 +862,7 @@ impl Engine {
         self.set_tab();
     }
 
-    fn ri(&mut self, observer: &mut impl Observer) {
+    fn ri(&mut self, observer: &mut impl Effects) {
         if self.cursor.row == self.top_margin {
             self.scroll_down_in_region(1, observer);
         } else if self.cursor.row > 0 {
@@ -871,11 +878,11 @@ impl Engine {
         self.restore_cursor();
     }
 
-    fn ris(&mut self, observer: &mut impl Observer) {
+    fn ris(&mut self, observer: &mut impl Effects) {
         self.hard_reset(observer);
     }
 
-    fn decaln(&mut self, observer: &mut impl Observer) {
+    fn decaln(&mut self, observer: &mut impl Effects) {
         for row in 0..self.rows {
             for col in 0..self.cols {
                 self.active_buffer_mut()
@@ -894,7 +901,7 @@ impl Engine {
         self.charsets[1] = charset;
     }
 
-    fn ich(&mut self, n: u16, observer: &mut impl Observer) {
+    fn ich(&mut self, n: u16, observer: &mut impl Effects) {
         if self.cursor.col == self.cols {
             self.cursor.col = self.cols - 1;
         }
@@ -959,7 +966,7 @@ impl Engine {
         self.move_cursor_to_next_tab(as_usize(n, 1));
     }
 
-    fn ed(&mut self, scope: &EdScope, observer: &mut impl Observer) {
+    fn ed(&mut self, scope: &EdScope, observer: &mut impl Effects) {
         match scope {
             EdScope::Below => {
                 self.erase_at_cursor(EraseMode::FromCursorToEndOfView);
@@ -987,7 +994,7 @@ impl Engine {
         }
     }
 
-    fn el(&mut self, scope: &ElScope, observer: &mut impl Observer) {
+    fn el(&mut self, scope: &ElScope, observer: &mut impl Effects) {
         match scope {
             ElScope::ToRight => {
                 self.erase_at_cursor(EraseMode::FromCursorToEndOfLine);
@@ -1009,7 +1016,7 @@ impl Engine {
         }
     }
 
-    fn il(&mut self, n: u16, observer: &mut impl Observer) {
+    fn il(&mut self, n: u16, observer: &mut impl Effects) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -1024,7 +1031,7 @@ impl Engine {
         observer.dirty(range);
     }
 
-    fn dl(&mut self, n: u16, observer: &mut impl Observer) {
+    fn dl(&mut self, n: u16, observer: &mut impl Effects) {
         let range = if self.cursor.row <= self.bottom_margin {
             self.cursor.row..self.bottom_margin + 1
         } else {
@@ -1039,7 +1046,7 @@ impl Engine {
         observer.dirty(range);
     }
 
-    fn dch(&mut self, n: u16, observer: &mut impl Observer) {
+    fn dch(&mut self, n: u16, observer: &mut impl Effects) {
         if self.cursor.col >= self.cols {
             self.move_cursor_to_col(self.cols - 1);
         }
@@ -1052,11 +1059,11 @@ impl Engine {
         observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
-    fn su(&mut self, n: u16, observer: &mut impl Observer) {
+    fn su(&mut self, n: u16, observer: &mut impl Effects) {
         self.scroll_up_in_region(as_usize(n, 1), observer);
     }
 
-    fn sd(&mut self, n: u16, observer: &mut impl Observer) {
+    fn sd(&mut self, n: u16, observer: &mut impl Effects) {
         self.scroll_down_in_region(as_usize(n, 1), observer);
     }
 
@@ -1076,7 +1083,7 @@ impl Engine {
         }
     }
 
-    fn ech(&mut self, n: u16, observer: &mut impl Observer) {
+    fn ech(&mut self, n: u16, observer: &mut impl Effects) {
         let n = as_usize(n, 1);
 
         self.erase_at_cursor(EraseMode::NextChars(n));
@@ -1088,7 +1095,7 @@ impl Engine {
         self.move_cursor_to_prev_tab(as_usize(n, 1));
     }
 
-    fn rep(&mut self, n: u16, observer: &mut impl Observer) {
+    fn rep(&mut self, n: u16, observer: &mut impl Effects) {
         if self.cursor.col > 0 {
             let n = as_usize(n, 1);
             let row = self.cursor.row;
@@ -1262,7 +1269,7 @@ impl Engine {
         self.soft_reset();
     }
 
-    fn decset(&mut self, modes: &DecModes, observer: &mut impl Observer) {
+    fn decset(&mut self, modes: &DecModes, observer: &mut impl Effects) {
         use DecMode::*;
 
         for &mode in modes.as_slice() {
@@ -1300,7 +1307,7 @@ impl Engine {
         }
     }
 
-    fn decrst(&mut self, modes: &DecModes, observer: &mut impl Observer) {
+    fn decrst(&mut self, modes: &DecModes, observer: &mut impl Effects) {
         use DecMode::*;
 
         for &mode in modes.as_slice() {

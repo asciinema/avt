@@ -82,6 +82,16 @@ pub trait Observer {
     fn end(&mut self, context: &mut Observation<'_>) -> Self::Output;
 }
 
+impl<O: Observer + ?Sized> crate::engine::Effects for O {
+    fn dirty(&mut self, rows: Range<usize>) {
+        Observer::dirty(self, rows);
+    }
+
+    fn resized(&mut self, cols: usize, rows: usize) {
+        Observer::resized(self, cols, rows);
+    }
+}
+
 impl Observer for () {
     type Output = ();
 
