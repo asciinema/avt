@@ -39,6 +39,10 @@ Requires Rust 1.86 or later:
 avt = "0.19"
 ```
 
+The library is unconditionally `no_std` with `alloc`, requiring an allocator and
+pointer-width atomics. Supported targets are Linux x86-64/ARM64, macOS ARM64,
+and WebAssembly (`wasm32-unknown-unknown`).
+
 ```rust
 use avt::Terminal;
 

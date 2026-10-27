@@ -26,6 +26,14 @@ jobs:
         primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
         restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
     - run: nix develop .#${{ matrix.shell }} --command cargo test
+    - name: Check supported targets and no_std
+      run: |
+        nix develop .#${{ matrix.shell }} --command cargo check --lib \
+          --target x86_64-unknown-linux-gnu \
+          --target aarch64-unknown-linux-gnu \
+          --target aarch64-apple-darwin \
+          --target wasm32-unknown-unknown \
+          --target thumbv7em-none-eabi
     - name: Run examples
       run: |
         nix develop .#${{ matrix.shell }} --command bash -ec '

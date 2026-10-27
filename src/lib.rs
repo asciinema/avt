@@ -2,6 +2,8 @@
 
 //! A virtual terminal with composable observers.
 //!
+//! This crate is `no_std` with `alloc`, requiring an allocator and pointer-width atomics.
+//!
 //! [`Terminal`] interprets application output, including text and control
 //! sequences, and maintains primary and alternate screen buffers.
 //! Plain mutations return `()`; `_with` variants return an
