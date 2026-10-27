@@ -14,7 +14,7 @@ pub use shell::{
 pub use transcript::Transcript;
 
 use crate::{Anchor, Line, Operation, Position, Terminal};
-use std::ops::Range;
+use core::ops::Range;
 
 /// Read-only terminal inspection with permission to register tracking metadata.
 pub struct Observation<'a> {

@@ -1,5 +1,7 @@
 //! Single fragments and flat sequences accepted by terminal feeds.
 
+use alloc::string::String;
+
 /// One text fragment or character. Text is borrowed; characters are stored inline.
 #[derive(Clone, Copy, Debug)]
 pub enum Input<'a> {
@@ -76,10 +78,10 @@ pub trait IntoInputs<Kind> {
 }
 
 impl<T: AsInput> IntoInputs<Single> for T {
-    type Iter = std::iter::Once<T>;
+    type Iter = core::iter::Once<T>;
 
     fn into_inputs(self) -> Self::Iter {
-        std::iter::once(self)
+        core::iter::once(self)
     }
 }
 

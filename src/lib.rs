@@ -1,3 +1,5 @@
+#![no_std]
+
 //! A virtual terminal with composable observers.
 //!
 //! [`Terminal`] interprets application output, including text and control
@@ -28,6 +30,11 @@
 //! [`Terminal::dump`] initializes visible state and pending parsing, omitting
 //! retained history and analysis state. See the repository examples for rendering,
 //! transcripts, shell tracking, replay, and dependency-based slicing.
+
+extern crate alloc;
+#[cfg(test)]
+extern crate std;
+
 mod anchor;
 mod buffer;
 mod cell;
@@ -54,6 +61,8 @@ pub use operation::{IntoOperations, Operation};
 pub use parser::Parser;
 pub use pen::Pen;
 
+use alloc::string::String;
+
 /// Rejected terminal dimensions. Both columns and rows must be positive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct InvalidSize {
@@ -61,8 +70,8 @@ pub struct InvalidSize {
     pub rows: usize,
 }
 
-impl std::fmt::Display for InvalidSize {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for InvalidSize {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(
             f,
             "invalid terminal size {}x{}: columns and rows must be positive",
@@ -71,7 +80,7 @@ impl std::fmt::Display for InvalidSize {
     }
 }
 
-impl std::error::Error for InvalidSize {}
+impl core::error::Error for InvalidSize {}
 
 /// A virtual terminal that interprets text and control sequences, maintaining
 /// screen contents, cursor state, and optional scrollback.
@@ -294,6 +303,11 @@ mod tests {
     use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
     use crate::parser::{EdScope, Function};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
+    use alloc::borrow::ToOwned as _;
+    use alloc::format;
+    use alloc::string::{String, ToString as _};
+    use alloc::vec;
+    use alloc::vec::Vec;
     use proptest::prelude::*;
 
     const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";

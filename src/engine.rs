@@ -9,8 +9,10 @@ use crate::parser::{
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
-use std::cmp::Ordering;
-use std::ops::Range;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::ops::Range;
 
 /// Synchronous notifications emitted while the engine mutates screen state.
 pub(crate) trait Effects {
@@ -1770,6 +1772,11 @@ mod tests {
     use crate::pen::Pen;
     use Function::*;
     use SgrOp::*;
+    use alloc::borrow::ToOwned as _;
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     fn build_term(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Terminal {
         let mut term = Terminal::with_scrollback(cols, rows, None).unwrap();

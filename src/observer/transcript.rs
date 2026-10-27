@@ -1,6 +1,9 @@
 use super::{Observation, Observer};
 use crate::parser::Function;
 use crate::{Line, Operation, Terminal};
+use alloc::borrow::ToOwned as _;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 /// Plain text from primary-buffer eviction and final retained content.
 /// ED2-cleared content follows the normal history path, including editable prompts.
@@ -59,13 +62,14 @@ impl Observer for Transcript {
     }
 
     fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
-        std::mem::take(&mut self.ready)
+        core::mem::take(&mut self.ready)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
     const SUBMIT: &str = "\x1b]133;C\x07";

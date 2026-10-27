@@ -3,7 +3,12 @@
 
 use crate::charset::Charset;
 use crate::color::Color;
-use std::fmt::Display;
+use alloc::borrow::ToOwned as _;
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString as _;
+use alloc::vec::Vec;
+use core::fmt::Display;
 
 const PARAMS_LEN: usize = 32;
 const OSC_BUFFER_LIMIT: usize = 1024;
@@ -1661,7 +1666,7 @@ impl Param {
 }
 
 impl Display for Param {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self.parts() {
             [] => unreachable!(),
 
@@ -1737,6 +1742,9 @@ mod tests {
     use super::XtwinopsOp;
     use crate::charset::Charset;
     use crate::color::Color;
+    use alloc::format;
+    use alloc::vec;
+    use alloc::vec::Vec;
     use proptest::prelude::*;
 
     fn parse(s: &str) -> Vec<Function> {
