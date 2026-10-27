@@ -34,6 +34,13 @@
                   "rust-src"
                   "rust-analyzer"
                 ];
+                targets = [
+                  "x86_64-unknown-linux-gnu"
+                  "aarch64-unknown-linux-gnu"
+                  "aarch64-apple-darwin"
+                  "wasm32-unknown-unknown"
+                  "thumbv7em-none-eabi"
+                ];
               })
             ];
           };

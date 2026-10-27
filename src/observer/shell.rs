@@ -1,6 +1,9 @@
 use super::{Observation, Observer};
 use crate::parser::{Function, Osc, ShellIntegration};
 use crate::{Anchor, Operation, ScreenKind, Terminal};
+use alloc::borrow::ToOwned as _;
+use alloc::string::String;
+use alloc::vec::Vec;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct PromptId(pub u64);
@@ -232,7 +235,7 @@ impl Observer for ShellTracker {
     }
 
     fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
-        std::mem::take(&mut self.events)
+        core::mem::take(&mut self.events)
     }
 }
 
@@ -275,6 +278,7 @@ fn command_text(terminal: &Terminal, anchor: &Anchor) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
     const SUBMIT: &str = "\x1b]133;C\x07";

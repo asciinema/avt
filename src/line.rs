@@ -1,7 +1,10 @@
 use crate::anchor::{Anchor, Mark};
 use crate::cell::{Cell, Occupancy, display_width};
 use crate::pen::Pen;
-use std::ops::{Index, IndexMut, Range, RangeFull};
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+use core::ops::{Index, IndexMut, Range, RangeFull};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum CharWidth {
@@ -300,7 +303,7 @@ impl Line {
     }
 
     pub(crate) fn expand(&mut self, len: usize) {
-        let filler = std::iter::repeat_n(Cell::blank(Pen::default()), len - self.len());
+        let filler = core::iter::repeat_n(Cell::blank(Pen::default()), len - self.len());
         self.cells.extend(filler);
     }
 
@@ -461,8 +464,8 @@ impl Line {
     }
 }
 
-impl std::fmt::Debug for Line {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Line {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut s = self.text();
 
         if self.wrapped {
@@ -504,7 +507,7 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for
             }
 
             if (self.predicate)(self.cells.last().unwrap(), cell) {
-                let cells = std::mem::take(&mut self.cells);
+                let cells = core::mem::take(&mut self.cells);
                 self.cells.push(*cell);
                 return Some(cells);
             } else {
@@ -515,7 +518,7 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for
         if self.cells.is_empty() {
             None
         } else {
-            Some(std::mem::take(&mut self.cells))
+            Some(core::mem::take(&mut self.cells))
         }
     }
 }
@@ -553,6 +556,7 @@ impl Index<RangeFull> for Line {
 #[cfg(test)]
 mod tests {
     use super::{Cell, Chunks, Occupancy, Pen};
+    use alloc::vec::Vec;
 
     fn chars(cells: &[Cell]) -> Vec<char> {
         cells.iter().map(|c| c.char()).collect()

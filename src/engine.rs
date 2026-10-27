@@ -9,8 +9,12 @@ use crate::parser::{
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
-use std::cmp::Ordering;
-use std::ops::Range;
+use alloc::borrow::ToOwned as _;
+use alloc::string::String;
+use alloc::vec::Vec;
+use core::cmp::Ordering;
+use core::ops::Range;
+use core::str;
 
 /// Synchronous notifications emitted while the engine mutates screen state.
 pub(crate) trait Effects {
@@ -763,7 +767,7 @@ impl Engine {
             len += n;
         }
 
-        let cluster = std::str::from_utf8(&buf[..len]).unwrap_or(" ");
+        let cluster = str::from_utf8(&buf[..len]).unwrap_or(" ");
 
         if self.try_compose(cluster) {
             observer.dirty(self.cursor.row..self.cursor.row + 1);
@@ -1869,6 +1873,11 @@ mod tests {
     use crate::pen::Pen;
     use Function::*;
     use SgrOp::*;
+    use alloc::borrow::ToOwned as _;
+    use alloc::format;
+    use alloc::string::String;
+    use alloc::vec;
+    use alloc::vec::Vec;
 
     fn build_term(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Terminal {
         let mut term = Terminal::with_scrollback(cols, rows, None).unwrap();

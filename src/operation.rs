@@ -37,10 +37,10 @@ pub trait IntoOperations<Kind> {
 }
 
 impl<T: Into<Operation>> IntoOperations<Single> for T {
-    type Iter = std::iter::Once<T>;
+    type Iter = core::iter::Once<T>;
 
     fn into_operations(self) -> Self::Iter {
-        std::iter::once(self)
+        core::iter::once(self)
     }
 }
 

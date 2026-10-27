@@ -1,4 +1,7 @@
 use crate::pen::Pen;
+use alloc::string::String;
+use core::fmt;
+use core::str;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
@@ -60,12 +63,12 @@ impl Cluster {
 
     fn as_str(&self) -> &str {
         // Only UTF-8 scalars are written in `from_str`.
-        unsafe { std::str::from_utf8_unchecked(&self.bytes[..self.len as usize]) }
+        unsafe { str::from_utf8_unchecked(&self.bytes[..self.len as usize]) }
     }
 }
 
-impl std::fmt::Debug for Cluster {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Debug for Cluster {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         self.as_str().fmt(f)
     }
 }

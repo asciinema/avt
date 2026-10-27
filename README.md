@@ -39,6 +39,10 @@ Requires Rust 1.86 or later:
 avt = "0.19"
 ```
 
+The library is unconditionally `no_std` with `alloc`, requiring an allocator and
+pointer-width atomics. Supported targets are Linux x86-64/ARM64, macOS ARM64,
+and WebAssembly (`wasm32-unknown-unknown`).
+
 ```rust
 use avt::Terminal;
 
@@ -122,7 +126,6 @@ Run an example with `cargo run --example NAME`:
 | `text` | Read text and control sequences from stdin and print a transcript |
 | `render` | Repaint dirty rows and cursor positions |
 | `dump_restore` | Initialize a second terminal from a state dump and continue processing input |
-| `transcript` | Preserve primary text across scrolling, reflow, and clears |
 | `history` | Reconstruct submitted commands from OSC 133 markers |
 | `prompt_markers` | Locate prompt annotations and track their outcomes after reflow |
 | `command_timestamps` | Associate submitted commands with application-provided prompt-start times |

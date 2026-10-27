@@ -1,4 +1,4 @@
-use std::sync::{Arc, Weak};
+use alloc::sync::{Arc, Weak};
 
 /// An owned handle to a position tracked through editing, scrolling, and
 /// reflow. Only the originating terminal can resolve it.
@@ -44,6 +44,9 @@ impl Mark {
 #[cfg(test)]
 mod tests {
     use crate::{Anchor, Line, Observation, Observer, Operation, Position, ScreenKind, Terminal};
+    use alloc::format;
+    use alloc::vec;
+    use alloc::vec::Vec;
     use proptest::prelude::*;
 
     fn at(terminal: &mut Terminal, col: usize, row: isize) -> Anchor {
