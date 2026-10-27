@@ -73,9 +73,8 @@ impl std::fmt::Display for InvalidSize {
 
 impl std::error::Error for InvalidSize {}
 
-/// A virtual terminal with a parser and primary and alternate screen buffers.
-/// Primary-screen ED2 preserves the occupied screen prefix in scrollback,
-/// subject to normal retention and eviction. The cursor stays in place.
+/// A virtual terminal that interprets text and control sequences, maintaining
+/// screen contents, cursor state, and optional scrollback.
 pub struct Terminal {
     parser: Parser,
     engine: engine::Engine,
