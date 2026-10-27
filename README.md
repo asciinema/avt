@@ -122,7 +122,6 @@ Run an example with `cargo run --example NAME`:
 | `text` | Read text and control sequences from stdin and print a transcript |
 | `render` | Repaint dirty rows and cursor positions |
 | `dump_restore` | Initialize a second terminal from a state dump and continue processing input |
-| `transcript` | Preserve primary text across scrolling, reflow, and clears |
 | `history` | Reconstruct submitted commands from OSC 133 markers |
 | `prompt_markers` | Locate prompt annotations and track their outcomes after reflow |
 | `command_timestamps` | Associate submitted commands with application-provided prompt-start times |
