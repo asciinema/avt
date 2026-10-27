@@ -448,6 +448,82 @@ mod tests {
     }
 
     #[test]
+    fn zwj_emoji_is_stored_in_one_two_column_cell() {
+        let mut terminal = Terminal::new(8, 1).unwrap();
+        terminal.feed("🐻‍❄️x");
+        let line = terminal.screen().line(0).unwrap();
+        assert_eq!(line.text().trim_end(), "🐻‍❄️x");
+        assert_eq!(line.cells()[0].contents(), "🐻‍❄️");
+        assert_eq!(line.cells()[0].width(), 2);
+        assert_eq!(line.cells()[1].width(), 0);
+        assert_eq!(terminal.cursor().position(), Some((3, 0)));
+    }
+
+    #[test]
+    fn feed_and_char_feed_form_the_same_grapheme_clusters() {
+        let cluster = "🐻‍❄️";
+        let mut via_str = Terminal::new(8, 1).unwrap();
+        let mut via_chars = Terminal::new(8, 1).unwrap();
+        via_str.feed(cluster);
+        for ch in cluster.chars() {
+            via_chars.feed(ch);
+        }
+        assert_eq!(
+            via_chars.screen().line(0).unwrap().cells()[0].contents(),
+            cluster
+        );
+        via_str.engine.assert_dump_equivalent(&via_chars.engine);
+    }
+
+    #[test]
+    fn combining_mark_spans_feed_calls() {
+        let mut terminal = Terminal::new(8, 1).unwrap();
+        terminal.feed("e");
+        terminal.feed("\u{0301}");
+        let line = terminal.screen().line(0).unwrap();
+        assert_eq!(line.cells()[0].contents(), "e\u{0301}");
+        assert_eq!(terminal.cursor().position(), Some((1, 0)));
+    }
+
+    #[test]
+    fn dump_preserves_grapheme_clusters() {
+        let mut original = Terminal::new(8, 1).unwrap();
+        let mut restored = Terminal::new(8, 1).unwrap();
+        original.feed("🐻‍❄️x");
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
+    fn dump_does_not_attach_combining_mark_across_wrap() {
+        let mut original = Terminal::new(10, 5).unwrap();
+        let mut restored = Terminal::new(10, 5).unwrap();
+        original.feed("⺀\x1b[5b\r\u{2de0}");
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
+    fn dump_plain_ascii_keeps_letters_contiguous() {
+        let mut terminal = Terminal::new(8, 1).unwrap();
+        terminal.feed("hello");
+        assert!(
+            terminal.dump().contains("hello"),
+            "dump inserted SGR between same-pen ASCII cells: {:?}",
+            terminal.dump()
+        );
+    }
+
+    #[test]
+    fn controls_keep_a_combining_only_cell_separate() {
+        let mut original = Terminal::new(8, 1).unwrap();
+        let mut restored = Terminal::new(8, 1).unwrap();
+        original.feed(" \x1b[50m\u{f71}");
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
     fn dump_modified() {
         let mut original = Terminal::new(10, 4).unwrap();
         let mut restored = Terminal::new(10, 4).unwrap();

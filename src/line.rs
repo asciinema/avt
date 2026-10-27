@@ -1,12 +1,10 @@
-use unicode_width::UnicodeWidthChar;
-
 use crate::anchor::{Anchor, Mark};
-use crate::cell::{Cell, Occupancy};
+use crate::cell::{Cell, Occupancy, display_width};
 use crate::pen::Pen;
 use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::ops::{Index, Range, RangeFull};
+use core::ops::{Index, IndexMut, Range, RangeFull};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum CharWidth {
@@ -87,14 +85,14 @@ impl Line {
         self.cells[start..end].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn print(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
+    pub(crate) fn print(&mut self, col: usize, cluster: &str, pen: Pen) -> Option<usize> {
         let cell_occupancy = self.cells[col].occupancy();
-        let char_width = self.char_display_width(ch);
+        let char_width = self.cluster_display_width(cluster);
         let remaining_cols = self.len() as isize - 1 - col as isize;
 
         match (cell_occupancy, char_width, remaining_cols) {
             (Occupancy::Single, CharWidth::Single, _) => {
-                self.cells[col].set(ch, Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::Single, pen);
             }
 
             (Occupancy::Single, CharWidth::Double, 0) => {
@@ -104,42 +102,42 @@ impl Line {
             (Occupancy::Single, CharWidth::Double, 1) => {
                 debug_assert_eq!(self.cells[col + 1].occupancy(), Occupancy::Single);
 
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
 
             (Occupancy::Single, CharWidth::Double, _right) => {
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
 
                 if self.cells[col + 1].occupancy() == Occupancy::WideHead {
-                    self.cells[col + 2].set(' ', Occupancy::Single, pen);
+                    self.cells[col + 2].set(" ", Occupancy::Single, pen);
                 }
 
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
 
             (Occupancy::WideHead, CharWidth::Single, right) => {
                 debug_assert!(right >= 1);
                 debug_assert_eq!(self.cells[col + 1].occupancy(), Occupancy::WideTail);
 
-                self.cells[col].set(ch, Occupancy::Single, pen);
-                self.cells[col + 1].set(' ', Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::Single, pen);
+                self.cells[col + 1].set(" ", Occupancy::Single, pen);
             }
 
             (Occupancy::WideHead, CharWidth::Double, right) => {
                 debug_assert!(right >= 1);
                 debug_assert_eq!(self.cells[col + 1].occupancy(), Occupancy::WideTail);
 
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
 
             (Occupancy::WideTail, CharWidth::Single, _right) => {
                 debug_assert!(col > 0);
                 debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
 
-                self.cells[col - 1].set(' ', Occupancy::Single, pen);
-                self.cells[col].set(ch, Occupancy::Single, pen);
+                self.cells[col - 1].set(" ", Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::Single, pen);
             }
 
             (Occupancy::WideTail, CharWidth::Double, 0) => {
@@ -153,23 +151,23 @@ impl Line {
                 debug_assert!(col > 0);
                 debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
 
-                self.cells[col - 1].set(' ', Occupancy::Single, pen);
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col - 1].set(" ", Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
 
             (Occupancy::WideTail, CharWidth::Double, _right) => {
                 debug_assert!(col > 0);
                 debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
 
-                self.cells[col - 1].set(' ', Occupancy::Single, pen);
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
+                self.cells[col - 1].set(" ", Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
 
                 if self.cells[col + 1].occupancy() == Occupancy::WideHead {
-                    self.cells[col + 2].set(' ', Occupancy::Single, pen);
+                    self.cells[col + 2].set(" ", Occupancy::Single, pen);
                 }
 
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
         }
 
@@ -196,8 +194,8 @@ impl Line {
 
         if cur_cell.occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != col - 1);
-            cur_cell.set(' ', Occupancy::Single, pen);
-            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+            cur_cell.set(" ", Occupancy::Single, pen);
+            self.cells[col - 1].set(" ", Occupancy::Single, pen);
         }
 
         self.cells[col..].rotate_right(n);
@@ -206,12 +204,12 @@ impl Line {
 
         if cur_cell.occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != width - 1);
-            cur_cell.set(' ', Occupancy::Single, pen);
+            cur_cell.set(" ", Occupancy::Single, pen);
 
             self.cells
                 .last_mut()
                 .unwrap()
-                .set(' ', Occupancy::Single, pen);
+                .set(" ", Occupancy::Single, pen);
         }
     }
 
@@ -230,7 +228,7 @@ impl Line {
 
         if self.cells[col].occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != col - 1);
-            self.cells[col - 1].set(' ', Occupancy::Single, *pen);
+            self.cells[col - 1].set(" ", Occupancy::Single, *pen);
         }
 
         self.cells[col..].rotate_left(n);
@@ -239,7 +237,7 @@ impl Line {
 
         if cur_cell.occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != col);
-            cur_cell.set(' ', Occupancy::Single, *pen);
+            cur_cell.set(" ", Occupancy::Single, *pen);
         }
 
         let fill_start = self.cells.len() - n;
@@ -263,7 +261,7 @@ impl Line {
             if other[needed].occupancy() == Occupancy::WideTail {
                 needed -= 1;
                 let pen = self.cells[self.len() - 1].pen();
-                self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
+                self.cells.push(Cell::new(" ", Occupancy::Single, *pen));
             }
 
             let rest_marks = other.split_marks(needed);
@@ -336,7 +334,7 @@ impl Line {
 
             if wide_char_boundary {
                 let pen = self.cells[self.cells.len() - 1].pen();
-                self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
+                self.cells.push(Cell::new(" ", Occupancy::Single, *pen));
             }
 
             self.wrapped = true;
@@ -427,13 +425,10 @@ impl Line {
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        self.cells.iter().filter_map(|c| {
-            if c.occupancy() != Occupancy::WideTail {
-                Some(c.char())
-            } else {
-                None
-            }
-        })
+        self.cells
+            .iter()
+            .filter(|cell| cell.occupancy() != Occupancy::WideTail)
+            .flat_map(|cell| cell.contents().chars())
     }
 
     pub fn text(&self) -> String {
@@ -460,11 +455,11 @@ impl Line {
         self.cells.iter().all(|c| c.is_default())
     }
 
-    fn char_display_width(&self, ch: char) -> CharWidth {
-        if ch <= '\u{7e}' || ch.width().unwrap_or(1) != 2 {
-            CharWidth::Single
-        } else {
+    fn cluster_display_width(&self, cluster: &str) -> CharWidth {
+        if display_width(cluster) == 2 {
             CharWidth::Double
+        } else {
+            CharWidth::Single
         }
     }
 }
@@ -536,6 +531,12 @@ impl Index<usize> for Line {
     }
 }
 
+impl IndexMut<usize> for Line {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.cells[index]
+    }
+}
+
 impl Index<Range<usize>> for Line {
     type Output = [Cell];
 
@@ -566,15 +567,15 @@ mod tests {
         let pen = Pen::default();
 
         let cells = [
-            Cell::new('0', Occupancy::Single, pen),
-            Cell::new('a', Occupancy::Single, pen),
-            Cell::new('b', Occupancy::Single, pen),
-            Cell::new('C', Occupancy::Single, pen),
-            Cell::new('D', Occupancy::Single, pen),
-            Cell::new('E', Occupancy::Single, pen),
-            Cell::new('1', Occupancy::Single, pen),
-            Cell::new('F', Occupancy::Single, pen),
-            Cell::new('g', Occupancy::Single, pen),
+            Cell::new("0", Occupancy::Single, pen),
+            Cell::new("a", Occupancy::Single, pen),
+            Cell::new("b", Occupancy::Single, pen),
+            Cell::new("C", Occupancy::Single, pen),
+            Cell::new("D", Occupancy::Single, pen),
+            Cell::new("E", Occupancy::Single, pen),
+            Cell::new("1", Occupancy::Single, pen),
+            Cell::new("F", Occupancy::Single, pen),
+            Cell::new("g", Occupancy::Single, pen),
         ];
 
         let chunks: Vec<Vec<Cell>> = Chunks::new(cells.iter(), |c1, c2| {
