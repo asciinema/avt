@@ -630,6 +630,8 @@ impl Engine {
         self.bottom_margin = self.rows - 1;
         self.insert_mode = false;
         self.origin_mode = false;
+        self.auto_wrap_mode = true;
+        self.cursor_keys_mode = CursorKeysMode::Normal;
         self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
@@ -3565,9 +3567,9 @@ mod tests {
         assert!(term.cursor.visible);
         assert!(!term.insert_mode);
         assert!(!term.origin_mode);
-        assert!(!term.auto_wrap_mode);
+        assert!(term.auto_wrap_mode);
         assert!(term.new_line_mode);
-        assert!(term.cursor_keys_app_mode());
+        assert!(!term.cursor_keys_app_mode());
         assert_eq!(term.top_margin, 0);
         assert_eq!(term.bottom_margin, 2);
         assert_eq!(term.charsets, [Charset::Ascii, Charset::Ascii]);
@@ -3579,6 +3581,59 @@ mod tests {
         );
 
         assert_eq!(term.pen, crate::pen::Pen::default());
+    }
+
+    #[test]
+    fn decstr_reenables_autowrap_and_resets_cursor_keys() {
+        let mut term = Terminal::new(4, 3).unwrap();
+        term.feed("\x1b[?7l\x1b[?1habcd");
+        assert_eq!(term.cursor().position(), Some((3, 0)));
+        assert!(term.cursor_key_app_mode());
+        term.feed("\x1b[!p");
+        assert_eq!(term.cursor().position(), Some((3, 0)));
+        assert!(!term.cursor_key_app_mode());
+        term.feed("XY");
+        assert_eq!(term.screen().line(0).unwrap().text(), "abcX");
+        assert_eq!(term.screen().line(1).unwrap().text(), "Y   ");
+        assert!(term.screen().line(0).unwrap().is_wrapped());
+        assert_eq!(term.cursor().position(), Some((1, 1)));
+    }
+
+    #[test]
+    fn decstr_preserves_pending_wrap_buffers_tabs_and_newline() {
+        for alternate in [false, true] {
+            let mut term = Terminal::with_scrollback(12, 3, None).unwrap();
+            term.feed("old1\r\nold2\r\nold3\r\nold4");
+
+            if alternate {
+                term.feed("\x1b[?1047h");
+            }
+
+            // Replace default tab stops with one at column 4, enable LNM,
+            // and leave the live cursor with a pending wrap on the first row.
+            term.feed("\x1b[3g\x1b[4G\x1bH\x1b[20h\x1b[Habcdefghijkl");
+            let active = term.active_screen_kind();
+            let cursor = term.cursor();
+            let visible: Vec<_> = term.screen().visible_lines().cloned().collect();
+            let primary: Vec<_> = term.primary_screen().all_lines().cloned().collect();
+            assert_eq!(cursor.position(), Some((12, 0)));
+            assert_eq!(primary.len(), 4);
+            term.feed("\x1b[!p");
+            assert_eq!(term.size(), (12, 3));
+            assert_eq!(term.active_screen_kind(), active);
+            assert_eq!(term.cursor(), cursor);
+            assert!(term.screen().visible_lines().eq(visible.iter()));
+            assert!(term.primary_screen().all_lines().eq(primary.iter()));
+            term.feed("Z");
+            assert_eq!(term.cursor().position(), Some((1, 1)));
+            assert_eq!(term.screen().line(0).unwrap().text(), "abcdefghijkl");
+            assert!(term.screen().line(0).unwrap().is_wrapped());
+            assert_eq!(term.screen().line(1).unwrap().cells()[0].char(), 'Z');
+            term.feed("\r\tX\nY");
+            assert_eq!(term.screen().line(1).unwrap().cells()[3].char(), 'X');
+            assert_eq!(term.screen().line(2).unwrap().cells()[0].char(), 'Y');
+            assert_eq!(term.cursor().position(), Some((1, 2)));
+        }
     }
 
     #[test]
