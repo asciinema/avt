@@ -1883,20 +1883,115 @@ mod tests {
             // 1047 carries the alternate cursor back; 1049 restores the saved one.
             assert_eq!(terminal.cursor().row, if mode == 1047 { 2 } else { 0 });
         }
+
+        for (input, cols, expected) in [
+            ("ABCD", 2, (2, 1)),
+            ("ABCD", 6, (4, 0)),
+            ("AB界", 3, (2, 1)),
+        ] {
+            let mut terminal = Terminal::with_scrollback(4, 1, None).unwrap();
+            terminal.feed(input);
+            terminal.feed("\x1b[?1047h");
+            terminal.resize(cols, 3);
+            assert_eq!(terminal.engine.primary_cursor, expected);
+        }
     }
 
     #[test]
     fn resizing_a_wide_character_to_one_column_erases_it() {
         for cols in [0, 1] {
-            let mut terminal = Terminal::new(2, 2).unwrap();
-            terminal.feed("界");
-            terminal.resize(cols, 2);
-            terminal.engine.verify();
-            assert_eq!(terminal.size(), (1, 2));
-            assert_eq!(terminal.screen().text(), ["", ""]);
-            terminal.feed("a");
-            assert_eq!(terminal.screen().line(0).unwrap().text(), "a");
+            for suffix in ["", "\x1b[1G", "\x1b[2G"] {
+                let mut terminal = Terminal::new(2, 2).unwrap();
+                terminal.feed("界");
+                terminal.feed(suffix);
+                terminal.resize(cols, 2);
+                terminal.engine.verify();
+                assert_eq!(terminal.size(), (1, 2));
+                assert_eq!(terminal.screen().text(), ["", ""]);
+                assert_eq!(terminal.cursor().position(), Some((0, 0)));
+                terminal.feed("a");
+                assert_eq!(terminal.screen().line(0).unwrap().text(), "a");
+            }
         }
+    }
+
+    #[test]
+    fn reflow_preserves_cursor_and_print_continuation() {
+        for (input, cols, rows, cursor, expected) in [
+            ("ABCD", 6, 5, (4, 0), "ABCDX"),
+            ("ABCD", 3, 5, (1, 1), "ABC\nDX"),
+            ("ABCD", 2, 5, (2, 1), "AB\nCD\nX"),
+            ("ABCD", 4, 6, (4, 0), "ABCD\nX"),
+            ("ABCDEFGH", 6, 5, (2, 1), "ABCDEF\nGHX"),
+            ("ABCD界", 5, 5, (2, 1), "ABCD\n界X"),
+            ("ABCD界EF", 7, 5, (1, 1), "ABCD界E\nFX"),
+            ("ABCD界EF", 8, 5, (8, 0), "ABCD界EF\nX"),
+            ("AB界", 6, 5, (4, 0), "AB界X"),
+            ("AB界", 3, 5, (2, 1), "AB\n界X"),
+            ("ABC", 6, 5, (3, 0), "ABCX"),
+            ("ABC", 3, 5, (3, 0), "ABC\nX"),
+            ("ABCD\x1b[4G", 2, 5, (1, 1), "AB\nCX"),
+            ("AB界\x1b[3G", 3, 5, (0, 1), "AB\nX"),
+            ("AB界\x1b[4G", 3, 5, (1, 1), "AB\n X"),
+            ("ABCD界EF\x1b[1G", 6, 5, (4, 0), "ABCDX\nEF"),
+            ("ABCD界EF\x1b[2G", 6, 5, (5, 0), "ABCD X\nEF"),
+            ("A\x1b[4G", 2, 5, (1, 0), "AX"),
+            ("A\x1b[4G", 6, 5, (3, 0), "A  X"),
+            ("ABCD", 1, 6, (1, 3), "A\nB\nC\nD\nX"),
+        ] {
+            let mut terminal = Terminal::with_scrollback(4, 1, None).unwrap();
+            terminal.feed(input);
+            terminal.resize(cols, rows);
+
+            assert_eq!(
+                terminal.cursor().position(),
+                Some(cursor),
+                "{input:?} -> {cols}"
+            );
+
+            let mut restored = Terminal::with_scrollback(cols, rows, None).unwrap();
+            restored.feed(terminal.dump());
+
+            for term in [&mut terminal, &mut restored] {
+                term.feed("X");
+                term.engine.verify();
+
+                let actual = term
+                    .screen()
+                    .visible_lines()
+                    .map(|line| line.text().trim_end().to_owned())
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                assert_eq!(actual.trim_end(), expected, "{input:?} -> {cols}");
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_reflow_keeps_cursor_after_text() {
+        let mut terminal = Terminal::with_scrollback(4, 1, None).unwrap();
+        terminal.feed("ABCD");
+
+        for (cols, cursor) in [(2, (2, 1)), (6, (4, 0)), (3, (1, 1)), (4, (4, 0))] {
+            terminal.resize(cols, cursor.1 + 1);
+            assert_eq!(terminal.cursor().position(), Some(cursor));
+        }
+
+        terminal.feed("X");
+        assert_eq!(terminal.screen().text(), ["ABCDX"]);
+
+        let mut terminal = Terminal::with_scrollback(4, 1, None).unwrap();
+        terminal.feed("AB界");
+
+        // The padding inserted before the wide character remains a space.
+        for (cols, cursor) in [(3, (2, 1)), (5, (5, 0)), (3, (2, 1)), (6, (5, 0))] {
+            terminal.resize(cols, cursor.1 + 1);
+            assert_eq!(terminal.cursor().position(), Some(cursor));
+        }
+
+        terminal.feed("X");
+        assert_eq!(terminal.screen().text(), ["AB 界X"]);
     }
 
     #[test]
@@ -3371,7 +3466,7 @@ mod tests {
 
         term.resize(4, 5);
 
-        assert_eq!(text(&term), "qrst\nuw\nAAAB\nBBB|B\n");
+        assert_eq!(text(&term), "qrst\nuw\nAAAB\nBBBB|\n");
 
         term.feed("\rCCC");
 

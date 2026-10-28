@@ -8,7 +8,7 @@ use core::ops::{Index, IndexMut, Range};
 
 use crate::anchor::{Anchor, Mark};
 use crate::cell::Cell;
-use crate::line::Line;
+use crate::line::{Line, ReflowCursor};
 use crate::pen::Pen;
 
 #[derive(Debug)]
@@ -32,8 +32,6 @@ pub(crate) enum EraseMode {
     WholeLine,
 }
 
-type LogicalPosition = (usize, usize);
-type RelativePosition = (usize, isize);
 type VisualPosition = (usize, usize);
 
 impl Buffer {
@@ -281,8 +279,15 @@ impl Buffer {
         let mut old_rows = self.rows;
 
         if new_cols != old_cols && reflow_enabled {
-            let cursor_log_pos = self.logical_position(cursor, old_cols, old_rows);
-            self.lines = reflow(self.lines.drain(..), new_cols);
+            let absolute_row = self.view_offset() + cursor.1;
+
+            let tracked = ReflowCursor {
+                col: cursor.0.min(old_cols - 1),
+                after: cursor.0 == old_cols,
+            };
+
+            let (lines, position) = reflow(self.lines.drain(..), new_cols, absolute_row, tracked);
+            self.lines = lines;
 
             for line in &mut self.lines {
                 line.clip_marks();
@@ -294,14 +299,14 @@ impl Buffer {
                 self.extend(old_rows - line_count, new_cols, &Pen::default());
             }
 
-            let cursor_rel_pos = self.relative_position(cursor_log_pos, new_cols, old_rows);
-            cursor.0 = cursor_rel_pos.0;
+            let relative_row = position.1 as isize - (self.lines.len() - old_rows) as isize;
+            cursor.0 = position.0;
 
-            if cursor_rel_pos.1 >= 0 {
-                cursor.1 = cursor_rel_pos.1 as usize;
+            if relative_row >= 0 {
+                cursor.1 = relative_row as usize;
             } else {
                 cursor.1 = 0;
-                old_rows += (-cursor_rel_pos.1) as usize;
+                old_rows += (-relative_row) as usize;
             }
         } else if new_cols != old_cols {
             for line in &mut self.lines {
@@ -349,58 +354,6 @@ impl Buffer {
         self.trim_needed = true;
 
         cursor
-    }
-
-    fn logical_position(&self, pos: VisualPosition, cols: usize, rows: usize) -> LogicalPosition {
-        let vis_row_offset = self.lines.len() - rows;
-        let mut log_col_offset = 0;
-        let abs_row = pos.1 + vis_row_offset;
-        let mut log_row = 0;
-
-        for line in self.lines.iter().take(abs_row) {
-            if line.wrapped {
-                log_col_offset += cols;
-            } else {
-                log_col_offset = 0;
-                log_row += 1;
-            }
-        }
-
-        (pos.0 + log_col_offset, log_row)
-    }
-
-    fn relative_position(
-        &self,
-        pos: LogicalPosition,
-        cols: usize,
-        rows: usize,
-    ) -> RelativePosition {
-        let mut rel_col = pos.0;
-        let mut rel_row = 0;
-        let mut r = 0;
-
-        while r < pos.1 {
-            debug_assert!(
-                rel_row + 1 < self.lines.len(),
-                "logical cursor row must survive reflow"
-            );
-
-            if !self.lines[rel_row].wrapped {
-                r += 1;
-            }
-
-            rel_row += 1;
-        }
-
-        while rel_col >= cols && self.lines[rel_row].wrapped {
-            rel_col -= cols;
-            rel_row += 1;
-        }
-
-        rel_col = rel_col.min(cols - 1);
-        let rel_row_offset = self.lines.len() - rows;
-
-        (rel_col, (rel_row as isize - rel_row_offset as isize))
     }
 
     pub fn view(&self) -> impl ExactSizeIterator<Item = &Line> {
@@ -505,60 +458,90 @@ impl IndexMut<usize> for Buffer {
 
 struct Reflow<I>
 where
-    I: Iterator<Item = Line>,
+    I: Iterator<Item = (Line, Option<ReflowCursor>)>,
 {
     pub iter: I,
     pub cols: usize,
-    pub rest: Option<Line>,
+    pub rest: Option<(Line, Option<ReflowCursor>)>,
 }
 
-pub(crate) fn reflow<I: Iterator<Item = Line>>(iter: I, cols: usize) -> VecDeque<Line> {
-    let lines: VecDeque<Line> = Reflow {
+fn reflow(
+    iter: impl Iterator<Item = Line>,
+    cols: usize,
+    cursor_row: usize,
+    cursor: ReflowCursor,
+) -> (VecDeque<Line>, VisualPosition) {
+    let mut cursor = Some(cursor);
+
+    let iter = iter.enumerate().map(|(row, line)| {
+        let tracked = if row == cursor_row {
+            cursor.take()
+        } else {
+            None
+        };
+
+        (line, tracked)
+    });
+
+    let reflow = Reflow {
         iter,
         cols,
         rest: None,
-    }
-    .collect();
+    };
+
+    let mut position = None;
+
+    let lines: VecDeque<Line> = reflow
+        .enumerate()
+        .map(|(row, (line, cursor))| {
+            if let Some(mut c) = cursor {
+                c.clamp(cols);
+                position = Some((c.col + usize::from(c.after), row));
+            }
+
+            line
+        })
+        .collect();
 
     assert!(lines.iter().all(|l| l.len() == cols));
 
-    lines
+    (lines, position.expect("cursor must survive reflow"))
 }
 
-impl<I: Iterator<Item = Line>> Iterator for Reflow<I> {
-    type Item = Line;
+impl<I: Iterator<Item = (Line, Option<ReflowCursor>)>> Iterator for Reflow<I> {
+    type Item = (Line, Option<ReflowCursor>);
 
     fn next(&mut self) -> Option<Self::Item> {
         use core::cmp::Ordering::*;
 
-        while let Some(mut line) = self.rest.take().or_else(|| self.iter.next()) {
+        while let Some((mut line, mut cursor)) = self.rest.take().or_else(|| self.iter.next()) {
             match self.cols.cmp(&line.len()) {
                 Less => {
-                    self.rest = line.contract(self.cols);
+                    self.rest = line.contract(self.cols, &mut cursor);
 
-                    return Some(line);
+                    return Some((line, cursor));
                 }
 
                 Equal => {
-                    return Some(line);
+                    return Some((line, cursor));
                 }
 
                 Greater => match self.iter.next() {
-                    Some(next_line) => {
-                        self.rest = line.extend(next_line, self.cols);
+                    Some((next_line, next_cursor)) => {
+                        self.rest = line.extend(next_line, self.cols, &mut cursor, next_cursor);
 
                         if line.len() == self.cols {
-                            return Some(line);
+                            return Some((line, cursor));
                         }
 
-                        self.rest = Some(line);
+                        self.rest = Some((line, cursor));
                     }
 
                     None => {
                         line.expand(self.cols);
                         line.wrapped = false;
 
-                        return Some(line);
+                        return Some((line, cursor));
                     }
                 },
             }
@@ -577,7 +560,6 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
     use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
 
     #[test]
     fn text() {
@@ -939,26 +921,6 @@ mod tests {
 
         assert_eq!(cursor, (1, 0));
         assert_eq!(view, vec!["bb", "b ", "cc", "cc", "cc"]);
-    }
-
-    proptest! {
-        #[test]
-        fn prop_cursor_translation(scrollback_size in 0..20usize, wrapped in prop::collection::vec(prop::bool::ANY, 5), col in 0..10usize, row in 0..5usize) {
-            let cols = 10;
-            let rows = 5;
-            let mut buffer = Buffer::new(cols, rows, None, Pen::default());
-            buffer.add_scrollback(scrollback_size);
-
-            for (i, w) in wrapped.iter().enumerate() {
-                if *w {
-                    buffer.wrap(i);
-                }
-            }
-
-            let rel_cur = buffer.logical_position((col, row), cols, rows);
-
-            assert_eq!(buffer.relative_position(rel_cur, cols, rows), (col, row as isize));
-        }
     }
 
     fn resize_buffer(

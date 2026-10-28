@@ -384,7 +384,7 @@ mod tests {
                 restored.feed(original.dump());
                 assert_dump_equivalent(&original, &restored);
 
-                for (cols, rows) in [(4, 1), (2, 3), (4, 3), (1, 2), (4, 3)] {
+                for (cols, rows) in [(3, 4), (4, 1), (2, 3), (4, 3), (1, 2), (4, 3)] {
                     original.resize(cols, rows);
                     restored.resize(cols, rows);
                     original.engine.verify();

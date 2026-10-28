@@ -29,6 +29,31 @@ pub struct Line {
     pub(crate) marks: Vec<Mark>,
 }
 
+// A cell followed during reflow; `after` distinguishes pending wrap from a
+// cursor on the final cell. Unlike public anchors, this survives erased cells.
+pub(crate) struct ReflowCursor {
+    pub col: usize,
+    pub after: bool,
+}
+
+impl ReflowCursor {
+    // An insertion position immediately after retained text follows its last
+    // cell when the blank cell at that position is trimmed away.
+    fn adjust_for_trim(&mut self, len: usize) {
+        if !self.after && len > 0 && self.col == len {
+            self.col -= 1;
+            self.after = true;
+        }
+    }
+
+    pub fn clamp(&mut self, width: usize) {
+        if self.col >= width {
+            self.col = width - 1;
+            self.after = false;
+        }
+    }
+}
+
 // Frames and evicted-line copies are visual values, not tracking registrations.
 impl Clone for Line {
     fn clone(&self) -> Self {
@@ -246,17 +271,27 @@ impl Line {
         self.cells[fill_start..].fill(Cell::blank(*pen));
     }
 
-    pub(crate) fn extend(&mut self, mut other: Line, len: usize) -> Option<Line> {
+    pub(crate) fn extend(
+        &mut self,
+        mut other: Line,
+        len: usize,
+        cursor: &mut Option<ReflowCursor>,
+        mut other_cursor: Option<ReflowCursor>,
+    ) -> Option<(Line, Option<ReflowCursor>)> {
         let mut needed = len - self.len();
 
         if !self.wrapped {
             self.expand(len);
 
-            return Some(other);
+            return Some((other, other_cursor));
         }
 
         if !other.wrapped {
             other.trim();
+
+            if let Some(c) = &mut other_cursor {
+                c.adjust_for_trim(other.len());
+            }
         }
 
         if needed < other.len() {
@@ -267,17 +302,36 @@ impl Line {
             }
 
             let rest_marks = other.split_marks(needed);
+
+            if other_cursor.as_ref().is_some_and(|c| c.col < needed) {
+                *cursor = other_cursor.take().map(|mut c| {
+                    c.col += self.len();
+
+                    c
+                });
+            } else if let Some(c) = &mut other_cursor {
+                c.col -= needed;
+            }
+
             self.append_marks(&mut other, self.len());
             self.cells.extend(&other[0..needed]);
             let mut cells = other.cells;
             cells.rotate_left(needed);
             cells.truncate(cells.len() - needed);
 
-            return Some(Line {
-                cells,
-                wrapped: other.wrapped,
-                marks: rest_marks,
-            });
+            return Some((
+                Line {
+                    cells,
+                    wrapped: other.wrapped,
+                    marks: rest_marks,
+                },
+                other_cursor,
+            ));
+        }
+
+        if let Some(mut c) = other_cursor {
+            c.col += self.len();
+            *cursor = Some(c);
         }
 
         self.append_marks(&mut other, self.len());
@@ -309,15 +363,28 @@ impl Line {
         self.cells.extend(filler);
     }
 
-    pub(crate) fn contract(&mut self, mut len: usize) -> Option<Line> {
+    pub(crate) fn contract(
+        &mut self,
+        mut len: usize,
+        cursor: &mut Option<ReflowCursor>,
+    ) -> Option<(Line, Option<ReflowCursor>)> {
         // A wide pair cannot fit on a one-column row, even after wrapping.
         if len == 1 && self.cells[0].occupancy() == Occupancy::WideHead {
             let pen = *self.cells[0].pen();
             self.clear(0..2, &pen);
+
+            if let Some(c) = cursor.as_mut().filter(|c| c.col < 2) {
+                c.after = false;
+            }
         }
 
         if !self.wrapped {
             let trimmed_len = self.len() - self.trailers();
+
+            if let Some(c) = cursor {
+                c.adjust_for_trim(trimmed_len);
+            }
+
             self.cells.truncate(len.max(trimmed_len));
         }
 
@@ -334,6 +401,16 @@ impl Line {
                 marks: self.split_marks(len),
             };
 
+            let rest_cursor = if cursor.as_ref().is_some_and(|c| c.col >= len) {
+                cursor.take().map(|mut c| {
+                    c.col -= len;
+
+                    c
+                })
+            } else {
+                None
+            };
+
             if wide_char_boundary {
                 let pen = self.cells[self.cells.len() - 1].pen();
                 self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
@@ -341,7 +418,7 @@ impl Line {
 
             self.wrapped = true;
 
-            Some(rest)
+            Some((rest, rest_cursor))
         } else {
             None
         }
