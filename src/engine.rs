@@ -42,8 +42,8 @@ pub(crate) struct Engine {
     cursor_keys_mode: CursorKeysMode,
     top_margin: usize,
     bottom_margin: usize,
-    primary_saved_cursor: SavedCursorState,
-    alternate_saved_cursor: SavedCursorState,
+    primary_saved_cursor: Option<SavedCursorState>,
+    alternate_saved_cursor: Option<SavedCursorState>,
 }
 
 /// Identifies the primary or alternate screen.
@@ -118,15 +118,7 @@ impl Default for SavedCursorState {
 }
 
 impl SavedCursorState {
-    fn dump(&self, funs: &mut Vec<Function>) {
-        if self.is_default() {
-            return;
-        }
-
-        if !self.auto_wrap_mode {
-            funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
-        }
-
+    fn dump(&self, funs: &mut Vec<Function>, buffer: Option<&Buffer>, cols: usize) {
         if self.origin_mode {
             funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
         }
@@ -135,6 +127,17 @@ impl SavedCursorState {
             as_u16(self.cursor_row + 1),
             as_u16(self.cursor_col + 1),
         ));
+
+        if let Some(buffer) = buffer {
+            dump_pending_wrap(buffer, self.cursor_col, self.cursor_row, cols, funs);
+        } else if self.cursor_col == cols {
+            // Inactive alternate contents are recreated blank on entry.
+            funs.push(Function::Print(' '));
+        }
+
+        if !self.auto_wrap_mode {
+            funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
+        }
 
         funs.push(to_sgr(&self.pen));
         funs.push(Function::Decsc);
@@ -146,14 +149,6 @@ impl SavedCursorState {
         if self.origin_mode {
             funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
         }
-    }
-
-    fn is_default(&self) -> bool {
-        self.cursor_col == 0
-            && self.cursor_row == 0
-            && self.pen.is_default()
-            && !self.origin_mode
-            && self.auto_wrap_mode
     }
 }
 
@@ -219,8 +214,8 @@ impl Engine {
             cursor_keys_mode: CursorKeysMode::Normal,
             top_margin: 0,
             bottom_margin: (rows - 1),
-            primary_saved_cursor: SavedCursorState::default(),
-            alternate_saved_cursor: SavedCursorState::default(),
+            primary_saved_cursor: None,
+            alternate_saved_cursor: None,
         }
     }
 
@@ -269,15 +264,16 @@ impl Engine {
     }
 
     #[inline(always)]
-    fn active_saved_cursor(&self) -> &SavedCursorState {
+    fn active_saved_cursor(&self) -> SavedCursorState {
         match self.active {
-            ScreenKind::Primary => &self.primary_saved_cursor,
-            ScreenKind::Alternate => &self.alternate_saved_cursor,
+            ScreenKind::Primary => self.primary_saved_cursor,
+            ScreenKind::Alternate => self.alternate_saved_cursor,
         }
+        .unwrap_or_default()
     }
 
     #[inline(always)]
-    fn active_saved_cursor_mut(&mut self) -> &mut SavedCursorState {
+    fn active_saved_cursor_mut(&mut self) -> &mut Option<SavedCursorState> {
         match self.active {
             ScreenKind::Primary => &mut self.primary_saved_cursor,
             ScreenKind::Alternate => &mut self.alternate_saved_cursor,
@@ -412,18 +408,18 @@ impl Engine {
 
     fn save_cursor(&mut self) {
         let state = SavedCursorState {
-            cursor_col: self.cursor.col.min(self.cols - 1),
+            cursor_col: self.cursor.col,
             cursor_row: self.cursor.row,
             pen: self.pen,
             origin_mode: self.origin_mode,
             auto_wrap_mode: self.auto_wrap_mode,
         };
 
-        *self.active_saved_cursor_mut() = state;
+        *self.active_saved_cursor_mut() = Some(state);
     }
 
     fn restore_cursor(&mut self) {
-        let state = *self.active_saved_cursor();
+        let state = self.active_saved_cursor();
 
         self.cursor.col = state.cursor_col;
         self.cursor.row = state.cursor_row;
@@ -595,6 +591,7 @@ impl Engine {
             self.bottom_margin = rows - 1;
         }
 
+        let width_changed = cols != self.cols;
         self.cols = cols;
         self.rows = rows;
 
@@ -602,20 +599,34 @@ impl Engine {
         let cursor = (self.cursor.col, self.cursor.row);
         let reflow = self.active == ScreenKind::Primary;
 
-        (self.cursor.col, self.cursor.row) =
-            self.active_buffer_mut().resize(cols, rows, cursor, reflow);
+        let mut saved = self
+            .primary_saved_cursor
+            .map(|s| (s.cursor_col, s.cursor_row));
+
+        (self.cursor.col, self.cursor.row) = if reflow {
+            self.primary_buffer
+                .resize(cols, rows, cursor, true, &mut saved)
+        } else {
+            self.alternate_buffer
+                .resize(cols, rows, cursor, false, &mut None)
+        };
 
         if self.active == ScreenKind::Alternate {
-            self.primary_cursor = self
-                .primary_buffer
-                .resize(cols, rows, self.primary_cursor, true);
+            self.primary_cursor =
+                self.primary_buffer
+                    .resize(cols, rows, self.primary_cursor, true, &mut saved);
         }
 
-        for saved in [
-            &mut self.primary_saved_cursor,
-            &mut self.alternate_saved_cursor,
-        ] {
-            saved.cursor_col = saved.cursor_col.min(cols - 1);
+        if let (Some(state), Some((col, row))) = (&mut self.primary_saved_cursor, saved) {
+            state.cursor_col = col;
+            state.cursor_row = row;
+        }
+
+        if let Some(saved) = &mut self.alternate_saved_cursor {
+            if width_changed || saved.cursor_row >= rows {
+                saved.cursor_col = saved.cursor_col.min(cols - 1);
+            }
+
             saved.cursor_row = saved.cursor_row.min(rows - 1);
         }
 
@@ -635,7 +646,7 @@ impl Engine {
         self.pen = Pen::default();
         self.charsets = [Charset::Ascii, Charset::Ascii];
         self.active_charset = 0;
-        *self.active_saved_cursor_mut() = SavedCursorState::default();
+        *self.active_saved_cursor_mut() = None;
     }
 
     fn hard_reset(&mut self, observer: &mut impl Effects) {
@@ -669,8 +680,11 @@ impl Engine {
             assert!(self.primary_cursor.1 < self.rows);
         }
 
-        for saved in [&self.primary_saved_cursor, &self.alternate_saved_cursor] {
-            assert!(saved.cursor_col < self.cols);
+        for saved in [&self.primary_saved_cursor, &self.alternate_saved_cursor]
+            .into_iter()
+            .flatten()
+        {
+            assert!(saved.cursor_col <= self.cols);
             assert!(saved.cursor_row < self.rows);
         }
 
@@ -1373,7 +1387,9 @@ impl Engine {
 
         // 3. configure the primary saved cursor while its buffer is active
 
-        primary_ctx.dump(&mut funs);
+        if let Some(saved) = primary_ctx {
+            saved.dump(&mut funs, Some(&self.primary_buffer), self.cols);
+        }
 
         if self.active == ScreenKind::Alternate {
             let (col, row) = self.primary_cursor;
@@ -1388,7 +1404,7 @@ impl Engine {
         // 4. dump alternate screen buffer
 
         // switch to alternate screen
-        if self.active == ScreenKind::Alternate || !alternate_ctx.is_default() {
+        if self.active == ScreenKind::Alternate || alternate_ctx.is_some() {
             funs.push(Function::Decset(DecModes::one(DecMode::AltScreenBuffer)));
         }
 
@@ -1402,11 +1418,14 @@ impl Engine {
 
         // 5. configure the alternate saved cursor while its buffer is active
 
-        alternate_ctx.dump(&mut funs);
+        if let Some(saved) = alternate_ctx {
+            let buffer = (self.active == ScreenKind::Alternate).then_some(&self.alternate_buffer);
+            saved.dump(&mut funs, buffer, self.cols);
+        }
 
         // 6. ensure the right buffer is active
 
-        if self.active == ScreenKind::Primary && !alternate_ctx.is_default() {
+        if self.active == ScreenKind::Primary && alternate_ctx.is_some() {
             // switch back to primary screen
             funs.push(Function::Decrst(DecModes::one(DecMode::AltScreenBuffer)));
         }
@@ -1439,6 +1458,12 @@ impl Engine {
                 // then use relative movement to reach a position outside the margins.
 
                 funs.push(Function::Scorc);
+
+                // Restore can disable autowrap. Keep it enabled for pending-wrap
+                // reconstruction below; restore the live mode after printing.
+                if !self.active_saved_cursor().auto_wrap_mode {
+                    funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
+                }
 
                 match col.cmp(&self.active_saved_cursor().cursor_col) {
                     Ordering::Less => {
@@ -1554,6 +1579,9 @@ fn dump_pending_wrap(
     }
 
     // Restore pending wrap by reprinting the character at the right edge.
+    // DECRC may already have restored pending wrap, unlike CUP. Normalize the
+    // column first so the reprint cannot wrap onto the next row.
+    funs.push(Function::Cha(as_u16(cols)));
     let last_cell = buffer[(cols - 1, row)];
     let occupancy = last_cell.occupancy();
 
@@ -1939,31 +1967,50 @@ mod tests {
             ("A\x1b[4G", 6, 5, (3, 0), "A  X"),
             ("ABCD", 1, 6, (1, 3), "A\nB\nC\nD\nX"),
         ] {
-            let mut terminal = Terminal::with_scrollback(4, 1, None).unwrap();
-            terminal.feed(input);
-            terminal.resize(cols, rows);
+            for saved in [false, true] {
+                let mut terminal = Terminal::with_scrollback(4, 1, None).unwrap();
+                terminal.feed(input);
 
-            assert_eq!(
-                terminal.cursor().position(),
-                Some(cursor),
-                "{input:?} -> {cols}"
-            );
+                if saved {
+                    terminal.feed("\x1b7\x1b[H");
+                }
 
-            let mut restored = Terminal::with_scrollback(cols, rows, None).unwrap();
-            restored.feed(terminal.dump());
+                terminal.resize(cols, rows);
 
-            for term in [&mut terminal, &mut restored] {
-                term.feed("X");
-                term.engine.verify();
+                if saved {
+                    terminal.feed("\x1b8");
+                }
 
-                let actual = term
-                    .screen()
-                    .visible_lines()
-                    .map(|line| line.text().trim_end().to_owned())
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                assert_eq!(
+                    terminal.cursor().position(),
+                    Some(cursor),
+                    "{input:?} -> {cols}"
+                );
 
-                assert_eq!(actual.trim_end(), expected, "{input:?} -> {cols}");
+                if saved {
+                    terminal.feed("\x1b[H");
+                }
+
+                let mut restored = Terminal::with_scrollback(cols, rows, None).unwrap();
+                restored.feed(terminal.dump());
+
+                for term in [&mut terminal, &mut restored] {
+                    if saved {
+                        term.feed("\x1b8");
+                    }
+
+                    term.feed("X");
+                    term.engine.verify();
+
+                    let actual = term
+                        .screen()
+                        .visible_lines()
+                        .map(|line| line.text().trim_end().to_owned())
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    assert_eq!(actual.trim_end(), expected, "{input:?} -> {cols}");
+                }
             }
         }
     }
@@ -2007,6 +2054,78 @@ mod tests {
         ]);
 
         assert_eq!(terminal.cursor().position(), Some((2, 1)));
+    }
+
+    #[test]
+    fn save_restore_preserves_pending_wrap_in_both_buffers() {
+        for alternate in [false, true] {
+            for (save, restore) in [
+                ("\x1b7", "\x1b8"),
+                ("\x1b[s", "\x1b[u"),
+                ("\x1b[?1048h", "\x1b[?1048l"),
+            ] {
+                let mut terminal = Terminal::new(4, 3).unwrap();
+
+                if alternate {
+                    terminal.feed("\x1b[?1047h");
+                }
+
+                terminal.feed(["AB界", save, "\x1b[H", restore]);
+                assert_eq!(terminal.cursor().position(), Some((4, 0)));
+                terminal.feed("X");
+                assert_eq!(text(&terminal), "AB界\nX|\n");
+            }
+        }
+    }
+
+    #[test]
+    fn offscreen_saved_cursor_returns_home_with_saved_attributes() {
+        for (saved_row, live_row, expected) in [(1, 3, "XCCC"), (3, 1, "XAAA")] {
+            let mut terminal = Terminal::with_scrollback(4, 3, None).unwrap();
+            terminal.feed("AAAA\r\nBBBB\r\nCCCC");
+            terminal.feed(format!(
+                "\x1b[{saved_row};4H\x1b[1m{}\x1b7\x1b[0m\x1b[{live_row};1H",
+                if saved_row == 1 { "A" } else { "C" }
+            ));
+            terminal.feed(format!("\x1b[?7l\x1b[?6h\x1b[{live_row};1H"));
+            terminal.resize(4, 1);
+            terminal.feed("\x1b8");
+            assert_eq!(terminal.cursor().position(), Some((0, 0)));
+            assert_eq!(terminal.engine.pen.intensity, Intensity::Bold);
+            assert!(terminal.engine.auto_wrap_mode);
+            assert!(!terminal.engine.origin_mode);
+            terminal.feed("X");
+            assert_eq!(terminal.screen().line(0).unwrap().text(), expected);
+        }
+    }
+
+    #[test]
+    fn saved_primary_wrap_survives_alternate_and_repeated_resize() {
+        for alternate in [false, true] {
+            let mut terminal = Terminal::new(4, 1).unwrap();
+            terminal.feed("ABCD");
+            terminal.feed(if alternate { "\x1b[?1049h" } else { "\x1b7" });
+            terminal.feed("\x1b[H");
+            terminal.resize(6, 2);
+            terminal.resize(4, 3);
+            terminal.feed(if alternate { "\x1b[?1049l" } else { "\x1b8" });
+            assert_eq!(terminal.cursor().position(), Some((4, 0)));
+            terminal.feed("X");
+            assert_eq!(text(&terminal), "ABCD\nX|\n");
+        }
+    }
+
+    #[test]
+    fn alternate_saved_wrap_follows_clipping_policy() {
+        for (cols, expected) in [(4, (4, 0)), (2, (1, 0)), (6, (4, 0))] {
+            let mut terminal = Terminal::new(4, 2).unwrap();
+            terminal.feed("\x1b[?1047hABCD\x1b7\x1b[H");
+            terminal.resize(cols, 3);
+            terminal.feed("\x1b8");
+            assert_eq!(terminal.cursor().position(), Some(expected));
+            terminal.feed("X");
+            assert_eq!(terminal.cursor().row, usize::from(cols == 4));
+        }
     }
 
     #[test]
@@ -3531,8 +3650,8 @@ mod tests {
 
         term.execute(Decrst(dec_modes([DecMode::SaveCursorAltScreenBuffer])));
 
-        // The saved cursor was clamped by each intermediate resize.
-        assert_eq!(text(&term), "bbb\nc|\nddd");
+        // The saved primary cursor follows its insertion position through reflow.
+        assert_eq!(text(&term), "bbb\nc\nddd|");
     }
 
     #[test]
@@ -3650,8 +3769,8 @@ mod tests {
         assert_eq!(term.bottom_margin, 2);
         assert_eq!(term.charsets, [Charset::Ascii, Charset::Drawing]);
         assert_eq!(term.active_charset, 1);
-        assert_eq!(term.alternate_saved_cursor.cursor_col, 2);
-        assert_eq!(term.alternate_saved_cursor.cursor_row, 2);
+        assert_eq!(term.alternate_saved_cursor.unwrap().cursor_col, 2);
+        assert_eq!(term.alternate_saved_cursor.unwrap().cursor_row, 2);
         assert_eq!(term.pen.intensity, Intensity::Bold);
 
         term.execute_with(&Decstr, &mut ());
@@ -3670,10 +3789,7 @@ mod tests {
         assert_eq!(term.charsets, [Charset::Ascii, Charset::Ascii]);
         assert_eq!(term.active_charset, 0);
 
-        assert_eq!(
-            term.alternate_saved_cursor,
-            super::SavedCursorState::default()
-        );
+        assert_eq!(term.alternate_saved_cursor, None);
 
         assert_eq!(term.pen, crate::pen::Pen::default());
     }
@@ -3749,6 +3865,7 @@ mod tests {
             ])),
             Print('z'),
             Print('z'),
+            Decsc,
             Ris,
         ] {
             term.execute_with(&function, &mut ());
@@ -3759,6 +3876,8 @@ mod tests {
         assert_eq!(term.active_screen().text(), ["", "", ""]);
         assert_eq!(term.pen, crate::pen::Pen::default());
         assert!(!term.cursor_keys_app_mode());
+        assert!(term.primary_saved_cursor.is_none());
+        assert!(term.alternate_saved_cursor.is_none());
     }
 
     #[test]

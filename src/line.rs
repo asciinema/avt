@@ -36,6 +36,9 @@ pub(crate) struct ReflowCursor {
     pub after: bool,
 }
 
+// Slot 0 is live, slot 1 is saved; tracked only for the duration of a resize.
+pub(crate) type ReflowCursors = [Option<ReflowCursor>; 2];
+
 impl ReflowCursor {
     // An insertion position immediately after retained text follows its last
     // cell when the blank cell at that position is trimmed away.
@@ -275,9 +278,9 @@ impl Line {
         &mut self,
         mut other: Line,
         len: usize,
-        cursor: &mut Option<ReflowCursor>,
-        mut other_cursor: Option<ReflowCursor>,
-    ) -> Option<(Line, Option<ReflowCursor>)> {
+        cursor: &mut ReflowCursors,
+        mut other_cursor: ReflowCursors,
+    ) -> Option<(Line, ReflowCursors)> {
         let mut needed = len - self.len();
 
         if !self.wrapped {
@@ -289,7 +292,7 @@ impl Line {
         if !other.wrapped {
             other.trim();
 
-            if let Some(c) = &mut other_cursor {
+            for c in other_cursor.iter_mut().flatten() {
                 c.adjust_for_trim(other.len());
             }
         }
@@ -303,14 +306,16 @@ impl Line {
 
             let rest_marks = other.split_marks(needed);
 
-            if other_cursor.as_ref().is_some_and(|c| c.col < needed) {
-                *cursor = other_cursor.take().map(|mut c| {
-                    c.col += self.len();
+            for (cursor, other_cursor) in cursor.iter_mut().zip(&mut other_cursor) {
+                if other_cursor.as_ref().is_some_and(|c| c.col < needed) {
+                    *cursor = other_cursor.take().map(|mut c| {
+                        c.col += self.len();
 
-                    c
-                });
-            } else if let Some(c) = &mut other_cursor {
-                c.col -= needed;
+                        c
+                    });
+                } else if let Some(c) = other_cursor {
+                    c.col -= needed;
+                }
             }
 
             self.append_marks(&mut other, self.len());
@@ -329,9 +334,11 @@ impl Line {
             ));
         }
 
-        if let Some(mut c) = other_cursor {
-            c.col += self.len();
-            *cursor = Some(c);
+        for (cursor, other_cursor) in cursor.iter_mut().zip(other_cursor) {
+            if let Some(mut c) = other_cursor {
+                c.col += self.len();
+                *cursor = Some(c);
+            }
         }
 
         self.append_marks(&mut other, self.len());
@@ -366,14 +373,14 @@ impl Line {
     pub(crate) fn contract(
         &mut self,
         mut len: usize,
-        cursor: &mut Option<ReflowCursor>,
-    ) -> Option<(Line, Option<ReflowCursor>)> {
+        cursor: &mut ReflowCursors,
+    ) -> Option<(Line, ReflowCursors)> {
         // A wide pair cannot fit on a one-column row, even after wrapping.
         if len == 1 && self.cells[0].occupancy() == Occupancy::WideHead {
             let pen = *self.cells[0].pen();
             self.clear(0..2, &pen);
 
-            if let Some(c) = cursor.as_mut().filter(|c| c.col < 2) {
+            for c in cursor.iter_mut().flatten().filter(|c| c.col < 2) {
                 c.after = false;
             }
         }
@@ -381,7 +388,7 @@ impl Line {
         if !self.wrapped {
             let trimmed_len = self.len() - self.trailers();
 
-            if let Some(c) = cursor {
+            for c in cursor.iter_mut().flatten() {
                 c.adjust_for_trim(trimmed_len);
             }
 
@@ -401,15 +408,19 @@ impl Line {
                 marks: self.split_marks(len),
             };
 
-            let rest_cursor = if cursor.as_ref().is_some_and(|c| c.col >= len) {
-                cursor.take().map(|mut c| {
-                    c.col -= len;
+            let rest_cursor = core::array::from_fn(|i| {
+                let cursor = &mut cursor[i];
 
-                    c
-                })
-            } else {
-                None
-            };
+                if cursor.as_ref().is_some_and(|c| c.col >= len) {
+                    cursor.take().map(|mut c| {
+                        c.col -= len;
+
+                        c
+                    })
+                } else {
+                    None
+                }
+            });
 
             if wide_char_boundary {
                 let pen = self.cells[self.cells.len() - 1].pen();

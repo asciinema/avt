@@ -8,7 +8,7 @@ use core::ops::{Index, IndexMut, Range};
 
 use crate::anchor::{Anchor, Mark};
 use crate::cell::Cell;
-use crate::line::{Line, ReflowCursor};
+use crate::line::{Line, ReflowCursor, ReflowCursors};
 use crate::pen::Pen;
 
 #[derive(Debug)]
@@ -272,21 +272,34 @@ impl Buffer {
         new_rows: usize,
         mut cursor: VisualPosition,
         reflow_enabled: bool,
+        saved: &mut Option<VisualPosition>,
     ) -> VisualPosition {
         debug_assert!(cursor.0 <= self.cols && cursor.1 < self.rows);
 
         let old_cols = self.cols;
         let mut old_rows = self.rows;
+        let mut saved_absolute = saved.map(|(col, row)| (col, self.view_offset() + row));
 
         if new_cols != old_cols && reflow_enabled {
-            let absolute_row = self.view_offset() + cursor.1;
+            let positions = [
+                Some((cursor.0, self.view_offset() + cursor.1)),
+                saved_absolute,
+            ]
+            .map(|position| {
+                position.map(|(col, row)| {
+                    (
+                        ReflowCursor {
+                            col: col.min(old_cols - 1),
+                            after: col == old_cols,
+                        },
+                        row,
+                    )
+                })
+            });
 
-            let tracked = ReflowCursor {
-                col: cursor.0.min(old_cols - 1),
-                after: cursor.0 == old_cols,
-            };
-
-            let (lines, position) = reflow(self.lines.drain(..), new_cols, absolute_row, tracked);
+            let (lines, positions) = reflow(self.lines.drain(..), new_cols, positions);
+            let position = positions[0].expect("live cursor must survive reflow");
+            saved_absolute = positions[1];
             self.lines = lines;
 
             for line in &mut self.lines {
@@ -352,6 +365,17 @@ impl Buffer {
         self.cols = new_cols;
         self.rows = new_rows;
         self.trim_needed = true;
+
+        if reflow_enabled {
+            *saved = saved_absolute.map(|(col, row)| {
+                if (self.view_offset()..self.lines.len()).contains(&row) {
+                    (col, row - self.view_offset())
+                } else {
+                    // A saved cursor never changes the viewport chosen for the live one.
+                    (0, 0)
+                }
+            });
+        }
 
         cursor
     }
@@ -458,27 +482,29 @@ impl IndexMut<usize> for Buffer {
 
 struct Reflow<I>
 where
-    I: Iterator<Item = (Line, Option<ReflowCursor>)>,
+    I: Iterator<Item = (Line, ReflowCursors)>,
 {
     pub iter: I,
     pub cols: usize,
-    pub rest: Option<(Line, Option<ReflowCursor>)>,
+    pub rest: Option<(Line, ReflowCursors)>,
 }
 
 fn reflow(
     iter: impl Iterator<Item = Line>,
     cols: usize,
-    cursor_row: usize,
-    cursor: ReflowCursor,
-) -> (VecDeque<Line>, VisualPosition) {
-    let mut cursor = Some(cursor);
-
+    mut cursors: [Option<(ReflowCursor, usize)>; 2],
+) -> (VecDeque<Line>, [Option<VisualPosition>; 2]) {
     let iter = iter.enumerate().map(|(row, line)| {
-        let tracked = if row == cursor_row {
-            cursor.take()
-        } else {
-            None
-        };
+        let tracked = core::array::from_fn(|i| {
+            if cursors[i]
+                .as_ref()
+                .is_some_and(|(_, cursor_row)| *cursor_row == row)
+            {
+                cursors[i].take().map(|(cursor, _)| cursor)
+            } else {
+                None
+            }
+        });
 
         (line, tracked)
     });
@@ -489,14 +515,16 @@ fn reflow(
         rest: None,
     };
 
-    let mut position = None;
+    let mut positions = [None; 2];
 
     let lines: VecDeque<Line> = reflow
         .enumerate()
         .map(|(row, (line, cursor))| {
-            if let Some(mut c) = cursor {
-                c.clamp(cols);
-                position = Some((c.col + usize::from(c.after), row));
+            for (position, cursor) in positions.iter_mut().zip(cursor) {
+                if let Some(mut c) = cursor {
+                    c.clamp(cols);
+                    *position = Some((c.col + usize::from(c.after), row));
+                }
             }
 
             line
@@ -505,11 +533,11 @@ fn reflow(
 
     assert!(lines.iter().all(|l| l.len() == cols));
 
-    (lines, position.expect("cursor must survive reflow"))
+    (lines, positions)
 }
 
-impl<I: Iterator<Item = (Line, Option<ReflowCursor>)>> Iterator for Reflow<I> {
-    type Item = (Line, Option<ReflowCursor>);
+impl<I: Iterator<Item = (Line, ReflowCursors)>> Iterator for Reflow<I> {
+    type Item = (Line, ReflowCursors);
 
     fn next(&mut self) -> Option<Self::Item> {
         use core::cmp::Ordering::*;
@@ -931,7 +959,7 @@ mod tests {
         mut cursor: VisualPosition,
     ) -> (Vec<String>, VisualPosition) {
         let mut buffer = buffer(&content, None, scrollback_size);
-        cursor = buffer.resize(new_cols, new_rows, cursor, true);
+        cursor = buffer.resize(new_cols, new_rows, cursor, true, &mut None);
 
         let view = buffer.view().map(|line| line.text()).collect::<Vec<_>>();
 

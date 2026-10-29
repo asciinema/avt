@@ -400,7 +400,7 @@ mod tests {
     }
 
     #[test]
-    fn resize_clamps_saved_cursors_in_both_buffers() {
+    fn resize_keeps_saved_cursors_valid_across_buffer_switches() {
         for alternate in [false, true] {
             let mut original = Terminal::new(8, 4).unwrap();
             original.feed("\x1b[4;8H\x1b7\x1b[?1047h\x1b[4;8H\x1b7");
@@ -440,10 +440,128 @@ mod tests {
     }
 
     #[test]
+    fn explicit_home_save_reflows_but_absent_save_stays_default() {
+        for saved in [false, true] {
+            let mut original = Terminal::with_scrollback(4, 2, None).unwrap();
+            original.feed("aa\r\nbb\r\ncc\x1b[H");
+
+            if saved {
+                original.feed("\x1b7");
+            }
+
+            // Dumps omit history; check absence versus an explicit default save
+            // before testing history-driven relocation on the original.
+            let mut restored = Terminal::new(4, 2).unwrap();
+            restored.feed(original.dump());
+            assert_dump_equivalent(&original, &restored);
+            original.resize(4, 3);
+            original.feed("\x1b8");
+            assert_eq!(original.cursor().position(), Some((0, usize::from(saved))));
+        }
+    }
+
+    #[test]
+    fn dump_preserves_saved_wrap_after_edge_edits() {
+        for alternate in [false, true] {
+            for edit in ["", "\x1b[H\x1b[2K", "\x1b[HAB界", "\x1b[4GZ"] {
+                for inactive in [false, true] {
+                    let mut original = Terminal::new(4, 3).unwrap();
+
+                    if alternate {
+                        original.feed("\x1b[?1047h");
+                    }
+
+                    original.feed(["\x1b[31mABCD\x1b7\x1b[0m", edit, "\x1b[2;2H"]);
+
+                    if inactive {
+                        original.feed(if alternate {
+                            "\x1b[?1047l"
+                        } else {
+                            "\x1b[?1047h"
+                        });
+                    }
+
+                    let mut restored = Terminal::new(4, 3).unwrap();
+                    restored.feed(original.dump());
+                    assert_dump_equivalent(&original, &restored);
+
+                    for terminal in [&mut original, &mut restored] {
+                        if inactive {
+                            terminal.feed(if alternate {
+                                "\x1b[?1047h"
+                            } else {
+                                "\x1b[?1047l"
+                            });
+                        }
+
+                        terminal.feed("\x1b8X");
+                        assert_eq!(terminal.cursor().position(), Some((1, 1)));
+                        assert_eq!(terminal.screen().line(1).unwrap().cells()[0].char(), 'X');
+                    }
+
+                    assert_dump_equivalent(&original, &restored);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dump_restores_saved_wrap_outside_origin_margins() {
+        for saved_autowrap in [false, true] {
+            for current_autowrap in [false, true] {
+                let mut original = Terminal::new(4, 4).unwrap();
+                original.feed("\x1b[?6hABCD");
+
+                if !saved_autowrap {
+                    original.feed("\x1b[?7l");
+                }
+
+                original.feed("\x1b7\x1b[2;4r\x1b8");
+                original.feed(if current_autowrap {
+                    "\x1b[?7h"
+                } else {
+                    "\x1b[?7l"
+                });
+                assert_eq!(original.cursor().position(), Some((4, 0)));
+                let mut restored = Terminal::new(4, 4).unwrap();
+                restored.feed(original.dump());
+                assert_dump_equivalent(&original, &restored);
+
+                for terminal in [&mut original, &mut restored] {
+                    terminal.feed("\x1b[?7hX");
+                    assert_eq!(terminal.cursor().position(), Some((1, 1)));
+                    assert_eq!(terminal.screen().line(0).unwrap().text(), "ABCD");
+                    assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+                }
+
+                assert_dump_equivalent(&original, &restored);
+            }
+        }
+    }
+
+    #[test]
     fn dump_initial() {
         let original = Terminal::new(10, 4).unwrap();
         let mut restored = Terminal::new(10, 4).unwrap();
         restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
+    fn dump_preserves_saved_wrap_with_autowrap_disabled() {
+        let mut original = Terminal::new(4, 2).unwrap();
+        original.feed("ABCD\x1b[?7l\x1b7\x1b[?7h\x1b[H");
+        let mut restored = Terminal::new(4, 2).unwrap();
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+
+        for terminal in [&mut original, &mut restored] {
+            terminal.feed("\x1b8");
+            assert_eq!(terminal.cursor().position(), Some((4, 0)));
+            terminal.feed("X");
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "ABCX");
+        }
+
         assert_dump_equivalent(&original, &restored);
     }
 
@@ -589,6 +707,55 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn prop_save_restore_identity(
+            cols in 2..15usize,
+            chars in prop::collection::vec(prop::sample::select(vec!['a', 'b', '界']), 1..60),
+        ) {
+            let mut original = Terminal::new(cols, 128).unwrap();
+            let mut restored = Terminal::new(cols, 128).unwrap();
+            original.feed(chars.clone());
+            restored.feed(chars);
+            restored.feed("\x1b7\x1b[H\x1b8");
+            prop_assert_eq!(original.cursor(), restored.cursor());
+            original.feed("X");
+            restored.feed("X");
+            prop_assert_eq!(original.screen().text(), restored.screen().text());
+        }
+
+        #[test]
+        fn prop_resize_preserves_printing_continuity(
+            old_cols in 2..15usize,
+            cols in 1..15usize,
+            input in "[a-z]{1,60}",
+        ) {
+            let mut terminal = Terminal::new(old_cols, 128).unwrap();
+            terminal.feed(&input);
+            terminal.resize(cols, 256);
+            terminal.feed("X");
+            prop_assert_eq!(terminal.screen().text().join(""), format!("{input}X"));
+        }
+
+        #[test]
+        fn prop_saved_and_live_cursors_reflow_equally(
+            old_cols in 2..15usize,
+            cols in 1..15usize,
+            chars in prop::collection::vec(prop::sample::select(vec!['a', 'b', '界']), 1..60),
+        ) {
+            let mut live = Terminal::new(old_cols, 128).unwrap();
+            let mut saved = Terminal::new(old_cols, 128).unwrap();
+            live.feed(chars.clone());
+            saved.feed(chars);
+            saved.feed("\x1b7\x1b[H");
+            live.resize(cols, 256);
+            saved.resize(cols, 256);
+            saved.feed("\x1b8");
+            prop_assert_eq!(live.cursor(), saved.cursor());
+            live.feed("X");
+            saved.feed("X");
+            prop_assert_eq!(live.screen().text(), saved.screen().text());
+        }
+
         #[test]
         fn prop_lossy_utf8_input_does_not_panic(
             bytes in prop::collection::vec(any::<u8>(), 0..4096),
