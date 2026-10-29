@@ -2459,6 +2459,29 @@ mod tests {
     }
 
     #[test]
+    fn linefeed_and_reverse_index_respect_scrolling_region() {
+        // LF at the bottom margin and RI at the top affect only the region;
+        // LF at the screen bottom below it does not scroll.
+        for (input, expected, row) in [
+            ("\x1b[4;2H\n", ["AAAA", "CCCC", "DDDD", "    ", "EEEE"], 3),
+            (
+                "\x1b[2;2H\x1bM",
+                ["AAAA", "    ", "BBBB", "CCCC", "EEEE"],
+                1,
+            ),
+            ("\x1b[5;2H\n", ["AAAA", "BBBB", "CCCC", "DDDD", "EEEE"], 4),
+        ] {
+            let mut term = Terminal::new(4, 5).unwrap();
+            term.feed("AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE");
+            term.feed(["\x1b[2;4r", input]);
+            let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+            assert_eq!(lines, expected, "{input:?}");
+            assert_eq!(term.cursor().position(), Some((1, row)), "{input:?}");
+            assert_eq!(wrapped(&term), [false; 5], "{input:?}");
+        }
+    }
+
+    #[test]
     fn execute_cr() {
         let mut term = Terminal::with_scrollback(4, 2, None).unwrap();
 
@@ -2467,6 +2490,20 @@ mod tests {
 
         assert_eq!(term.cursor().position().unwrap(), (1, 0));
         assert_eq!(text(&term), "d|bc\n");
+    }
+
+    #[test]
+    fn cr_and_cup_cancel_pending_wrap() {
+        // CR and CUP cancel pending wrap, so the next character is printed
+        // at the new cursor position without wrapping.
+        for (input, expected, col) in [("\rX", "XBCD", 1), ("\x1b[1;2HX", "AXCD", 2)] {
+            let mut term = Terminal::new(4, 2).unwrap();
+            term.feed(["ABCD", input]);
+            let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+            assert_eq!(lines, [expected, "    "], "{input:?}");
+            assert_eq!(term.cursor().position(), Some((col, 0)), "{input:?}");
+            assert_eq!(wrapped(&term), [false, false], "{input:?}");
+        }
     }
 
     #[test]
@@ -2684,6 +2721,25 @@ mod tests {
 
         term.execute(Ht);
         assert_eq!(term.cursor().position().unwrap(), (19, 0));
+    }
+
+    #[test]
+    fn clearing_tab_stops_preserves_cursor_position() {
+        // TBC clears tab stops without moving the cursor. HT then advances
+        // to the next remaining stop, or the last column if none remains.
+        let mut term = Terminal::new(20, 1).unwrap();
+        term.feed("\x1b[1;9H\x1b[0g");
+        assert_eq!(term.cursor().position(), Some((8, 0)));
+        term.feed("\r\t");
+        assert_eq!(term.cursor().position(), Some((16, 0)));
+
+        // Keep both default stops present, with the cursor at neither one,
+        // so clearing only the current stop cannot satisfy the TBC 3 case.
+        let mut term = Terminal::new(20, 1).unwrap();
+        term.feed("\x1b[1;6H\x1b[3g");
+        assert_eq!(term.cursor().position(), Some((5, 0)));
+        term.feed("\r\t");
+        assert_eq!(term.cursor().position(), Some((19, 0)));
     }
 
     #[test]
@@ -2939,6 +2995,20 @@ mod tests {
 
         assert_eq!(text(&term), "abcd\n  |\nij");
         assert_eq!(wrapped(&term), vec![true, false, false]);
+
+        // EL2 clears an unwrapped row with default erase attributes even
+        // outside the vertical margins, without moving the cursor.
+        for (position, expected, row) in [
+            ("\x1b[3;2H", ["AAAA", "BBBB", "    ", "DDDD", "EEEE"], 2),
+            ("\x1b[5;2H", ["AAAA", "BBBB", "CCCC", "DDDD", "    "], 4),
+        ] {
+            let mut term = Terminal::new(4, 5).unwrap();
+            term.feed("AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE");
+            term.feed(["\x1b[2;4r", position, "\x1b[2K"]);
+            let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+            assert_eq!(lines, expected, "{position:?}");
+            assert_eq!(term.cursor().position(), Some((1, row)), "{position:?}");
+        }
     }
 
     #[test]
@@ -3033,6 +3103,23 @@ mod tests {
         term.execute([Cuf(3), Ech(0)]);
 
         assert_eq!(text(&term), "abc   |\nijkl");
+
+        // ECH covering both cells of a wide glyph replaces them with
+        // single-width blanks without moving the cursor.
+        let mut term = Terminal::new(4, 2).unwrap();
+        term.feed("A界B\x1b[1;2H\x1b[2X");
+        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+        assert_eq!(lines, ["A  B", "    "]);
+        assert_eq!(term.cursor().position(), Some((1, 0)));
+
+        assert!(
+            term.screen()
+                .line(0)
+                .unwrap()
+                .cells()
+                .iter()
+                .all(|cell| cell.width() == 1)
+        );
     }
 
     #[test]
@@ -3082,6 +3169,20 @@ mod tests {
             Decset(dec_modes([DecMode::SaveCursor])),
             Decrst(dec_modes([DecMode::SaveCursor])),
         );
+
+        // DECSC/DECRC restore cursor position and SGR attributes.
+        let mut term = Terminal::new(6, 3).unwrap();
+        term.feed("\x1b[2;3H\x1b[1;31m\x1b7\x1b[3;1H\x1b[0mY\x1b8");
+        assert_eq!(term.cursor().position(), Some((2, 1)));
+        term.feed("X");
+        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+        assert_eq!(lines, ["      ", "  X   ", "Y     "]);
+        assert_eq!(term.cursor().position(), Some((3, 1)));
+        let screen = term.screen();
+        let pen = screen.line(1).unwrap().cells()[2].pen();
+        assert!(pen.is_bold());
+        assert_eq!(pen.foreground(), Some(Color::Indexed(1)));
+        assert!(screen.line(2).unwrap().cells()[0].pen().is_default());
     }
 
     #[test]
@@ -3300,6 +3401,32 @@ mod tests {
         term.execute(Cub(5));
         assert_eq!(term.cursor().col, 9);
         assert_eq!(text(&term), "ハローワ|ールド\n");
+    }
+
+    #[test]
+    fn wide_character_fitting_right_edge_wraps_on_next_print() {
+        let mut term = Terminal::new(4, 2).unwrap();
+        term.feed("AB界");
+        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+        assert_eq!(lines, ["AB界", "    "]);
+        assert_eq!(term.cursor().row, 0);
+        assert_eq!(wrapped(&term), [false, false]);
+        term.feed("X");
+        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+        assert_eq!(lines, ["AB界", "X   "]);
+        assert_eq!(term.cursor().position(), Some((1, 1)));
+        assert_eq!(wrapped(&term), [true, false]);
+
+        assert_eq!(
+            term.screen()
+                .line(0)
+                .unwrap()
+                .cells()
+                .iter()
+                .map(|cell| cell.width())
+                .collect::<Vec<_>>(),
+            [1, 1, 2, 0]
+        );
     }
 
     #[test]
@@ -3695,14 +3822,22 @@ mod tests {
 
     #[test]
     fn execute_origin_mode() {
-        let mut term = Terminal::with_scrollback(4, 4, None).unwrap();
+        let mut term = Terminal::new(4, 5).unwrap();
 
-        term.execute([Decstbm(2, 4), Decset(dec_modes([DecMode::Origin]))]);
+        // DECSTBM homes the cursor at the screen origin with origin mode off.
+        // With origin mode on, CUP addresses rows relative to the top margin.
+        term.feed("\x1b[4;4H\x1b[2;4r");
+        assert_eq!(term.cursor().position(), Some((0, 0)));
+        term.feed("\x1b[?6h");
 
         assert_eq!(term.cursor().position().unwrap(), (0, 1));
 
-        term.execute(Cup(2, 1));
-        assert_eq!(term.cursor().position().unwrap(), (0, 2));
+        term.feed("\x1b[2;3H");
+        assert_eq!(term.cursor().position(), Some((2, 2)));
+        term.feed("X");
+        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+        assert_eq!(lines, ["    ", "    ", "  X ", "    ", "    "]);
+        assert_eq!(term.cursor().position(), Some((3, 2)));
 
         term.execute(Decrst(dec_modes([DecMode::Origin])));
         assert_eq!(term.cursor().position().unwrap(), (0, 0));
