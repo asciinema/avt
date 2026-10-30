@@ -760,7 +760,7 @@ impl Engine {
     fn print(&mut self, mut ch: char, observer: &mut impl Effects) {
         ch = self.charsets[self.active_charset].translate(ch);
 
-        match self.try_print(ch) {
+        match self.try_print(ch, observer) {
             Some(width) => self.advance_cursor_after_print(width),
 
             None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, observer),
@@ -771,7 +771,7 @@ impl Engine {
         observer.dirty(self.cursor.row..self.cursor.row + 1);
     }
 
-    fn try_print(&mut self, ch: char) -> Option<usize> {
+    fn try_print(&mut self, ch: char, observer: &mut impl Effects) -> Option<usize> {
         if self.cursor.col >= self.cols {
             return None;
         }
@@ -781,6 +781,8 @@ impl Engine {
 
         if self.insert_mode {
             self.active_buffer_mut().shift_right(pos, 1, pen);
+            // Shifting can clear a wide pair even if printing then wraps.
+            observer.dirty(pos.1..pos.1 + 1);
         }
 
         self.active_buffer_mut().print(pos, ch, pen)
