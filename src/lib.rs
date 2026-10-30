@@ -338,6 +338,53 @@ mod tests {
     }
 
     #[test]
+    fn control_sequences_resume_printing_across_feed_boundaries() {
+        // CAN cancels CSI; OSC accepts BEL/ST; DCS/APC payload is not printed.
+        // Use an unhandled DCS final ('x') to exercise payload skipping.
+        for (input, expected, col) in [
+            ("A\x1b[31\x18mB", "AmB ", 3),
+            ("A\x1b]2;hidden\x07B", "AB  ", 2),
+            ("A\x1b]2;hidden\x1b\\B", "AB  ", 2),
+            ("A\x1bP0xhidden\x1b\\B", "AB  ", 2),
+            ("A\x1b_hidden\x1b\\B", "AB  ", 2),
+        ] {
+            let check = |terminal: &Terminal| {
+                let lines: Vec<_> = terminal
+                    .screen()
+                    .visible_lines()
+                    .map(crate::Line::text)
+                    .collect();
+
+                assert_eq!(lines, [expected, "    "], "{input:?}");
+                assert_eq!(terminal.cursor().position(), Some((col, 0)), "{input:?}");
+
+                for line in terminal.screen().visible_lines() {
+                    assert!(!line.is_wrapped(), "{input:?}");
+
+                    for cell in line.cells() {
+                        assert!(cell.pen().is_default(), "{input:?}");
+                    }
+                }
+            };
+
+            for split in input.char_indices().map(|(i, _)| i).chain([input.len()]) {
+                let mut terminal = Terminal::new(4, 2).unwrap();
+                terminal.feed(&input[..split]);
+                terminal.feed(&input[split..]);
+                check(&terminal);
+            }
+
+            let mut terminal = Terminal::new(4, 2).unwrap();
+
+            for ch in input.chars() {
+                terminal.feed(ch);
+            }
+
+            check(&terminal);
+        }
+    }
+
+    #[test]
     fn screens_address_buffers_explicitly() {
         let mut terminal = Terminal::new(8, 2).unwrap();
         terminal.feed(["shell", "\x1b[?1047h", "\x1b[Hvim"]);
