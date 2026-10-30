@@ -627,130 +627,158 @@ mod tests {
         assert_dump_equivalent(&original, &restored);
     }
 
-    // Keep the original generators so the historical regression seeds are replayed.
-    fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(
-            prop_oneof![gen_ctl_seq(), gen_esc_seq(), gen_csi_seq(), gen_text()],
-            1..=max_len,
+    fn gen_functions(max_len: usize) -> impl Strategy<Value = Vec<Function>> {
+        prop::collection::vec(gen_function(), 0..=max_len)
+    }
+
+    fn gen_function() -> impl Strategy<Value = Function> {
+        use crate::parser::{
+            AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, Osc, SgrOps, ShellIntegration,
+            TbcScope, XtwinopsOp,
+        };
+        use Function::*;
+
+        let counted = (
+            prop::sample::select(vec![
+                Cbt as fn(u16) -> Function,
+                Cha,
+                Cht,
+                Cnl,
+                Cpl,
+                Cub,
+                Cud,
+                Cuf,
+                Cuu,
+                Dch,
+                Dl,
+                Ech,
+                Ich,
+                Il,
+                Rep,
+                Sd,
+                Su,
+                Vpa,
+                Vpr,
+            ]),
+            0..=20u16,
         )
-        .prop_map(flatten)
-    }
+            .prop_map(|(function, count)| function(count));
 
-    fn gen_ctl_seq() -> impl Strategy<Value = Vec<char>> {
-        let ctl_chars = vec![0x00..0x18, 0x19..0x1a, 0x1c..0x20];
-
-        prop::sample::select(flatten(ctl_chars)).prop_map(|v: u8| vec![v as char])
-    }
-
-    fn gen_esc_seq() -> impl Strategy<Value = Vec<char>> {
-        (
-            prop::collection::vec(gen_esc_intermediate(), 0..=2),
-            gen_esc_finalizer(),
+        let ansi_modes = prop::collection::vec(
+            prop::sample::select(vec![AnsiMode::Insert, AnsiMode::NewLine]),
+            0..=6,
         )
-            .prop_map(|(inters, fin)| flatten(vec![vec!['\x1b'], inters, vec![fin]]))
-    }
+        .prop_map(AnsiModes::from);
 
-    fn gen_csi_seq() -> impl Strategy<Value = Vec<char>> {
+        let dec_modes = prop::collection::vec(
+            prop::sample::select(vec![
+                DecMode::CursorKeys,
+                DecMode::Origin,
+                DecMode::AutoWrap,
+                DecMode::TextCursorEnable,
+                DecMode::AltScreenBuffer,
+                DecMode::SaveCursor,
+                DecMode::SaveCursorAltScreenBuffer,
+            ]),
+            0..=6,
+        )
+        .prop_map(DecModes::from);
+
+        // Favor printing so independently selected edits and modes encounter
+        // populated rows. Counts stay small, including zero/default values.
         prop_oneof![
-            gen_csi_sgr_seq(),
-            gen_csi_sm_seq(),
-            gen_csi_rm_seq(),
-            gen_csi_any_seq(),
+            20 => gen_char().prop_map(Print),
+            10 => counted,
+            4 => prop::sample::select(vec![
+                Bs, Cr, Ctc(CtcOp::Set), Ctc(CtcOp::ClearCurrentColumn),
+                Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decstr,
+                Ed(EdScope::Below), Ed(EdScope::Above), Ed(EdScope::All),
+                Ed(EdScope::SavedLines), El(ElScope::ToRight), El(ElScope::ToLeft),
+                El(ElScope::All), Ht, Hts, Lf, Nel, Ri, Ris, Scorc, Scosc, Si, So,
+                Tbc(TbcScope::CurrentColumn), Tbc(TbcScope::All),
+            ]),
+            2 => (0..=20u16, 0..=20u16).prop_map(|(row, col)| Cup(row, col)),
+            1 => (0..=20u16, 0..=20u16).prop_map(|(top, bottom)| Decstbm(top, bottom)),
+            2 => (any::<bool>(), ansi_modes).prop_map(|(set, modes)| {
+                if set { Sm(modes) } else { Rm(modes) }
+            }),
+            2 => (any::<bool>(), dec_modes).prop_map(|(set, modes)| {
+                if set { Decset(modes) } else { Decrst(modes) }
+            }),
+            2 => prop::collection::vec(gen_sgr_op(), 0..=6)
+                .prop_map(|ops| Sgr(SgrOps::from(ops))),
+            1 => (
+                any::<bool>(),
+                prop::sample::select(vec![crate::Charset::Ascii, crate::Charset::Drawing]),
+            ).prop_map(|(g1, charset)| {
+                if g1 { G1d4(charset) } else { Gzd4(charset) }
+            }),
+            1 => prop_oneof![
+                prop::sample::select(vec![
+                    ShellIntegration::PromptStart,
+                    ShellIntegration::CommandStart,
+                    ShellIntegration::CommandExecuted,
+                ]),
+                prop::option::of(any::<u8>()).prop_map(|exit_status| {
+                    ShellIntegration::CommandFinished { exit_status }
+                }),
+            ].prop_map(|kind| Function::Osc(Osc::ShellIntegration(kind))),
+            1 => (0..=20u16, 0..=20u16)
+                .prop_map(|(cols, rows)| Xtwinops(XtwinopsOp::Resize(cols, rows))),
         ]
-    }
-
-    fn gen_text() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(gen_char(), 1..10)
-    }
-
-    fn gen_esc_intermediate() -> impl Strategy<Value = char> {
-        (0x20..0x30u8).prop_map(|v| v as char)
-    }
-
-    fn gen_esc_finalizer() -> impl Strategy<Value = char> {
-        let finalizers = vec![
-            0x30..0x50,
-            0x51..0x58,
-            0x59..0x5a,
-            0x5a..0x5b,
-            0x5c..0x5d,
-            0x60..0x7f,
-        ];
-
-        prop::sample::select(flatten(finalizers)).prop_map(|v: u8| v as char)
-    }
-
-    fn gen_csi_sgr_seq() -> impl Strategy<Value = Vec<char>> {
-        gen_csi_params().prop_map(|params| flatten(vec![vec!['\x1b', '['], params, vec!['m']]))
-    }
-
-    fn gen_csi_sm_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_csi_intermediate(), gen_csi_sm_rm_param()).prop_map(|(inters, params)| {
-            flatten(vec![vec!['\x1b', '['], inters, params, vec!['h']])
-        })
-    }
-
-    fn gen_csi_rm_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_csi_intermediate(), gen_csi_sm_rm_param()).prop_map(|(inters, params)| {
-            flatten(vec![vec!['\x1b', '['], inters, params, vec!['l']])
-        })
-    }
-
-    fn gen_csi_any_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_csi_params(), gen_csi_finalizer())
-            .prop_map(|(params, fin)| flatten(vec![vec!['\x1b', '['], params, vec![fin]]))
-    }
-
-    fn gen_csi_intermediate() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(prop::sample::select(vec!['?', '!']), 0..=1)
-    }
-
-    fn gen_csi_params() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(
-            prop_oneof![
-                gen_csi_param(),
-                gen_csi_param(),
-                prop::sample::select(vec![';'])
-            ],
-            0..=5,
-        )
-    }
-
-    fn gen_csi_param() -> impl Strategy<Value = char> {
-        (0x30..0x3au8).prop_map(|v| v as char)
-    }
-
-    fn gen_csi_sm_rm_param() -> impl Strategy<Value = Vec<char>> {
-        let modes = vec![1, 4, 6, 7, 20, 25, 47, 1047, 1048, 1049];
-
-        prop_oneof![
-            prop::sample::select(modes).prop_map(|n| n.to_string().chars().collect()),
-            prop::collection::vec(gen_csi_param(), 1..=4)
-        ]
-    }
-
-    fn gen_csi_finalizer() -> impl Strategy<Value = char> {
-        (0x40..0x7fu8).prop_map(|v| v as char)
     }
 
     fn gen_char() -> impl Strategy<Value = char> {
+        // Match the parser's printable domain, including DEL, while giving
+        // wide characters a substantial share of the generated printing.
         prop_oneof![
-            gen_ascii_char(),
-            gen_ascii_char(),
-            gen_ascii_char(),
-            gen_ascii_char(),
-            gen_ascii_char(),
-            (0x80..=0xd7ffu32).prop_map(|v| char::from_u32(v).unwrap()),
-            (0xf900..=0xffffu32).prop_map(|v| char::from_u32(v).unwrap())
+            4 => (0x20..=0x7fu8).prop_map(char::from),
+            2 => prop::sample::select(vec!['界', '日', '🦀']),
+            1 => (0xa0..=0xd7ffu32).prop_map(|v| char::from_u32(v).unwrap()),
+            1 => (0xe000..=0x10ffffu32).prop_map(|v| char::from_u32(v).unwrap()),
         ]
     }
 
-    fn gen_ascii_char() -> impl Strategy<Value = char> {
-        (0x20..=0x7fu8).prop_map(|v| v as char)
+    fn gen_sgr_op() -> impl Strategy<Value = crate::parser::SgrOp> {
+        use crate::parser::SgrOp::*;
+
+        prop_oneof![
+            prop::sample::select(vec![
+                Reset,
+                SetBoldIntensity,
+                SetFaintIntensity,
+                SetItalic,
+                SetUnderline,
+                SetBlink,
+                SetInverse,
+                SetStrikethrough,
+                ResetIntensity,
+                ResetItalic,
+                ResetUnderline,
+                ResetBlink,
+                ResetInverse,
+                ResetStrikethrough,
+                ResetForegroundColor,
+                ResetBackgroundColor,
+            ]),
+            gen_color().prop_map(SetForegroundColor),
+            gen_color().prop_map(SetBackgroundColor),
+        ]
     }
 
-    fn flatten<T, I: IntoIterator<Item = T>>(seqs: Vec<I>) -> Vec<T> {
-        seqs.into_iter().flatten().collect()
+    fn gen_color() -> impl Strategy<Value = crate::Color> {
+        prop_oneof![
+            any::<u8>().prop_map(crate::Color::Indexed),
+            (any::<u8>(), any::<u8>(), any::<u8>())
+                .prop_map(|(r, g, b)| crate::Color::rgb(r, g, b)),
+        ]
+    }
+
+    fn execute_and_verify(terminal: &mut Terminal, functions: &[Function]) {
+        for function in functions {
+            terminal.execute(function.clone());
+            terminal.engine.verify();
+        }
     }
 
     proptest! {
@@ -814,22 +842,25 @@ mod tests {
         }
 
         #[test]
-        fn prop_sanity_checks_across_retention_policies(input in gen_input(25)) {
+        fn prop_sanity_checks_across_retention_policies(input in gen_functions(100)) {
             for limit in [Some(0), Some(3), None] {
                 let mut terminal = Terminal::with_scrollback(10, 5, limit).unwrap();
-                terminal.feed(&input);
-                terminal.engine.verify();
-                let (_, rows) = terminal.size();
-                let retained = terminal.primary_screen().all_lines().count();
 
-                match limit {
-                    Some(limit) => assert!((rows..=rows + limit).contains(&retained)),
+                for function in &input {
+                    terminal.execute(function.clone());
+                    terminal.engine.verify();
+                    let (_, rows) = terminal.size();
+                    let retained = terminal.primary_screen().all_lines().count();
 
-                    None => assert!(retained >= rows),
-                }
+                    match limit {
+                        Some(limit) => assert!((rows..=rows + limit).contains(&retained)),
 
-                if terminal.active_screen_kind() == ScreenKind::Alternate {
-                    assert_eq!(terminal.screen().all_lines().count(), rows);
+                        None => assert!(retained >= rows),
+                    }
+
+                    if terminal.active_screen_kind() == ScreenKind::Alternate {
+                        assert_eq!(terminal.screen().all_lines().count(), rows);
+                    }
                 }
             }
         }
@@ -838,36 +869,37 @@ mod tests {
         fn prop_resizing(
             new_cols in 1..15usize,
             new_rows in 1..8usize,
-            input1 in gen_input(25),
-            input2 in gen_input(25)
+            input1 in gen_functions(100),
+            input2 in gen_functions(100)
         ) {
             let mut terminal = Terminal::with_scrollback(10, 5, None).unwrap();
-            terminal.feed(input1);
+            execute_and_verify(&mut terminal, &input1);
             terminal.resize(new_cols, new_rows);
-            terminal.feed(input2);
             terminal.engine.verify();
+            execute_and_verify(&mut terminal, &input2);
             assert!(terminal.primary_screen().all_lines().count() >= terminal.size().1);
         }
 
         #[test]
-        fn prop_dump(input in gen_input(25)) {
+        fn prop_dump(input in gen_functions(100)) {
             let mut original = Terminal::new(10, 5).unwrap();
             let mut restored = Terminal::new(10, 5).unwrap();
-            original.feed(input);
+            execute_and_verify(&mut original, &input);
             restored.feed(original.dump());
+            restored.engine.verify();
             assert_dump_equivalent(&original, &restored);
         }
 
         #[test]
         fn prop_dump_with_resizes(
-            steps in prop::collection::vec((gen_input(8), 1..15usize, 1..8usize), 1..8)
+            steps in prop::collection::vec((gen_functions(100), 1..15usize, 1..8usize), 1..8)
         ) {
             let mut original = Terminal::new(10, 5).unwrap();
             let mut restored = Terminal::new(10, 5).unwrap();
 
             for (input, cols, rows) in steps {
-                original.feed(&input);
-                restored.feed(&input);
+                execute_and_verify(&mut original, &input);
+                execute_and_verify(&mut restored, &input);
                 original.resize(cols, rows);
                 restored.resize(cols, rows);
                 original.engine.verify();
@@ -1663,41 +1695,11 @@ mod tests {
         }
     }
 
-    fn input() -> impl Strategy<Value = String> {
-        prop::collection::vec(
-            prop::sample::select(vec![
-                "abc",
-                "界",
-                "\r\n",
-                "\x1b[H",
-                "\x1b[2J",
-                "\x1b[31m",
-                "\x1b[0m",
-                "\x1b7",
-                "\x1b8",
-                "\x1b[?1049h",
-                "\x1b[?1049l",
-                "\x1b[2;4r",
-                "\x1b[?25l",
-                "\x1b[?25h",
-                "\x1b[2L",
-                "\x1b[2M",
-                "\x1bc",
-                PROMPT,
-                SUBMIT,
-                "\x1b]133;D;42\x07",
-                "\x1b[3",
-            ]),
-            0..40,
-        )
-        .prop_map(|parts| parts.concat())
-    }
-
     proptest! {
         #[test]
         fn prop_observed_execution_preserves_engine_state(
-            first in input(),
-            second in input(),
+            first in gen_functions(100),
+            second in gen_functions(100),
             cols in 1..20usize,
             rows in 1..8usize
         ) {
@@ -1705,14 +1707,21 @@ mod tests {
             let mut observed = Terminal::new(12, 5).unwrap();
             let mut shell = ShellTracker::new();
             let mut transcript = Transcript::new();
-            plain.feed(&first);
-            let (mut events, mut lines) = observed.feed_with(&first, (&mut shell, &mut transcript));
+            execute_and_verify(&mut plain, &first);
+
+            let (mut events, mut lines) =
+                observed.execute_with(first.iter().cloned(), (&mut shell, &mut transcript));
+
             plain.resize(cols, rows);
+            plain.engine.verify();
             let (batch, text) = observed.resize_with(cols, rows, (&mut shell, &mut transcript));
             events.extend(batch);
             lines.extend(text);
-            plain.feed(&second);
-            let (batch, text) = observed.feed_with(&second, (&mut shell, &mut transcript));
+            execute_and_verify(&mut plain, &second);
+
+            let (batch, text) =
+                observed.execute_with(second.iter().cloned(), (&mut shell, &mut transcript));
+
             events.extend(batch);
             lines.extend(text);
             lines.extend(transcript.finish(&observed));
@@ -1735,12 +1744,15 @@ mod tests {
                     chunked_lines.extend(text);
                 }
 
-                for ch in input.chars() {
+                // Serialized functions also exercise the feed path, including
+                // parser continuation across individual-character calls.
+                for ch in crate::parser::dump(input).chars() {
                     let (batch, text) =
                         chunked.feed_with(ch, (&mut chunked_shell, &mut chunked_transcript));
 
                     chunked_events.extend(batch);
                     chunked_lines.extend(text);
+                    chunked.engine.verify();
                 }
             }
 
@@ -1756,14 +1768,12 @@ mod tests {
             plain.engine.assert_execution_equivalent(&chunked.engine);
             plain.parser.assert_continuation_equivalent(&chunked.parser);
 
-            // Standalone parsing and explicit execution preserve the same state.
-            let mut parsed = Terminal::new(12, 5).unwrap();
-            let mut parser = crate::Parser::new();
-            parsed.execute(first.chars().filter_map(|ch| parser.feed(ch)));
-            parsed.resize(cols, rows);
-            parsed.execute(second.chars().filter_map(|ch| parser.feed(ch)));
-            plain.engine.assert_execution_equivalent(&parsed.engine);
-            plain.parser.assert_continuation_equivalent(&parser);
+            let mut fed = Terminal::new(12, 5).unwrap();
+            fed.feed(crate::parser::dump(&first));
+            fed.resize(cols, rows);
+            fed.feed(crate::parser::dump(&second));
+            plain.engine.assert_execution_equivalent(&fed.engine);
+            plain.parser.assert_continuation_equivalent(&fed.parser);
         }
     }
 
@@ -2080,8 +2090,8 @@ mod tests {
     proptest! {
         #[test]
         fn prop_dirty_observer_is_batching_independent(
-            first in input(),
-            second in input(),
+            first in gen_functions(100),
+            second in gen_functions(100),
             cols in 1..20usize,
             rows in 1..8usize,
             limit in prop::option::of(0..32usize),
@@ -2096,18 +2106,19 @@ mod tests {
                 split.feed_with("", &mut split_dirty)
             );
 
-            for text in [first, second] {
-                // Compare a batched report with the union of per-character reports.
+            for functions in [first, second] {
+                // Compare a batched report with the union of per-function reports.
                 let mut expected = std::collections::BTreeSet::new();
 
-                for ch in text.chars() {
+                for function in &functions {
                     let before: Vec<_> = split
                         .screen()
                         .visible_lines()
                         .map(|line| line.cells().to_vec())
                         .collect();
 
-                    let dirty_rows = split.feed_with(ch, &mut split_dirty);
+                    let dirty_rows = split.execute_with(function.clone(), &mut split_dirty);
+                    split.engine.verify();
 
                     for (row, (before, after)) in before
                         .iter()
@@ -2116,7 +2127,7 @@ mod tests {
                     {
                         prop_assert!(
                             before == after.cells() || dirty_rows.contains(&row),
-                            "missing repaint: row {}, character {:?}", row, ch
+                            "missing repaint: row {}, function {:?}", row, function
                         );
                     }
 
@@ -2124,7 +2135,7 @@ mod tests {
                 }
 
                 prop_assert_eq!(
-                    terminal.feed_with(text, &mut dirty),
+                    terminal.execute_with(functions, &mut dirty),
                     expected.into_iter().collect::<Vec<_>>()
                 );
 
@@ -2133,6 +2144,8 @@ mod tests {
                     split.resize_with(cols, rows, &mut split_dirty)
                 );
 
+                terminal.engine.verify();
+                split.engine.verify();
                 terminal.engine.assert_execution_equivalent(&split.engine);
                 terminal.parser.assert_continuation_equivalent(&split.parser);
             }
