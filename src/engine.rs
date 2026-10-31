@@ -4,8 +4,8 @@ use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
 use crate::line::Line;
 use crate::parser::{
-    AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, EdScope, ElScope, Function, SgrOp, SgrOps,
-    TbcScope,
+    AnsiMode, AnsiModes, CtcOp, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
+    SgrOp, SgrOps, TbcScope,
 };
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
@@ -118,22 +118,13 @@ impl Default for SavedCursorState {
 }
 
 impl SavedCursorState {
-    fn dump(&self, funs: &mut Vec<Function>, buffer: Option<&Buffer>, cols: usize) {
-        if self.origin_mode {
-            funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
-        }
-
-        funs.push(Function::Cup(
-            as_u16(self.cursor_row + 1),
-            as_u16(self.cursor_col + 1),
+    fn dump(&self, funs: &mut Vec<Function>, cols: usize) {
+        funs.push(dump_cursor(
+            self.cursor_col,
+            self.cursor_row,
+            cols,
+            self.origin_mode,
         ));
-
-        if let Some(buffer) = buffer {
-            dump_pending_wrap(buffer, self.cursor_col, self.cursor_row, cols, funs);
-        } else if self.cursor_col == cols {
-            // Inactive alternate contents are recreated blank on entry.
-            funs.push(Function::Print(' '));
-        }
 
         if !self.auto_wrap_mode {
             funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
@@ -321,6 +312,8 @@ impl Engine {
             Decaln => self.decaln(observer),
 
             Decrc => self.decrc(),
+
+            Decrsps(ref presentation) => self.decrsps(presentation),
 
             Decrst(ref modes) => self.decrst(modes, observer),
 
@@ -895,6 +888,32 @@ impl Engine {
         self.restore_cursor();
     }
 
+    fn decrsps(&mut self, presentation: &CursorPresentation) {
+        let row = usize::from(presentation.row);
+        let col = usize::from(presentation.col);
+
+        if row == 0 || row > self.rows || col == 0 || col > self.cols {
+            return;
+        }
+
+        self.cursor.row = row - 1;
+
+        self.cursor.col = if presentation.pending_wrap && col == self.cols {
+            self.cols
+        } else {
+            col - 1
+        };
+
+        self.origin_mode = presentation.origin_mode;
+        // The remaining accepted report fields are fixed defaults.
+        self.pen.intensity = Intensity::Normal;
+        self.pen.unset_underline();
+        self.pen.unset_blink();
+        self.pen.unset_inverse();
+        self.charsets = [Charset::Ascii; 2];
+        self.active_charset = 0;
+    }
+
     fn ris(&mut self, observer: &mut impl Effects) {
         self.hard_reset(observer);
     }
@@ -1387,14 +1406,13 @@ impl Engine {
         // 3. configure the primary saved cursor while its buffer is active
 
         if let Some(saved) = primary_ctx {
-            saved.dump(&mut funs, Some(&self.primary_buffer), self.cols);
+            saved.dump(&mut funs, self.cols);
         }
 
         if self.active == ScreenKind::Alternate {
             let (col, row) = self.primary_cursor;
 
-            funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
-            dump_pending_wrap(&self.primary_buffer, col, row, self.cols, &mut funs);
+            funs.push(dump_cursor(col, row, self.cols, false));
         }
 
         // Reset the pen before switching: the alternate buffer is created with it.
@@ -1418,8 +1436,7 @@ impl Engine {
         // 5. configure the alternate saved cursor while its buffer is active
 
         if let Some(saved) = alternate_ctx {
-            let buffer = (self.active == ScreenKind::Alternate).then_some(&self.alternate_buffer);
-            saved.dump(&mut funs, buffer, self.cols);
+            saved.dump(&mut funs, self.cols);
         }
 
         // 6. ensure the right buffer is active
@@ -1429,14 +1446,7 @@ impl Engine {
             funs.push(Function::Decrst(DecModes::one(DecMode::AltScreenBuffer)));
         }
 
-        // 7. setup origin mode
-
-        if self.origin_mode {
-            // Enable origin mode before restoring the cursor: this moves it home.
-            funs.push(Function::Decset(DecModes::one(DecMode::Origin)));
-        }
-
-        // 8. setup margins
+        // 7. setup margins
 
         // Setting margins moves the cursor home, so restore its position afterward.
         if self.top_margin > 0 || self.bottom_margin < self.rows - 1 {
@@ -1446,66 +1456,14 @@ impl Engine {
             ));
         }
 
-        // 9. setup cursor
+        // 8. restore the live cursor independently of margins and saved cursors
 
-        let col = self.cursor.col;
-        let mut row = self.cursor.row;
-
-        if self.origin_mode {
-            if row < self.top_margin || row > self.bottom_margin {
-                // CUP is constrained by origin mode. Restore the saved cursor,
-                // then use relative movement to reach a position outside the margins.
-
-                funs.push(Function::Scorc);
-
-                // Restore can disable autowrap. Keep it enabled for pending-wrap
-                // reconstruction below; restore the live mode after printing.
-                if !self.active_saved_cursor().auto_wrap_mode {
-                    funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
-                }
-
-                match col.cmp(&self.active_saved_cursor().cursor_col) {
-                    Ordering::Less => {
-                        let n = self.active_saved_cursor().cursor_col - col;
-                        funs.push(Function::Cub(as_u16(n)));
-                    }
-
-                    Ordering::Greater => {
-                        let n = col - self.active_saved_cursor().cursor_col;
-                        funs.push(Function::Cuf(as_u16(n)));
-                    }
-
-                    Ordering::Equal => (),
-                }
-
-                match row.cmp(&self.active_saved_cursor().cursor_row) {
-                    Ordering::Less => {
-                        let n = self.active_saved_cursor().cursor_row - row;
-                        funs.push(Function::Cuu(as_u16(n)));
-                    }
-
-                    Ordering::Greater => {
-                        let n = row - self.active_saved_cursor().cursor_row;
-                        funs.push(Function::Cud(as_u16(n)));
-                    }
-
-                    Ordering::Equal => (),
-                }
-            } else {
-                row -= self.top_margin;
-                funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
-            }
-        } else {
-            funs.push(Function::Cup(as_u16(row + 1), as_u16(col + 1)));
-        }
-
-        dump_pending_wrap(
-            self.active_buffer(),
+        funs.push(dump_cursor(
             self.cursor.col,
             self.cursor.row,
             self.cols,
-            &mut funs,
-        );
+            self.origin_mode,
+        ));
 
         // configure pen
         funs.push(to_sgr(&self.pen));
@@ -1515,10 +1473,9 @@ impl Engine {
             funs.push(Function::Decrst(DecModes::one(DecMode::TextCursorEnable)));
         }
 
-        // Restore charset, insert mode, and auto-wrap only after all printing,
-        // including the character reprinted above to restore pending wrap.
+        // Restore charset and printing modes after painting both buffers.
 
-        // 10. setup charset
+        // 9. setup charset
 
         if self.charsets[0] == Charset::Drawing {
             // put drawing charset into G0 slot
@@ -1535,28 +1492,28 @@ impl Engine {
             funs.push(Function::So);
         }
 
-        // 11. setup insert mode
+        // 10. setup insert mode
 
         if self.insert_mode {
             // enable insert mode
             funs.push(Function::Sm(AnsiModes::one(AnsiMode::Insert)));
         }
 
-        // 12. setup auto-wrap mode
+        // 11. setup auto-wrap mode
 
         if !self.auto_wrap_mode {
             // disable auto-wrap mode
             funs.push(Function::Decrst(DecModes::one(DecMode::AutoWrap)));
         }
 
-        // 13. setup new line mode
+        // 12. setup new line mode
 
         if self.new_line_mode {
             // enable new line mode
             funs.push(Function::Sm(AnsiModes::one(AnsiMode::NewLine)));
         }
 
-        // 14. setup cursor key mode
+        // 13. setup cursor key mode
 
         if self.cursor_keys_mode == CursorKeysMode::Application {
             funs.push(Function::Decset(DecModes::one(DecMode::CursorKeys)));
@@ -1566,34 +1523,13 @@ impl Engine {
     }
 }
 
-fn dump_pending_wrap(
-    buffer: &Buffer,
-    col: usize,
-    row: usize,
-    cols: usize,
-    funs: &mut Vec<Function>,
-) {
-    if col < cols {
-        return;
-    }
-
-    // Restore pending wrap by reprinting the character at the right edge.
-    // DECRC may already have restored pending wrap, unlike CUP. Normalize the
-    // column first so the reprint cannot wrap onto the next row.
-    funs.push(Function::Cha(as_u16(cols)));
-    let last_cell = buffer[(cols - 1, row)];
-    let occupancy = last_cell.occupancy();
-
-    if occupancy == Occupancy::Single {
-        funs.push(to_sgr(last_cell.pen()));
-        funs.push(Function::Print(last_cell.char()));
-    } else if occupancy == Occupancy::WideTail {
-        let prev_cell = buffer[(cols - 2, row)];
-
-        funs.push(Function::Cub(1));
-        funs.push(to_sgr(prev_cell.pen()));
-        funs.push(Function::Print(prev_cell.char()));
-    }
+fn dump_cursor(col: usize, row: usize, cols: usize, origin_mode: bool) -> Function {
+    Function::Decrsps(CursorPresentation {
+        row: as_u16(row + 1),
+        col: as_u16(col.min(cols - 1) + 1),
+        origin_mode,
+        pending_wrap: col == cols,
+    })
 }
 
 fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
@@ -1795,7 +1731,8 @@ mod tests {
     use crate::line::Line;
     use crate::observer::DirtyRows;
     use crate::parser::{
-        AnsiMode, AnsiModes, DecMode, DecModes, EdScope, ElScope, Function, SgrOp, SgrOps,
+        AnsiMode, AnsiModes, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
+        SgrOp, SgrOps,
     };
     use crate::pen::Intensity;
     use crate::pen::Pen;
@@ -1813,6 +1750,186 @@ mod tests {
         term.execute(Cup((cy + 1) as u16, (cx + 1) as u16));
 
         term
+    }
+
+    #[test]
+    fn decrsps_restores_presentation_independently_of_saves() {
+        for alternate in [false, true] {
+            for saved in [false, true] {
+                let mut terminal = Terminal::new(4, 4).unwrap();
+                terminal.feed("ABCDX");
+
+                if saved {
+                    terminal.feed("\x1b7");
+                }
+
+                terminal.feed("\x1b[?1047h\x1b[Hab界");
+
+                if saved {
+                    terminal.feed("\x1b7");
+                }
+
+                if !alternate {
+                    terminal.feed("\x1b[?1047l");
+                }
+
+                let mut dirty = DirtyRows::new();
+
+                terminal.feed_with(
+                    "\x1b[2;3r\x1b[?7;25l\x1b[4;20h\x1b[?1h\x1b[31;42;1;3;4;5;7;9m\x1b(0\x1b)0\x0e",
+                    &mut dirty,
+                );
+
+                let primary_save = terminal.engine.primary_saved_cursor;
+                let alternate_save = terminal.engine.alternate_saved_cursor;
+                let primary_cursor = terminal.engine.primary_cursor;
+                let primary: Vec<_> = terminal.primary_screen().visible_lines().cloned().collect();
+                let active: Vec<_> = terminal.screen().visible_lines().cloned().collect();
+
+                let rows = terminal.feed_with("\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB\x1b\\", &mut dirty);
+
+                assert!(rows.is_empty());
+                let engine = &terminal.engine;
+                assert_eq!((engine.cursor.col, engine.cursor.row), (4, 0));
+                assert!(engine.origin_mode);
+                assert!(!engine.cursor.visible);
+                assert!(!engine.auto_wrap_mode);
+                assert!(engine.insert_mode);
+                assert!(engine.new_line_mode);
+                assert!(terminal.cursor_key_app_mode());
+                assert_eq!((engine.top_margin, engine.bottom_margin), (1, 2));
+                assert_eq!(engine.primary_saved_cursor, primary_save);
+                assert_eq!(engine.alternate_saved_cursor, alternate_save);
+                assert_eq!(engine.primary_cursor, primary_cursor);
+                assert!(terminal.primary_screen().visible_lines().eq(primary.iter()));
+                assert!(terminal.screen().visible_lines().eq(active.iter()));
+                assert_eq!(engine.charsets, [Charset::Ascii; 2]);
+                assert_eq!(engine.active_charset, 0);
+                assert!(!engine.pen.is_bold());
+                assert!(!engine.pen.is_faint());
+                assert!(!engine.pen.is_underline());
+                assert!(!engine.pen.is_blink());
+                assert!(!engine.pen.is_inverse());
+                assert!(engine.pen.is_italic());
+                assert!(engine.pen.is_strikethrough());
+                assert_eq!(engine.pen.foreground(), Some(Color::Indexed(1)));
+                assert_eq!(engine.pen.background(), Some(Color::Indexed(2)));
+
+                // Physical positioning also works below the origin margins.
+                terminal.feed("\x1bP1$t4;2;1;@;@;A;0;2;@;BBBB\x1b\\");
+                let engine = &terminal.engine;
+                assert_eq!((engine.cursor.col, engine.cursor.row), (1, 3));
+                assert!(engine.origin_mode);
+                terminal.feed("q");
+                assert_eq!(terminal.screen().line(3).unwrap().cells()[1].char(), 'q');
+                terminal.engine.verify();
+            }
+        }
+    }
+
+    #[test]
+    fn decrsps_ignores_out_of_screen_coordinates_atomically() {
+        for (row, col) in [(0, 1), (1, 0), (5, 1), (1, 5), (u16::MAX, u16::MAX)] {
+            let setup = "ab界\x1b7\x1b[?1047h\x1b[2;3r\x1b[1;4;5;7;31m\x1b[?6h\x1b(0q";
+            let mut terminal = Terminal::new(4, 4).unwrap();
+            let mut expected = Terminal::new(4, 4).unwrap();
+            let mut dirty = DirtyRows::new();
+            terminal.feed_with(setup, &mut dirty);
+            expected.feed(setup);
+
+            let rows = terminal.execute_with(
+                Decrsps(CursorPresentation {
+                    row,
+                    col,
+                    pending_wrap: true,
+                    ..CursorPresentation::default()
+                }),
+                &mut dirty,
+            );
+
+            assert!(rows.is_empty());
+
+            terminal
+                .engine
+                .assert_execution_equivalent(&expected.engine);
+        }
+    }
+
+    #[test]
+    fn decrsps_restores_pending_wrap_without_painting() {
+        for alternate in [false, true] {
+            for auto_wrap in [false, true] {
+                for (cols, text, overwritten) in
+                    [(1, "A", "X"), (4, "ABCD", "ABCX"), (4, "AB界", "AB X")]
+                {
+                    let mut terminal = Terminal::new(cols, 2).unwrap();
+                    let mut dirty = DirtyRows::new();
+
+                    if alternate {
+                        terminal.feed("\x1b[?1047h");
+                    }
+
+                    terminal.feed_with([text, "\x1b[H"], &mut dirty);
+
+                    if !auto_wrap {
+                        terminal.feed("\x1b[?7l");
+                    }
+
+                    let before: Vec<_> = terminal.screen().visible_lines().cloned().collect();
+
+                    let rows = terminal.execute_with(
+                        Decrsps(CursorPresentation {
+                            col: cols as u16,
+                            pending_wrap: true,
+                            ..CursorPresentation::default()
+                        }),
+                        &mut dirty,
+                    );
+
+                    assert!(rows.is_empty());
+                    assert_eq!(terminal.cursor().position(), Some((cols, 0)));
+                    assert!(terminal.screen().visible_lines().eq(before.iter()));
+                    assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+                    terminal.feed("X");
+                    assert_eq!(terminal.screen().line(0).unwrap().is_wrapped(), auto_wrap);
+
+                    if auto_wrap {
+                        assert_eq!(terminal.screen().line(0).unwrap().text(), text);
+                        assert_eq!(terminal.screen().line(1).unwrap().cells()[0].char(), 'X');
+                        assert_eq!(terminal.cursor().position(), Some((1, 1)));
+                    } else {
+                        assert_eq!(terminal.screen().line(0).unwrap().text(), overwritten);
+                        assert_eq!(terminal.cursor().position(), Some((cols - 1, 0)));
+                    }
+
+                    terminal.engine.verify();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn decrsps_only_honors_pending_wrap_at_the_right_edge() {
+        for col in [1, 3, 4] {
+            for pending_wrap in [false, true] {
+                let mut terminal = Terminal::new(4, 2).unwrap();
+                terminal.feed("ABCD");
+
+                terminal.execute(Decrsps(CursorPresentation {
+                    col,
+                    pending_wrap,
+                    ..CursorPresentation::default()
+                }));
+
+                let wraps = pending_wrap && col == 4;
+                let expected_col = if wraps { 4 } else { usize::from(col) - 1 };
+                assert_eq!(terminal.cursor().position(), Some((expected_col, 0)));
+                terminal.feed("X");
+                assert_eq!(terminal.cursor().row, usize::from(wraps));
+                assert_eq!(terminal.screen().line(0).unwrap().is_wrapped(), wraps);
+                terminal.engine.verify();
+            }
+        }
     }
 
     #[test]

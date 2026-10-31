@@ -1,6 +1,8 @@
 // Based on Paul Williams' parser for ANSI-compatible video terminals:
 // https://www.vt100.net/emu/dec_ansi_parser
 
+mod dcs;
+
 use crate::charset::Charset;
 use crate::color::Color;
 use alloc::borrow::ToOwned as _;
@@ -20,6 +22,7 @@ pub struct Parser {
     cur_param: usize,
     intermediate: Option<char>,
     osc_buffer: String,
+    dcs: dcs::Handler,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
@@ -59,6 +62,7 @@ pub enum Function {
     Dch(u16),
     Decaln,
     Decrc,
+    Decrsps(CursorPresentation),
     Decrst(DecModes),
     Decsc,
     Decset(DecModes),
@@ -94,6 +98,42 @@ pub enum Function {
     Vpa(u16),
     Vpr(u16),
     Xtwinops(XtwinopsOp),
+}
+
+/// The dump-specific cursor-information form of DECRSPS.
+///
+/// Coordinates are one-based physical screen positions, independent of origin
+/// mode and margins. Execution ignores the entire operation if either coordinate
+/// is zero or outside the screen. Pending wrap is honored only at the last column,
+/// independently of autowrap mode; it does not change cells or line-wrap markers.
+///
+/// Only `Pr;Pc;1;@;@;Sflag;0;2;@;BBBB` is accepted, with `Sflag` one of
+/// `@`, `A`, `H`, or `I`. The fixed fields restore normal intensity, no underline,
+/// blink, or inverse, and ASCII in G0/G1 with G0 selected. Colors, italic, and
+/// strikethrough are preserved, as are saved cursors, margins, cursor visibility,
+/// and other modes. Dumps restore full attributes separately through SGR and SCS.
+///
+/// Malformed or unsupported reports, including payloads exceeding 128 bytes,
+/// are ignored as a whole. A valid report is applied on ESC or C1 ST; the
+/// backslash in `ESC \` completes normal escape parsing. CAN, SUB, and other
+/// C1 controls cancel an unfinished report.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CursorPresentation {
+    pub row: u16,
+    pub col: u16,
+    pub origin_mode: bool,
+    pub pending_wrap: bool,
+}
+
+impl Default for CursorPresentation {
+    fn default() -> Self {
+        Self {
+            row: 1,
+            col: 1,
+            origin_mode: false,
+            pending_wrap: false,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
@@ -443,6 +483,37 @@ impl Parser {
     pub fn feed(&mut self, input: char) -> Option<Function> {
         use State::*;
 
+        // DCS framing is independent of the selected command's payload syntax.
+        if self.state == DcsPassthrough {
+            match input {
+                '\u{1b}' => {
+                    self.state = Escape;
+                    self.clear();
+
+                    return self.dcs.end(dcs::End::Escape);
+                }
+
+                '\u{9c}' => {
+                    self.state = Ground;
+
+                    return self.dcs.end(dcs::End::St);
+                }
+
+                '\u{18}' | '\u{1a}' | '\u{80}'..='\u{9f}' => {
+                    self.dcs.end(dcs::End::Cancel);
+                    // Process the cancelling control through the normal transitions below.
+                }
+
+                '\u{7f}' => return None,
+
+                _ => {
+                    self.dcs.put(input);
+
+                    return None;
+                }
+            }
+        }
+
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
@@ -506,12 +577,6 @@ impl Parser {
                 self.collect(input);
             }
 
-            (DcsPassthrough, '\u{00}'..='\u{17}')
-            | (DcsPassthrough, '\u{19}')
-            | (DcsPassthrough, '\u{1c}'..='\u{7e}') => {
-                self.put(input);
-            }
-
             (CsiIgnore, '\u{40}'..='\u{7e}') => {
                 self.state = Ground;
             }
@@ -547,6 +612,7 @@ impl Parser {
             | (_, '\u{99}')
             | (_, '\u{9a}') => {
                 self.state = Ground;
+
                 return self.execute(input);
             }
 
@@ -560,8 +626,9 @@ impl Parser {
                 self.collect(input);
             }
 
-            (DcsParam, '\u{30}'..='\u{39}') | (DcsParam, '\u{3b}') => {
-                self.param(input);
+            (DcsEntry | DcsParam, '\u{30}'..='\u{39}' | '\u{3b}') => {
+                self.state = DcsParam;
+                self.dcs_param(input);
             }
 
             (DcsEntry, '\u{3c}'..='\u{3f}') => {
@@ -571,27 +638,32 @@ impl Parser {
 
             (DcsEntry | DcsParam | DcsIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = DcsPassthrough;
+
+                self.dcs.hook(
+                    &self.params[..=self.cur_param],
+                    self.intermediate,
+                    input,
+                );
             }
 
             (DcsEntry | DcsParam, '\u{20}'..='\u{2f}') => {
-                self.state = DcsIntermediate;
-                self.collect(input);
+                if self.intermediate.is_some() {
+                    self.state = DcsIgnore;
+                } else {
+                    self.state = DcsIntermediate;
+                    self.collect(input);
+                }
             }
 
-            (CsiIntermediate | EscapeIntermediate | DcsIntermediate, '\u{20}'..='\u{2f}') => {
+            (CsiIntermediate | EscapeIntermediate, '\u{20}'..='\u{2f}') => {
                 self.collect(input);
             }
 
             (DcsEntry, '\u{3a}')
-            | (DcsIntermediate, '\u{30}'..='\u{3f}')
+            | (DcsIntermediate, '\u{20}'..='\u{3f}')
             | (DcsParam, '\u{3a}')
             | (DcsParam, '\u{3c}'..='\u{3f}') => {
                 self.state = DcsIgnore;
-            }
-
-            (DcsEntry, '\u{30}'..='\u{39}') | (DcsEntry, '\u{3b}') => {
-                self.state = DcsParam;
-                self.param(input);
             }
 
             (Escape | EscapeIntermediate
@@ -639,7 +711,7 @@ impl Parser {
             // DEL (0x7F) is ignored in all states except Ground and OscString
             (Escape | EscapeIntermediate
             | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore
-            | DcsEntry | DcsParam | DcsIntermediate | DcsPassthrough | DcsIgnore
+            | DcsEntry | DcsParam | DcsIntermediate | DcsIgnore
             | SosPmApcString, '\u{7f}')
 
             // CsiIgnore: params and intermediates range ignored
@@ -650,7 +722,7 @@ impl Parser {
             | (DcsEntry | DcsParam | DcsIntermediate, '\u{19}')
             | (DcsEntry | DcsParam | DcsIntermediate, '\u{1c}'..='\u{1f}')
 
-            // C0 controls and printable range ignored in DcsIgnore and SosPmApcString
+            // Unrecognized control strings are ignored.
             | (DcsIgnore | SosPmApcString, '\u{00}'..='\u{17}')
             | (DcsIgnore | SosPmApcString, '\u{19}')
             | (DcsIgnore | SosPmApcString, '\u{1c}'..='\u{7e}')
@@ -668,6 +740,9 @@ impl Parser {
             | OscString | SosPmApcString, '\u{a0}'..='\u{10ffff}') => {
                 unreachable!()
             }
+
+            // DCS payload is handled above.
+            (DcsPassthrough, _) => unreachable!(),
         }
 
         None
@@ -872,7 +947,16 @@ impl Parser {
         }
     }
 
-    fn put(&mut self, _input: char) {}
+    fn dcs_param(&mut self, input: char) {
+        if input.is_ascii_digit()
+            && u32::from(self.params[self.cur_param].as_u16()) * 10 + input as u32 - '0' as u32
+                > u32::from(u16::MAX)
+        {
+            self.state = State::DcsIgnore;
+        } else {
+            self.param(input);
+        }
+    }
 
     fn osc_put(&mut self, input: char) {
         if self.osc_buffer.len() + input.len_utf8() <= OSC_BUFFER_LIMIT {
@@ -945,7 +1029,14 @@ impl Parser {
 
             DcsIntermediate => {
                 let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{90}{intermediates}");
+
+                let params = self.params[..=self.cur_param]
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";");
+
+                let s = &format!("\u{90}{params}{intermediates}");
                 seq.push_str(s);
             }
 
@@ -962,11 +1053,7 @@ impl Parser {
                 seq.push_str(s);
             }
 
-            DcsPassthrough => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{90}{intermediates}\u{40}");
-                seq.push_str(s);
-            }
+            DcsPassthrough => self.dcs.dump(&mut seq),
 
             DcsIgnore => {
                 seq.push_str("\u{90}\u{3a}");
@@ -990,9 +1077,10 @@ impl Parser {
         use State::*;
 
         assert_eq!(self.state, other.state);
+        assert_eq!(self.dcs, other.dcs);
 
-        // Supported intermediate sequences do not use collected parameters.
-        if matches!(self.state, CsiParam | DcsParam) {
+        // Supported CSI intermediate sequences do not use collected parameters.
+        if matches!(self.state, CsiParam | DcsParam | DcsIntermediate) {
             assert_eq!(self.cur_param, other.cur_param);
 
             assert_eq!(
@@ -1073,6 +1161,18 @@ fn dump_function(seq: &mut String, fun: &Function) {
         Dch(n) => push_csi(seq, None, &[n.to_string()], 'P'),
         Decaln => push_esc(seq, Some('#'), '8'),
         Decrc => push_esc(seq, None, '8'),
+
+        Decrsps(presentation) => {
+            let flags = char::from(
+                0x40 | u8::from(presentation.origin_mode)
+                    | (u8::from(presentation.pending_wrap) << 3),
+            );
+
+            seq.push_str(&format!(
+                "\u{90}1$t{};{};1;@;@;{flags};0;2;@;BBBB\u{9c}",
+                presentation.row, presentation.col,
+            ));
+        }
 
         Decrst(modes) => {
             let params = modes
@@ -1728,6 +1828,7 @@ mod tests {
     use super::AnsiMode;
     use super::AnsiModes;
     use super::CtcOp;
+    use super::CursorPresentation;
     use super::DecMode;
     use super::DecModes;
     use super::EdScope;
@@ -1834,6 +1935,9 @@ mod tests {
             Just("\x1b]title".chars().collect()),
             Just("\x1bP".chars().collect()),
             Just("\x1bP1;2".chars().collect()),
+            Just("\x1bP1$".chars().collect()),
+            Just("\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB".chars().collect()),
+            Just("\x1bP1$t1;4;\x1b".chars().collect()),
             Just("\x1bP:".chars().collect()),
             Just("\x1bX".chars().collect()),
             Just("\x1bXabc".chars().collect()),
@@ -1845,6 +1949,263 @@ mod tests {
             Just("\u{98}".chars().collect()),
             Just("\u{98}abc".chars().collect()),
         ]
+    }
+
+    #[test]
+    fn parse_cursor_information_reports() {
+        for start in ["\x1bP", "\u{90}"] {
+            for end in ["\x1b", "\x1b\\", "\u{9c}"] {
+                for (flags, origin_mode, pending_wrap) in [
+                    ('@', false, false),
+                    ('A', true, false),
+                    ('H', false, true),
+                    ('I', true, true),
+                ] {
+                    assert_eq!(
+                        parse(&format!("{start}1$t3;65535;1;@;@;{flags};0;2;@;BBBB{end}")),
+                        [Decrsps(CursorPresentation {
+                            row: 3,
+                            col: u16::MAX,
+                            origin_mode,
+                            pending_wrap,
+                        })]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_reports_reject_malformed_and_unsupported_fields() {
+        for (index, invalid) in [
+            (0, ""),
+            (0, "+1"),
+            (0, "-1"),
+            (0, "65536"),
+            (1, ""),
+            (1, "65536"),
+            (2, "0"),
+            (2, "2"),
+            (3, ""),
+            (3, "A"),
+            (3, "O"),
+            (3, "P"),
+            (3, "`@"),
+            (3, "AA"),
+            (4, "A"),
+            (5, "B"),
+            (5, "D"),
+            (5, "P"),
+            (5, "`@"),
+            (6, "1"),
+            (6, "2"),
+            (7, "0"),
+            (7, "4"),
+            (8, "A"),
+            (8, "B"),
+            (8, "L"),
+            (8, "P"),
+            (9, "B"),
+            (9, "BBBBB"),
+            (9, "ABBB"),
+            (9, "0BBB"),
+            (9, "B0BB"),
+            (9, "BB%5%5"),
+            (9, "B%5BB"),
+            (9, "BBB%"),
+            (9, "BBBB;"),
+            (9, "BBB日"),
+            (9, "BB\x07B"),
+        ] {
+            let mut fields = ["1", "4", "1", "@", "@", "I", "0", "2", "@", "BBBB"];
+            fields[index] = invalid;
+            let input = format!("\x1bP1$t{}\x1b\\X", fields.join(";"));
+            assert_eq!(parse(&input), [Print('X')], "{input:?}");
+        }
+
+        for header in [
+            "0$t", "2$t", "$t", "1;1$t", "?1$t", "1!$t", "1$$t", "65537$t", "1$u",
+        ] {
+            let input = format!("\x1bP{header}1;4;1;@;@;I;0;2;@;BBBB\x1b\\X");
+            assert_eq!(parse(&input), [Print('X')], "{input:?}");
+        }
+
+        assert!(parse("\x1bP1$t1;4;1;@;@;I;0;2;@\x1b\\").is_empty());
+    }
+
+    #[test]
+    fn cursor_reports_finish_on_esc_before_escape_dispatch() {
+        let report = "\x1bP1$t1;1;1;@;@;@;0;2;@;BBBB";
+        let function = Decrsps(CursorPresentation::default());
+        let mut parser = Parser::new();
+        feed(&mut parser, report);
+        assert_eq!(parser.state, State::DcsPassthrough);
+        assert_eq!(parser.feed('\x1b'), Some(function.clone()));
+        assert_eq!(parser.state, State::Escape);
+        assert_eq!(parser.dcs, super::dcs::Handler::default());
+        assert_eq!(parser.dump(), "\x1b");
+        assert_eq!(parser.feed('\\'), None);
+        assert_eq!(parser.state, State::Ground);
+
+        for suffix in [
+            "\x1b\\",
+            "\x1b\x18",
+            "\x1b\x1a",
+            "\x1b\x1b\\",
+            "\x1b\u{9c}",
+            "\x1b\x7f\\",
+            "\x1b#\\",
+        ] {
+            assert_eq!(
+                parse(&format!("{report}{suffix}X")),
+                [function.clone(), Print('X')]
+            );
+        }
+
+        for (suffix, expected) in [
+            ("\x1b[2;3H", Cup(2, 3)),
+            ("\x1bM", Ri),
+            ("\x1b\n\\", Lf),
+            ("\x1b(0", Gzd4(Charset::Drawing)),
+            ("\x1bc", Ris),
+        ] {
+            assert_eq!(
+                parse(&format!("{report}{suffix}X")),
+                [function.clone(), expected, Print('X')]
+            );
+        }
+
+        assert_eq!(
+            parse(&format!("{report}\x1bP1$t2;3;1;@;@;@;0;2;@;BBBB\u{9c}")),
+            [
+                function,
+                Decrsps(CursorPresentation {
+                    row: 2,
+                    col: 3,
+                    ..CursorPresentation::default()
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn cursor_reports_cancel_on_can_sub_and_other_c1_controls() {
+        let report = "\x1bP1$t1;1;1;@;@;@;0;2;@;BBBB";
+
+        for cancel in [0x18, 0x1a].into_iter().chain(0x80..=0x9f) {
+            if cancel == 0x9c {
+                continue;
+            }
+
+            let mut parser = Parser::new();
+            feed(&mut parser, report);
+            let mut expected = Parser::new();
+
+            assert_eq!(
+                parser.feed(char::from(cancel)),
+                expected.feed(char::from(cancel))
+            );
+
+            parser.assert_continuation_equivalent(&expected);
+            assert_eq!(parser.dcs, super::dcs::Handler::default());
+
+            // The next recognized report starts with fresh handler state.
+            let suffix = format!("{report}\u{9c}X");
+            let output: Vec<_> = suffix.chars().filter_map(|ch| parser.feed(ch)).collect();
+            assert_eq!(output, [Decrsps(CursorPresentation::default()), Print('X')]);
+        }
+
+        for suffix in [
+            "\u{90}0xignored",
+            "\u{90}1$",
+            "\u{9d}ignored",
+            "\u{98}ignored",
+            "\u{9e}ignored",
+            "\u{9f}ignored",
+        ] {
+            let mut parser = Parser::new();
+            feed(&mut parser, &format!("{report}{suffix}"));
+            assert_eq!(parser.dcs, super::dcs::Handler::default());
+            assert_eq!(parser.feed('\u{9c}'), None);
+        }
+
+        for (suffix, expected) in [("\u{9b}2;3H", Cup(2, 3)), ("\u{84}", Lf)] {
+            assert_eq!(parse(&format!("{report}{suffix}X")), [expected, Print('X')]);
+        }
+    }
+
+    #[test]
+    fn cursor_report_capture_is_bounded_without_truncation() {
+        let payload = "1;1;1;@;@;@;0;2;@;BBBB";
+
+        for extra in [0, 1, 1024] {
+            let zeros = "0".repeat(128 - payload.len() + extra);
+            let mut parser = Parser::new();
+            feed(&mut parser, &format!("\x1bP1$t{zeros}{payload}"));
+            let dumped = parser.dump();
+            assert!(dumped.len() <= "\u{90}1$t".len() + 128);
+            let mut restored = Parser::new();
+            feed(&mut restored, &dumped);
+            parser.assert_continuation_equivalent(&restored);
+
+            let expected = (extra == 0).then_some(Decrsps(CursorPresentation::default()));
+
+            assert_eq!(parser.feed('\u{9c}'), expected);
+            assert_eq!(restored.feed('\u{9c}'), expected);
+            assert_eq!(parser.feed('X'), Some(Print('X')));
+        }
+    }
+
+    #[test]
+    fn dcs_payload_controls_and_rejections_preserve_framing() {
+        let report = "\x1bP1$t1;1;1;@;@;@;0;2;@;BBBB";
+
+        for extra in ["\x07", "\n", "日", "extra"] {
+            for end in ["\x1b\\", "\u{9c}"] {
+                let mut parser = Parser::new();
+                feed(&mut parser, &format!("{report}{extra}"));
+                assert_eq!(parser.state, State::DcsPassthrough);
+                let mut restored = Parser::new();
+                feed(&mut restored, &parser.dump());
+                parser.assert_continuation_equivalent(&restored);
+
+                for parser in [&mut parser, &mut restored] {
+                    let suffix = format!("{end}X{report}{end}Y");
+                    let output: Vec<_> = suffix.chars().filter_map(|ch| parser.feed(ch)).collect();
+
+                    assert_eq!(
+                        output,
+                        [
+                            Print('X'),
+                            Decrsps(CursorPresentation::default()),
+                            Print('Y')
+                        ]
+                    );
+                }
+            }
+        }
+
+        // DEL is ignored by DCS framing rather than delivered to the command.
+        assert_eq!(
+            parse("\x1bP1$t1;1;1;@;@;@;0;2;@;BB\x7fBB\u{9c}"),
+            [Decrsps(CursorPresentation::default())]
+        );
+    }
+
+    #[test]
+    fn unknown_dcs_commands_ignore_payload_and_resume() {
+        let payload = "1;1;1;@;@;@;0;2;@;BBBB\x07\n日".repeat(128);
+
+        for header in ["0;0;0q", "0p", "$q", "+q", "2$t", "1$u", "tmux;"] {
+            for suffix in ["\x1b\\X", "\u{9c}X", "\x1b[2;3HX"] {
+                assert_dump_continuation(
+                    &format!("\x1bP{header}{payload}"),
+                    State::DcsPassthrough,
+                    suffix,
+                    &parse(suffix),
+                );
+            }
+        }
     }
 
     #[test]
@@ -2545,6 +2906,36 @@ mod tests {
         }
 
         #[test]
+        fn prop_cursor_report_roundtrip_and_resume(
+            presentation in crate::tests::gen_cursor_presentation(),
+            split in any::<usize>(),
+            start in prop::sample::select(vec!["\x1bP", "\u{90}"]),
+            end in prop::sample::select(vec!["\x1b", "\x1b\\", "\u{9c}"]),
+        ) {
+            let function = Decrsps(presentation);
+
+            let input: Vec<_> = super::dump(core::slice::from_ref(&function))
+                .replace('\u{90}', start)
+                .replace('\u{9c}', end)
+                .chars()
+                .collect();
+
+            let split = split % (input.len() + 1);
+            let mut original = Parser::new();
+            let prefix_output = emit(&mut original, &input[..split]);
+            let mut restored = Parser::new();
+            feed(&mut restored, &original.dump());
+            original.assert_continuation_equivalent(&restored);
+
+            let suffix_output = emit(&mut original, &input[split..]);
+            prop_assert_eq!(emit(&mut restored, &input[split..]), &suffix_output[..]);
+            original.assert_continuation_equivalent(&restored);
+
+            let output: Vec<_> = prefix_output.into_iter().chain(suffix_output).collect();
+            prop_assert_eq!(output, [function]);
+        }
+
+        #[test]
         fn prop_cancel_then_continue(
             prefix in gen_non_ground_prefix(),
             cancel in prop::sample::select(vec!['\x18', '\x1a']),
@@ -2561,6 +2952,7 @@ mod tests {
 
             prop_assert_eq!(cancel_output, None);
             prop_assert_eq!(parser.state, State::Ground);
+            prop_assert_eq!(&parser.dcs, &super::dcs::Handler::default());
 
             let suffix_output = emit(&mut parser, &suffix);
             let expected = suffix.iter().copied().map(Function::Print).collect::<Vec<_>>();

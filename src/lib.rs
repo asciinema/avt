@@ -286,8 +286,9 @@ impl Terminal {
         self.engine.active_screen_kind()
     }
 
-    /// Escape-sequence initialization for a terminal of the same size, including
-    /// visible buffers, cursor state, terminal modes, and unfinished parsing.
+    /// Escape-sequence initialization for a fresh avt terminal of the same size,
+    /// including visible buffers, cursor state, modes, and unfinished parsing.
+    /// Uses DECRSPS cursor-information restoration, including pending wrap.
     /// Retained scrollback and observer/anchor state are omitted; this is not a
     /// full-state snapshot.
     pub fn dump(&self) -> String {
@@ -629,12 +630,46 @@ mod tests {
 
     #[test]
     fn dump_preserves_origin_after_buffer_switch_above_margin() {
-        let mut original = Terminal::new(10, 5).unwrap();
-        original.feed("\x1b[?6;1048h\x1b[?1047h\x1b[2;3r \x1b[?1049l\x1b[?1047h");
-        assert_eq!(original.cursor().position(), Some((0, 0)));
-        let mut restored = Terminal::new(10, 5).unwrap();
-        restored.feed(original.dump());
-        assert_dump_equivalent(&original, &restored);
+        for content in ["", "A", "0123456789"] {
+            let mut original = Terminal::new(10, 5).unwrap();
+            original.feed("\x1b[?6;1048h\x1b[?1047h\x1b[2;3r \x1b[?1049l\x1b[?1047h");
+            assert_eq!(original.cursor().position(), Some((0, 0)));
+            original.feed(content);
+            let mut restored = Terminal::new(10, 5).unwrap();
+            restored.feed(original.dump());
+            assert_dump_equivalent(&original, &restored);
+
+            for tail in ["X", "\x1b8q", "\x1b[?1047l\x1b8q", "\x1b[?1047h\x1b8q"] {
+                original.feed(tail);
+                restored.feed(tail);
+                assert_dump_equivalent(&original, &restored);
+            }
+        }
+    }
+
+    #[test]
+    fn dump_resumes_cursor_reports_at_every_boundary() {
+        let setup = "AB界\x1b7\x1b[?1047h\x1b[Halt\x1b7\x1b[2;3r";
+
+        for report in [
+            "\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB\x1b\\",
+            "\u{90}1$t1;4;1;@;@;I;0;2;@;BBBB\u{9c}",
+            "\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB\x1b[31m",
+        ] {
+            for split in report.char_indices().map(|(i, _)| i).chain([report.len()]) {
+                let mut original = Terminal::new(4, 4).unwrap();
+                original.feed([setup, &report[..split]]);
+                let mut restored = Terminal::new(4, 4).unwrap();
+                restored.feed(original.dump());
+                assert_dump_equivalent(&original, &restored);
+
+                for tail in [&report[split..], "q", "\x1b8Z", "\x1b[?1047l\x1b8W"] {
+                    original.feed(tail);
+                    restored.feed(tail);
+                    assert_dump_equivalent(&original, &restored);
+                }
+            }
+        }
     }
 
     #[test]
@@ -731,6 +766,7 @@ mod tests {
                 Tbc(TbcScope::CurrentColumn), Tbc(TbcScope::All),
             ]),
             2 => (gen_param(), gen_param()).prop_map(|(row, col)| Cup(row, col)),
+            2 => gen_cursor_presentation().prop_map(Decrsps),
             1 => (gen_param(), gen_param()).prop_map(|(top, bottom)| Decstbm(top, bottom)),
             2 => (any::<bool>(), ansi_modes).prop_map(|(set, modes)| {
                 if set { Sm(modes) } else { Rm(modes) }
@@ -759,6 +795,18 @@ mod tests {
             1 => (gen_param(), gen_param())
                 .prop_map(|(cols, rows)| Xtwinops(XtwinopsOp::Resize(cols, rows))),
         ]
+    }
+
+    pub(crate) fn gen_cursor_presentation()
+    -> impl Strategy<Value = crate::parser::CursorPresentation> {
+        (gen_param(), gen_param(), any::<bool>(), any::<bool>()).prop_map(
+            |(row, col, origin_mode, pending_wrap)| crate::parser::CursorPresentation {
+                row,
+                col,
+                origin_mode,
+                pending_wrap,
+            },
+        )
     }
 
     fn gen_char() -> impl Strategy<Value = char> {
