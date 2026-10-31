@@ -197,6 +197,9 @@ impl Terminal {
     /// even if the original size is restored. Reflow to one column erases wide
     /// characters that cannot fit, preserving their style and invalidating
     /// anchors in the erased cells.
+    ///
+    /// Any size change resets scrolling margins to the full screen and preserves
+    /// origin mode. Resizing to the current dimensions does nothing.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.resize_with(cols, rows, ());
     }
@@ -613,9 +616,10 @@ mod tests {
     }
 
     #[test]
-    fn dump_preserves_origin_after_reflow_above_margin() {
+    fn dump_preserves_origin_after_width_reflow() {
         let mut original = Terminal::new(1, 7).unwrap();
         original.feed("\x1b[2;0r界\x08\x1b[?6h");
+        // Reflow moves the cursor above the former top margin.
         original.resize(2, 7);
         assert_eq!(original.cursor().position(), Some((1, 0)));
         let mut restored = Terminal::new(2, 7).unwrap();

@@ -586,11 +586,8 @@ impl Engine {
             Ordering::Greater => self.tabs.expand(self.cols, cols),
         }
 
-        if rows != self.rows {
-            self.top_margin = 0;
-            self.bottom_margin = rows - 1;
-        }
-
+        self.top_margin = 0;
+        self.bottom_margin = rows - 1;
         let width_changed = cols != self.cols;
         self.cols = cols;
         self.rows = rows;
@@ -1816,6 +1813,67 @@ mod tests {
         term.execute(Cup((cy + 1) as u16, (cx + 1) as u16));
 
         term
+    }
+
+    #[test]
+    fn resizing_resets_margins_and_preserves_origin() {
+        for alternate in [false, true] {
+            for origin in [false, true] {
+                for (cols, rows) in [(4, 5), (8, 5), (6, 3), (6, 7), (4, 3), (8, 7)] {
+                    let mut terminal = Terminal::new(6, 5).unwrap();
+
+                    if alternate {
+                        terminal.feed("\x1b[?1047h");
+                    }
+
+                    terminal.feed("\x1b[2;4r");
+
+                    if origin {
+                        terminal.feed("\x1b[?6h");
+                    }
+
+                    terminal.feed("\x1b[2;2HX");
+                    let cursor = terminal.cursor();
+                    terminal.resize(cols, rows);
+                    assert_eq!(terminal.cursor(), cursor);
+
+                    // Addressing and scrolling must cover the whole new screen.
+                    terminal.execute(Cup(1, 1));
+                    assert_eq!(terminal.cursor().position(), Some((0, 0)));
+                    terminal.execute([Print('T'), Cup(rows as u16, 1)]);
+                    assert_eq!(terminal.cursor().position(), Some((0, rows - 1)));
+                    terminal.execute([Print('B'), Su(rows as u16)]);
+                    assert_eq!(terminal.screen().text(), vec![""; rows]);
+
+                    // New margins expose whether origin mode survived the resize.
+                    terminal.execute(Decstbm(2, rows as u16));
+                    assert_eq!(terminal.cursor().position(), Some((0, usize::from(origin))));
+                    terminal.engine.verify();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unchanged_resize_preserves_margins_and_pending_wrap() {
+        for alternate in [false, true] {
+            let mut terminal = Terminal::new(6, 5).unwrap();
+            let mut dirty = DirtyRows::new();
+
+            if alternate {
+                terminal.feed("\x1b[?1047h");
+            }
+
+            terminal.feed_with("\x1b[2;4r\x1b[?6h\x1b[2;6HX", &mut dirty);
+            assert_eq!(terminal.cursor().position(), Some((6, 2)));
+            assert!(terminal.resize_with(6, 5, &mut dirty).is_empty());
+            assert_eq!(terminal.cursor().position(), Some((6, 2)));
+            terminal.execute(Cup(1, 1));
+            assert_eq!(terminal.cursor().position(), Some((0, 1)));
+            terminal.execute(Cup(5, 1));
+            assert_eq!(terminal.cursor().position(), Some((0, 3)));
+            terminal.engine.verify();
+        }
     }
 
     #[test]
