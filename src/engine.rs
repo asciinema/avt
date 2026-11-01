@@ -3297,6 +3297,47 @@ mod tests {
                 .iter()
                 .all(|cell| cell.width() == 1)
         );
+
+        // Erasing either half clears the whole wide glyph using the current
+        // erase attributes, including the otherwise untouched half.
+        let erase_pen = pen(|pen| {
+            pen.foreground = Some(Color::Indexed(1));
+            pen.background = Some(Color::Indexed(4));
+            pen.intensity = Intensity::Bold;
+        });
+
+        for alternate in [false, true] {
+            for column in [2, 3] {
+                let mut term = Terminal::new(4, 2).unwrap();
+
+                if alternate {
+                    term.feed("\x1b[?1047h");
+                }
+
+                let mut dirty = DirtyRows::new();
+                term.feed_with(format!("A界B\x1b[1;{column}H\x1b[1;31;44m"), &mut dirty);
+
+                let rows = term.feed_with("\x1b[X", &mut dirty);
+                assert!(rows.contains(&0));
+                assert_eq!(term.cursor().position(), Some((column - 1, 0)));
+
+                assert_eq!(
+                    term.screen()
+                        .line(0)
+                        .unwrap()
+                        .cells()
+                        .iter()
+                        .map(|cell| (cell.char(), cell.width(), *cell.pen()))
+                        .collect::<Vec<_>>(),
+                    [
+                        ('A', 1, Pen::default()),
+                        (' ', 1, erase_pen),
+                        (' ', 1, erase_pen),
+                        ('B', 1, Pen::default()),
+                    ]
+                );
+            }
+        }
     }
 
     #[test]
@@ -3377,6 +3418,50 @@ mod tests {
         term.feed("abcdef");
 
         assert_eq!(text(&term), "abc|f\n\n\n");
+    }
+
+    #[test]
+    fn autowrap_toggles_at_right_edge() {
+        // Mode toggles preserve the cursor's pending-wrap state.
+        // Enabling autowrap at the last column does not create pending wrap.
+        for alternate in [false, true] {
+            for (initial, toggle, input, expected, cursor, wraps) in [
+                ("ABCD", "\x1b[?7l", "X", ["ABCX", "    "], (3, 0), false),
+                (
+                    "ABCD",
+                    "\x1b[?7l\x1b[?7h",
+                    "X",
+                    ["ABCD", "X   "],
+                    (1, 1),
+                    true,
+                ),
+                (
+                    "\x1b[?7lABCD",
+                    "\x1b[?7h",
+                    "XY",
+                    ["ABCX", "Y   "],
+                    (1, 1),
+                    true,
+                ),
+            ] {
+                let mut term = Terminal::new(4, 2).unwrap();
+
+                if alternate {
+                    term.feed("\x1b[?1047h");
+                }
+
+                term.feed(initial);
+                let before = term.cursor();
+                term.feed(toggle);
+                assert_eq!(term.cursor(), before);
+                assert_eq!(wrapped(&term), [false, false]);
+                term.feed(input);
+                let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
+                assert_eq!(lines, expected);
+                assert_eq!(term.cursor().position(), Some(cursor));
+                assert_eq!(wrapped(&term), [wraps, false]);
+            }
+        }
     }
 
     #[test]
@@ -3583,12 +3668,18 @@ mod tests {
     #[test]
     fn wide_character_fitting_right_edge_wraps_on_next_print() {
         let mut term = Terminal::new(4, 2).unwrap();
-        term.feed("AB界");
+        let mut dirty = DirtyRows::new();
+        term.feed_with("AB", &mut dirty);
+        let rows = term.feed_with("界", &mut dirty);
+        assert!(rows.contains(&0));
         let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
         assert_eq!(lines, ["AB界", "    "]);
         assert_eq!(term.cursor().row, 0);
         assert_eq!(wrapped(&term), [false, false]);
-        term.feed("X");
+
+        // Row 0's wrap flag changes, but only row 1's cells need repainting.
+        let rows = term.feed_with("X", &mut dirty);
+        assert!(rows.contains(&1));
         let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
         assert_eq!(lines, ["AB界", "X   "]);
         assert_eq!(term.cursor().position(), Some((1, 1)));
