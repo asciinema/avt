@@ -1,6 +1,6 @@
 use avt::parser::Parser;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use std::fs;
+use std::{fs, hint::black_box};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("parser: feed mixed", |b| {
@@ -32,9 +32,9 @@ fn setup(filename: &str) -> impl Fn() -> (Parser, String) + use<> {
 }
 
 fn run((mut parser, text): (Parser, String)) -> (Parser, String) {
-    text.chars().for_each(|ch| {
-        parser.feed(ch);
-    });
+    for function in parser.feed(&text) {
+        black_box(function);
+    }
 
     (parser, text)
 }

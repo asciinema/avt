@@ -51,7 +51,7 @@ impl Transcript {
 impl Observer for Transcript {
     type Output = Vec<String>;
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         if matches!(operation, Operation::Function(Function::Ris)) {
             self.finish_primary(context.terminal());
         }

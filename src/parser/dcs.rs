@@ -36,7 +36,7 @@ impl Handler {
         }
     }
 
-    pub(super) fn end(&mut self, reason: End) -> Option<Function> {
+    pub(super) fn end(&mut self, reason: End) -> Option<Function<'static>> {
         let payload = self.cursor_report.take()?;
 
         match reason {

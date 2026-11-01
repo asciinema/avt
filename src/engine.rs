@@ -118,7 +118,7 @@ impl Default for SavedCursorState {
 }
 
 impl SavedCursorState {
-    fn dump(&self, funs: &mut Vec<Function>, cols: usize) {
+    fn dump(&self, funs: &mut Vec<Function<'static>>, cols: usize) {
         funs.push(dump_cursor(
             self.cursor_col,
             self.cursor_row,
@@ -277,7 +277,7 @@ impl Engine {
         self.active_buffer_mut().erase(pos, mode, &pen);
     }
 
-    pub fn execute_with(&mut self, function: &Function, observer: &mut impl Effects) {
+    pub fn execute_with(&mut self, function: &Function<'_>, observer: &mut impl Effects) {
         use Function::*;
 
         match *function {
@@ -349,7 +349,11 @@ impl Engine {
 
             Nel => self.nel(observer),
 
-            Print(ch) => self.print(ch, observer),
+            Print(ref text) => {
+                for ch in text.chars() {
+                    self.print(ch, observer);
+                }
+            }
 
             Rep(n) => self.rep(n, observer),
 
@@ -1381,7 +1385,7 @@ impl Engine {
         }
     }
 
-    pub fn dump(&self) -> Vec<Function> {
+    pub fn dump(&self) -> Vec<Function<'static>> {
         let primary_ctx = &self.primary_saved_cursor;
         let alternate_ctx = &self.alternate_saved_cursor;
 
@@ -1523,7 +1527,7 @@ impl Engine {
     }
 }
 
-fn dump_cursor(col: usize, row: usize, cols: usize, origin_mode: bool) -> Function {
+fn dump_cursor(col: usize, row: usize, cols: usize, origin_mode: bool) -> Function<'static> {
     Function::Decrsps(CursorPresentation {
         row: as_u16(row + 1),
         col: as_u16(col.min(cols - 1) + 1),
@@ -1532,7 +1536,7 @@ fn dump_cursor(col: usize, row: usize, cols: usize, origin_mode: bool) -> Functi
     })
 }
 
-fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
+fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
     let cutoff = buffer.occupied_prefix_len(false);
     let last = buffer.rows - 1;
     let mut pen = Pen::default();
@@ -1557,7 +1561,7 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function>) {
     }
 }
 
-fn to_sgr_diff(from: &Pen, to: &Pen) -> Option<Function> {
+fn to_sgr_diff(from: &Pen, to: &Pen) -> Option<Function<'static>> {
     if from == to {
         return None;
     }
@@ -1643,8 +1647,9 @@ fn push_attr_diff(ops: &mut SgrOps, from: bool, to: bool, set: SgrOp, reset: Sgr
     }
 }
 
-fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
+fn dump_cells(cells: &[Cell], funs: &mut Vec<Function<'static>>) {
     let mut i = 0;
+    let mut text = String::new();
 
     while i < cells.len() {
         let ch = cells[i].char();
@@ -1655,19 +1660,24 @@ fn dump_cells(cells: &[Cell], funs: &mut Vec<Function>) {
         }
 
         if run_len > 5 {
-            funs.push(Function::Print(ch));
+            text.push(ch);
+            funs.push(Function::Print(core::mem::take(&mut text).into()));
             funs.push(Function::Rep(as_u16(run_len - 1)));
         } else {
             for _ in 0..run_len {
-                funs.push(Function::Print(ch));
+                text.push(ch);
             }
         }
 
         i += run_len;
     }
+
+    if !text.is_empty() {
+        funs.push(Function::Print(text.into()));
+    }
 }
 
-fn to_sgr(pen: &Pen) -> Function {
+fn to_sgr(pen: &Pen) -> Function<'static> {
     Function::Sgr(to_sgr_ops(pen))
 }
 
@@ -1743,6 +1753,10 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
+
+    fn print(ch: char) -> Function<'static> {
+        Print(String::from(ch).into())
+    }
 
     fn build_term(cols: usize, rows: usize, cx: usize, cy: usize, init: &str) -> Terminal {
         let mut term = Terminal::with_scrollback(cols, rows, None).unwrap();
@@ -1957,9 +1971,9 @@ mod tests {
                     // Addressing and scrolling must cover the whole new screen.
                     terminal.execute(Cup(1, 1));
                     assert_eq!(terminal.cursor().position(), Some((0, 0)));
-                    terminal.execute([Print('T'), Cup(rows as u16, 1)]);
+                    terminal.execute([print('T'), Cup(rows as u16, 1)]);
                     assert_eq!(terminal.cursor().position(), Some((0, rows - 1)));
-                    terminal.execute([Print('B'), Su(rows as u16)]);
+                    terminal.execute([print('B'), Su(rows as u16)]);
                     assert_eq!(terminal.screen().text(), vec![""; rows]);
 
                     // New margins expose whether origin mode survived the resize.
@@ -2545,7 +2559,7 @@ mod tests {
         DecModes::from(&modes[..])
     }
 
-    fn sgr(op: SgrOp) -> Function {
+    fn sgr(op: SgrOp) -> Function<'static> {
         Sgr(SgrOps::from(vec![op]))
     }
 
@@ -2629,7 +2643,7 @@ mod tests {
         assert_eq!(term.cursor().position().unwrap(), (3, 1));
         assert_eq!(text(&term), "abc\n   |");
 
-        term.execute([Print('d'), Lf]);
+        term.execute([print('d'), Lf]);
 
         assert_eq!(term.cursor().position().unwrap(), (4, 1));
         assert_eq!(text(&term), "   d\n    |");
@@ -2663,7 +2677,7 @@ mod tests {
         let mut term = Terminal::with_scrollback(4, 2, None).unwrap();
 
         term.feed("abc");
-        term.execute([Cr, Print('d')]);
+        term.execute([Cr, print('d')]);
 
         assert_eq!(term.cursor().position().unwrap(), (1, 0));
         assert_eq!(text(&term), "d|bc\n");
@@ -2692,7 +2706,7 @@ mod tests {
         assert_eq!(term.cursor().position().unwrap(), (0, 1));
         assert_eq!(text(&term), "abc\n|");
 
-        term.execute(Print('d'));
+        term.execute(print('d'));
 
         assert_eq!(text(&term), "abc\nd|");
     }
@@ -2828,7 +2842,7 @@ mod tests {
 
         assert_eq!(text(&term), "   |");
 
-        term.execute(Print('a'));
+        term.execute(print('a'));
 
         assert_eq!(text(&term), "   a|");
 
@@ -2976,7 +2990,7 @@ mod tests {
 
         assert_eq!(text(&term), "|\n");
 
-        term.execute([Print('A'), Rep(0)]);
+        term.execute([print('A'), Rep(0)]);
 
         assert_eq!(text(&term), "AA|\n");
 
@@ -2993,7 +3007,7 @@ mod tests {
     fn execute_rep_after_wide_char() {
         let mut term = build_term(20, 2, 0, 0, "");
 
-        term.execute([Print('ハ'), Rep(3)]);
+        term.execute([print('ハ'), Rep(3)]);
 
         assert_eq!(text(&term), "ハハハハ|\n");
     }
@@ -3002,7 +3016,7 @@ mod tests {
     fn execute_rep_after_moving_into_wide_char_tail() {
         let mut term = build_term(20, 2, 0, 0, "");
 
-        term.execute([Print('ハ'), Cub(1), Rep(3)]);
+        term.execute([print('ハ'), Cub(1), Rep(3)]);
 
         assert_eq!(text(&term), " ハハハ|\n");
     }
@@ -3011,13 +3025,11 @@ mod tests {
     fn dump_uses_rep_for_wide_char_runs() {
         let mut term = Engine::new((20, 2), None);
 
-        for ch in "ハハハハハハ".chars() {
-            term.execute_with(&Print(ch), &mut ());
-        }
+        term.execute_with(&Print("ハハハハハハ".into()), &mut ());
 
         let funs = term.dump();
 
-        assert_eq!(funs[..2], [Print('ハ'), Rep(5)]);
+        assert_eq!(funs[..2], [Print("ハ".into()), Rep(5)]);
     }
 
     #[test]
@@ -3355,7 +3367,7 @@ mod tests {
 
     #[test]
     fn execute_sc_rc_restores_pen_and_modes() {
-        fn assert_save_restore(save: Function, restore: Function) {
+        fn assert_save_restore(save: Function<'_>, restore: Function<'_>) {
             let mut term = Engine::new((4, 4), None);
 
             for function in [
@@ -3702,7 +3714,7 @@ mod tests {
         let mut term = Terminal::with_scrollback(4, 2, None).unwrap();
 
         term.feed("Aハz");
-        term.execute([Cub(1), Print('界')]);
+        term.execute([Cub(1), print('界')]);
 
         assert_eq!(term.cursor().position().unwrap(), (4, 0));
         assert_eq!(text(&term), "A 界|\n");
@@ -3726,7 +3738,7 @@ mod tests {
 
         term.execute(Decrst(dec_modes([DecMode::AutoWrap])));
         term.feed("Aハz");
-        term.execute([Cub(1), Print('界')]);
+        term.execute([Cub(1), print('界')]);
 
         assert_eq!(term.cursor().position().unwrap(), (3, 0));
         assert_eq!(text(&term), "A |界\n");
@@ -3749,7 +3761,7 @@ mod tests {
         let mut term = Terminal::with_scrollback(4, 2, None).unwrap();
 
         term.feed("abcz");
-        term.execute([Cup(1, 4), Print('界')]);
+        term.execute([Cup(1, 4), print('界')]);
 
         assert_eq!(term.cursor().position().unwrap(), (2, 1));
         assert_eq!(text(&term), "abcz\n界|");
@@ -4139,11 +4151,11 @@ mod tests {
         let mut term = Engine::new((4, 3), None);
 
         for function in [
-            Print('a'),
-            Print('b'),
+            print('a'),
+            print('b'),
             Decset(dec_modes([DecMode::AltScreenBuffer])),
-            Print('x'),
-            Print('y'),
+            print('x'),
+            print('y'),
             Decrst(dec_modes([DecMode::TextCursorEnable])),
             Sm(ansi_modes([AnsiMode::Insert, AnsiMode::NewLine])),
             Decrst(dec_modes([DecMode::AutoWrap])),
@@ -4255,19 +4267,19 @@ mod tests {
         let mut term = Engine::new((4, 3), None);
 
         for function in [
-            Print('a'),
-            Print('b'),
+            print('a'),
+            print('b'),
             Cr,
             Lf,
-            Print('c'),
-            Print('d'),
+            print('c'),
+            print('d'),
             sgr(SetBoldIntensity),
             Decset(dec_modes([
                 DecMode::CursorKeys,
                 DecMode::SaveCursorAltScreenBuffer,
             ])),
-            Print('z'),
-            Print('z'),
+            print('z'),
+            print('z'),
             Decsc,
             Ris,
         ] {

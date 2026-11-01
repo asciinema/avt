@@ -32,7 +32,7 @@ fn cells(rows: Range<usize>) -> impl Iterator<Item = Slot> {
 }
 
 struct Step {
-    operation: Operation,
+    operation: Operation<'static>,
     reads: Vec<Slot>,
     writes: Vec<Slot>,
 }
@@ -45,7 +45,7 @@ struct Trace {
 impl Observer for Trace {
     type Output = ();
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         let terminal = context.terminal();
         assert_eq!(terminal.size(), (COLS, ROWS));
         assert_eq!(terminal.active_screen_kind(), ScreenKind::Primary);
@@ -66,17 +66,22 @@ impl Observer for Trace {
                 (vec![], vec![Slot::Foreground])
             }
 
-            Operation::Function(Function::Print(ch)) if (' '..='~').contains(ch) => {
+            Operation::Function(Function::Print(text))
+                if text.bytes().all(|ch| (b' '..=b'~').contains(&ch)) =>
+            {
                 let Cursor { row, col, .. } = terminal.cursor();
 
                 assert!(
-                    row < ROWS && col < COLS - 1,
+                    row < ROWS && col + text.len() < COLS,
                     "printing must stay clear of wrapping"
                 );
 
                 (
                     vec![Slot::Cursor, Slot::Foreground],
-                    vec![Slot::Cell { row, col }, Slot::Cursor],
+                    (col..col + text.len())
+                        .map(|col| Slot::Cell { row, col })
+                        .chain([Slot::Cursor])
+                        .collect(),
                 )
             }
 
@@ -92,7 +97,7 @@ impl Observer for Trace {
         };
 
         self.steps.push(Step {
-            operation: operation.clone(),
+            operation: operation.clone().into_owned(),
             reads,
             writes,
         });
@@ -165,5 +170,5 @@ fn main() {
         println!("{:?}", trace.steps[index].operation);
     }
 
-    println!("overwritten 'x' retained for its cursor advance");
+    println!("print run 'xA' retained for its surviving A and cursor advance");
 }

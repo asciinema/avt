@@ -67,6 +67,19 @@ pub fn criterion_benchmark(c: &mut Criterion) {
         b.iter_batched(gen_newlines(1000), run_feed, BatchSize::SmallInput)
     });
 
+    for (name, text) in [
+        ("plain", "abcdefghijklmnopqrstuvwxyz012345".repeat(2048)),
+        ("unicode", "hé界🦀".repeat(4096)),
+    ] {
+        c.bench_function(&format!("terminal: feed {name}"), |b| {
+            b.iter_batched(
+                || (Terminal::new(100, 24).unwrap(), vec![text.clone()]),
+                run_feed,
+                BatchSize::SmallInput,
+            )
+        });
+    }
+
     c.bench_function("terminal: dump", |b| {
         b.iter_batched(setup_dump, run_dump, BatchSize::SmallInput)
     });

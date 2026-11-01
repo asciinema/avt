@@ -180,7 +180,7 @@ impl ShellTracker {
 impl Observer for ShellTracker {
     type Output = Vec<ShellEvent>;
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         let Operation::Function(function) = operation else {
             return;
         };

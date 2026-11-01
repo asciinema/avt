@@ -252,7 +252,7 @@ mod tests {
         impl Observer for WrapObserver {
             type Output = ();
 
-            fn after(&mut self, context: &mut Observation<'_>, _: &Operation) {
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
                 let terminal = context.terminal();
                 assert_eq!(pos(terminal, &self.source), Some((0, -1)));
                 assert_eq!(pos(terminal, &self.boundary), Some((0, 0)));

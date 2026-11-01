@@ -54,11 +54,16 @@ impl<'a> Observation<'a> {
 /// resizes, and receive the same operation. During execution, `resized` and
 /// `dirty` report effects without exposing partially updated terminal state.
 /// Inspect the terminal in `after`, which runs before eviction.
+/// A print action can contain many characters; its hooks surround the entire
+/// run. Parser run boundaries depend on input fragmentation and the run-size
+/// limit. Eviction completes between actions, including consecutive print runs.
+/// To retain an operation beyond a callback, store
+/// `operation.clone().into_owned()` in an `Operation<'static>` collection.
 pub trait Observer {
     type Output;
 
     fn begin(&mut self, _context: &mut Observation<'_>) {}
-    fn before(&mut self, _context: &mut Observation<'_>, _operation: &Operation) {}
+    fn before(&mut self, _context: &mut Observation<'_>, _operation: &Operation<'_>) {}
 
     /// Actual geometry changes from caller-requested resize actions. Runs
     /// before dirty notifications referring to the new dimensions. An
@@ -70,7 +75,7 @@ pub trait Observer {
     /// contents may compare equal. Cursor-only changes are not included.
     fn dirty(&mut self, _rows: Range<usize>) {}
 
-    fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation) {}
+    fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation<'_>) {}
 
     /// A primary line evicted by the scrollback limit, immediately after removal.
     /// Resizing can evict primary lines while the alternate screen is active.
@@ -105,7 +110,7 @@ impl<O: Observer + ?Sized> Observer for &mut O {
         (**self).begin(context);
     }
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         (**self).before(context, operation);
     }
 
@@ -117,7 +122,7 @@ impl<O: Observer + ?Sized> Observer for &mut O {
         (**self).dirty(rows);
     }
 
-    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         (**self).after(context, operation);
     }
 
@@ -138,7 +143,7 @@ impl<A: Observer, B: Observer> Observer for (A, B) {
         self.1.begin(context);
     }
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         self.0.before(context, operation);
         self.1.before(context, operation);
     }
@@ -153,7 +158,7 @@ impl<A: Observer, B: Observer> Observer for (A, B) {
         self.1.dirty(rows);
     }
 
-    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         self.0.after(context, operation);
         self.1.after(context, operation);
     }

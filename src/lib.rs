@@ -129,7 +129,8 @@ impl Terminal {
 
     /// Processes input with the supplied observer and returns its result.
     /// Fragment boundaries do not finish parsing, flush analysis, or invoke
-    /// additional begin/end hooks.
+    /// additional begin/end hooks. They can split print runs, so operation hooks
+    /// may differ with input fragmentation even when the terminal state agrees.
     pub fn feed_with<I, Kind, O>(&mut self, input: I, mut observer: O) -> O::Output
     where
         I: IntoInputs<Kind>,
@@ -145,29 +146,25 @@ impl Terminal {
     }
 
     fn feed_fragment<O: Observer>(&mut self, input: Input<'_>, observer: &mut O) {
-        match input {
-            Input::Text(text) => {
-                for ch in text.chars() {
-                    self.feed_char(ch, observer);
-                }
-            }
+        let mut encoded = [0; 4];
 
-            Input::Char(ch) => self.feed_char(ch, observer),
-        }
-    }
+        let mut text = match input {
+            Input::Text(text) => text,
+            Input::Char(ch) => ch.encode_utf8(&mut encoded),
+        };
 
-    fn feed_char<O: Observer>(&mut self, ch: char, observer: &mut O) {
-        if let Some(function) = self.parser.feed(ch) {
+        while let Some(function) = self.parser.next_function(&mut text) {
             self.apply(Operation::Function(function), observer);
         }
     }
 
-    /// Executes a function, operation, or flat iterable of either. Owned values
-    /// are moved into execution; use `.iter().cloned()` to execute operations
+    /// Executes a function, operation, or flat iterable of either. Actions are
+    /// moved into execution, but their print text may borrow input.
+    /// Use `.iter().cloned()` to execute operations
     /// from a borrowed collection. Pending text-parser state is preserved.
-    pub fn execute<I, Kind>(&mut self, operations: I)
+    pub fn execute<'a, I, Kind>(&mut self, operations: I)
     where
-        I: IntoOperations<Kind>,
+        I: IntoOperations<'a, Kind>,
     {
         self.execute_with(operations, ());
     }
@@ -176,9 +173,9 @@ impl Terminal {
     /// including for an empty iterable. Actions are processed incrementally.
     /// Before requesting the next operation, any primary-buffer lines removed
     /// to enforce the scrollback limit are passed to [`Observer::evicted`].
-    pub fn execute_with<I, Kind, O>(&mut self, operations: I, mut observer: O) -> O::Output
+    pub fn execute_with<'a, I, Kind, O>(&mut self, operations: I, mut observer: O) -> O::Output
     where
-        I: IntoOperations<Kind>,
+        I: IntoOperations<'a, Kind>,
         O: Observer,
     {
         observer.begin(&mut Observation::new(self));
@@ -209,7 +206,7 @@ impl Terminal {
     }
 
     #[inline]
-    fn apply<O: Observer>(&mut self, mut operation: Operation, observer: &mut O) {
+    fn apply<O: Observer>(&mut self, mut operation: Operation<'_>, observer: &mut O) {
         if let Operation::Resize { cols, rows } = &mut operation {
             *cols = (*cols).max(1);
             *rows = (*rows).max(1);
@@ -318,6 +315,10 @@ mod tests {
 
     const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
     const SUBMIT: &str = "\x1b]133;C\x07";
+
+    fn print(ch: char) -> Function<'static> {
+        Function::Print(String::from(ch).into())
+    }
 
     #[test]
     fn cursor_position_is_none_when_hidden() {
@@ -687,7 +688,7 @@ mod tests {
         assert_dump_equivalent(&original, &restored);
     }
 
-    fn gen_functions(max_len: usize) -> impl Strategy<Value = Vec<Function>> {
+    fn gen_functions(max_len: usize) -> impl Strategy<Value = Vec<Function<'static>>> {
         prop::collection::vec(gen_function(), 0..=max_len)
     }
 
@@ -699,7 +700,7 @@ mod tests {
         prop_oneof![9 => 0..=20u16, 1 => any::<u16>()]
     }
 
-    fn gen_function() -> impl Strategy<Value = Function> {
+    fn gen_function() -> impl Strategy<Value = Function<'static>> {
         use crate::parser::{
             AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, Osc, SgrOps, ShellIntegration,
             TbcScope, XtwinopsOp,
@@ -708,7 +709,7 @@ mod tests {
 
         let counted = (
             prop::sample::select(vec![
-                Cbt as fn(u16) -> Function,
+                Cbt as fn(u16) -> Function<'static>,
                 Cha,
                 Cht,
                 Cnl,
@@ -754,7 +755,8 @@ mod tests {
         // Favor printing so independently selected edits and modes encounter
         // populated rows. REP stays bounded because it performs every repeat.
         prop_oneof![
-            20 => gen_char().prop_map(Print),
+            20 => prop::collection::vec(gen_char(), 1..=16)
+                .prop_map(|chars| Print(chars.into_iter().collect::<String>().into())),
             10 => counted,
             1 => (0..=20u16).prop_map(Rep),
             4 => prop::sample::select(vec![
@@ -855,7 +857,7 @@ mod tests {
         ]
     }
 
-    fn execute_and_verify(terminal: &mut Terminal, functions: &[Function]) {
+    fn execute_and_verify(terminal: &mut Terminal, functions: &[Function<'_>]) {
         for function in functions {
             terminal.execute(function.clone());
             terminal.engine.verify();
@@ -1025,7 +1027,7 @@ mod tests {
             // wrap check the reset modes through their observable behavior.
             terminal.execute(Function::Cup(1, cols as u16));
             prop_assert_eq!(terminal.cursor().position(), Some((cols - 1, 0)));
-            terminal.execute(Function::Print('q'));
+            terminal.execute(print('q'));
             prop_assert_eq!(terminal.cursor().position(), Some((cols, 0)));
             let line = terminal.screen().line(0).unwrap();
             prop_assert_eq!(line.cells()[cols - 1].char(), 'q');
@@ -1165,7 +1167,7 @@ mod tests {
         after: Vec<crate::Line>,
         size_before: (usize, usize),
         size_after: (usize, usize),
-        operations: Vec<Operation>,
+        operations: Vec<Operation<'static>>,
         hooks: Vec<&'static str>,
         notifications: Vec<Notification>,
     }
@@ -1176,7 +1178,7 @@ mod tests {
         number: usize,
         before: Vec<crate::Line>,
         size_before: (usize, usize),
-        operations: Vec<Operation>,
+        operations: Vec<Operation<'static>>,
         hooks: Vec<&'static str>,
         active: bool,
         in_action: bool,
@@ -1212,12 +1214,12 @@ mod tests {
             self.hooks.push("begin");
         }
 
-        fn before(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+        fn before(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
             self.check_order();
             assert!(self.active);
             assert!(!self.in_action);
             self.in_action = true;
-            self.operations.push(operation.clone());
+            self.operations.push(operation.clone().into_owned());
             self.hooks.push("before");
         }
 
@@ -1233,7 +1235,7 @@ mod tests {
             self.notifications.push(Notification::Dirty(rows));
         }
 
-        fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+        fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
             self.check_order();
             assert!(self.active);
             assert!(self.in_action);
@@ -1290,8 +1292,24 @@ mod tests {
             let mut actual = Terminal::new(16, 3).unwrap();
             let expected_report = expected.feed_with(text, Calls::default());
             let report = actual.feed_with(input, Calls::default());
-            assert_eq!(report, expected_report);
+            assert_eq!(report.before, expected_report.before);
+            assert_eq!(report.after, expected_report.after);
+            assert_eq!(report.size_before, expected_report.size_before);
+            assert_eq!(report.size_after, expected_report.size_after);
+            assert_eq!(report.notifications, expected_report.notifications);
             assert_eq!(report.number, 1);
+
+            let hooks: Vec<_> = core::iter::once("begin")
+                .chain(report.operations.iter().flat_map(|_| ["before", "after"]))
+                .chain(["end"])
+                .collect();
+
+            assert_eq!(report.hooks, hooks);
+            actual.engine.assert_execution_equivalent(&expected.engine);
+
+            let mut replay = Terminal::new(16, 3).unwrap();
+            replay.execute(report.operations);
+            replay.engine.assert_execution_equivalent(&actual.engine);
 
             actual
                 .parser
@@ -1336,6 +1354,76 @@ mod tests {
     }
 
     #[test]
+    fn observers_surround_print_runs_at_fragment_boundaries() {
+        let mut terminal = Terminal::new(16, 2).unwrap();
+        let report = terminal.feed_with(["abc", "dé界"], Calls::default());
+
+        assert_eq!(
+            report.operations,
+            [
+                Function::Print("abc".into()).into(),
+                Function::Print("dé界".into()).into()
+            ]
+        );
+
+        assert_eq!(
+            report.hooks,
+            ["begin", "before", "after", "before", "after", "end"]
+        );
+    }
+
+    #[test]
+    fn long_print_runs_evict_between_actions_and_preserve_text() {
+        #[derive(Default)]
+        struct Retention {
+            runs: usize,
+            evicted: usize,
+        }
+
+        impl Observer for Retention {
+            type Output = (usize, usize);
+
+            fn before(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                assert_eq!(context.terminal().primary_screen().all_lines().count(), 2);
+            }
+
+            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+                let Operation::Function(Function::Print(text)) = operation else {
+                    panic!("expected print run");
+                };
+
+                assert!(!text.is_empty());
+                assert!(text.len() <= 4096);
+                assert!(context.terminal().primary_screen().all_lines().count() <= 4098);
+                self.runs += 1;
+            }
+
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+                self.evicted += 1;
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+                (self.runs, self.evicted)
+            }
+        }
+
+        let text = "ab界🦀".repeat(2048);
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        let mut transcript = Transcript::new();
+
+        let ((runs, evicted), mut lines) =
+            terminal.feed_with(&text, (Retention::default(), &mut transcript));
+
+        assert!(runs > 1);
+        assert!(evicted > 0);
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, [text.as_str()]);
+        let mut split = Terminal::new(8, 2).unwrap();
+        split.feed(text.chars());
+        terminal.engine.assert_execution_equivalent(&split.engine);
+    }
+
+    #[test]
     fn feed_processes_owned_chunks_before_advancing_iterator() {
         use std::cell::Cell;
 
@@ -1351,7 +1439,7 @@ mod tests {
                 assert_eq!(self.produced.get(), 0);
             }
 
-            fn after(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+            fn after(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
                 assert!(matches!(operation, Operation::Function(Function::Print(_))));
                 self.printed += 1;
                 assert_eq!(self.produced.get(), self.printed);
@@ -1665,7 +1753,7 @@ mod tests {
     fn observed_functions_and_host_resizes_form_one_replayable_stream() {
         enum Event {
             Output(&'static str),
-            Action(Operation),
+            Action(Operation<'static>),
         }
 
         let mut terminal = Terminal::new(12, 5).unwrap();
@@ -1707,7 +1795,7 @@ mod tests {
         impl Observer for Evictions {
             type Output = Vec<String>;
 
-            fn after(&mut self, context: &mut Observation<'_>, _: &Operation) {
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
                 for anchor in &self.anchors {
                     assert!(context.resolve(anchor).is_some());
                 }
@@ -2089,9 +2177,9 @@ mod tests {
 
     #[test]
     fn all_operation_forms_share_one_execution_lifecycle() {
-        fn check<I, Kind>(actions: I, text: &str)
+        fn check<'a, I, Kind>(actions: I, text: &str)
         where
-            I: crate::IntoOperations<Kind>,
+            I: crate::IntoOperations<'a, Kind>,
         {
             let mut expected = Terminal::new(16, 3).unwrap();
             let mut actual = Terminal::new(16, 3).unwrap();
@@ -2100,9 +2188,9 @@ mod tests {
             assert_eq!(report, reference);
         }
 
-        check(Function::Print('x'), "x");
-        check(Operation::Function(Function::Print('x')), "x");
-        let functions = [Function::Print('x'), Function::Cr, Function::Lf];
+        check(print('x'), "x");
+        check(Operation::Function(print('x')), "x");
+        let functions = [print('x'), Function::Cr, Function::Lf];
         check(functions.clone(), "x\r\n");
         check(functions.to_vec(), "x\r\n");
         check(functions.iter().cloned(), "x\r\n");
@@ -2120,17 +2208,14 @@ mod tests {
 
         let mut parser = crate::Parser::new();
 
-        check(
-            "\x1b[31mhello".chars().filter_map(|ch| parser.feed(ch)),
-            "\x1b[31mhello",
-        );
+        check(parser.feed("\x1b[31mhello"), "\x1b[31mhello");
     }
 
     #[test]
     fn explicit_execution_preserves_unfinished_text_parsing() {
         let mut terminal = Terminal::new(8, 2).unwrap();
         terminal.feed("\x1b[31");
-        terminal.execute(Function::Print('x'));
+        terminal.execute(print('x'));
         terminal.feed("mY");
         let cells = terminal.screen().line(0).unwrap().cells();
         assert_eq!(cells[0].char(), 'x');
@@ -2180,7 +2265,7 @@ mod tests {
         impl Observer for Parameters {
             type Output = usize;
 
-            fn before(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+            fn before(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
                 let Operation::Function(Function::Sgr(ops)) = operation else {
                     panic!("expected SGR")
                 };
@@ -2189,7 +2274,7 @@ mod tests {
                 self.seen += 1;
             }
 
-            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
                 self.before(context, operation);
             }
 
@@ -2210,11 +2295,52 @@ mod tests {
     }
 
     #[test]
+    fn feed_hooks_borrow_print_text_and_record_owned_operations() {
+        use alloc::borrow::Cow;
+
+        #[derive(Default)]
+        struct BorrowedPrints(Vec<Operation<'static>>);
+
+        impl Observer for BorrowedPrints {
+            type Output = ();
+
+            fn before(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
+                assert!(matches!(
+                    operation,
+                    Operation::Function(Function::Print(Cow::Borrowed(_)))
+                ));
+
+                self.0.push(operation.clone().into_owned());
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) {}
+        }
+
+        let mut terminal = Terminal::new(16, 2).unwrap();
+        let mut observer = BorrowedPrints::default();
+        terminal.feed_with(String::from("hé"), &mut observer);
+        terminal.feed_with('界', &mut observer);
+        terminal.feed_with([String::from("🦀"), String::from("!")], &mut observer);
+        assert_eq!(terminal.screen().text()[0], "hé界🦀!");
+
+        for operation in &observer.0 {
+            assert!(matches!(
+                operation,
+                Operation::Function(Function::Print(Cow::Owned(_)))
+            ));
+        }
+
+        let mut replay = Terminal::new(16, 2).unwrap();
+        replay.execute(observer.0);
+        terminal.engine.assert_execution_equivalent(&replay.engine);
+    }
+
+    #[test]
     fn insert_mode_wrap_reports_both_changed_rows() {
         let mut terminal = Terminal::new(2, 2).unwrap();
         let mut dirty = DirtyRows::new();
         terminal.feed_with("\x1b[4h界\x1b[C", &mut dirty);
-        let rows = terminal.execute_with(Function::Print('界'), &mut dirty);
+        let rows = terminal.execute_with(print('界'), &mut dirty);
         assert_eq!(rows, [0, 1]);
         assert_eq!(terminal.screen().line(0).unwrap().text(), "  ");
         assert_eq!(terminal.screen().line(1).unwrap().text(), "界");
@@ -2353,9 +2479,9 @@ mod tests {
         let sizes = terminal.execute_with(
             [
                 Function::Cup(6, 1).into(),
-                Function::Print('x').into(),
+                print('x').into(),
                 Operation::Resize { cols: 8, rows: 2 },
-                Function::Print('y').into(),
+                print('y').into(),
                 Operation::Resize { cols: 8, rows: 2 },
             ],
             Geometry::default(),
@@ -2368,7 +2494,7 @@ mod tests {
                 Operation::Resize { cols: 8, rows: 5 },
                 Operation::Resize { cols: 4, rows: 5 },
                 Function::Cup(5, 1).into(),
-                Function::Print('z').into(),
+                print('z').into(),
             ],
             Geometry::default(),
         );

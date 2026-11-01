@@ -6,10 +6,25 @@ Each section describes changes from the preceding version. If you skip versions,
 read the relevant sections oldest-first. Examples use the API of their section.
 This guide includes Git-tagged versions as well as crates.io releases.
 
-[0.19](#019) · [0.18](#018) · [0.17](#017) · [0.16](#016) ·
+[Unreleased](#unreleased) · [0.19](#019) · [0.18](#018) · [0.17](#017) · [0.16](#016) ·
 [0.15](#015) · [0.14](#014) · [0.13](#013) · [0.12](#012) ·
 [0.11](#011) · [0.10](#010) · [0.9](#09) · [0.8](#08) ·
 [0.7](#07) · [0.6](#06) · [0.5](#05) · [0.1–0.4](#0104-legacy-vt)
+
+## Unreleased
+
+### Parser runs and operation lifetimes
+
+- Replace `text.chars().filter_map(|ch| parser.feed(ch))` with `parser.feed(text)`.
+  Exhaust the returned iterator to consume the entire fragment.
+- `Function<'a>::Print` holds `Cow<'a, str>` instead of `char`.
+  Construct it with `Function::Print(text.into())` for `&str` or `String`.
+  Parsed runs borrow the input and stop at controls, fragment boundaries, or
+  4096 UTF-8 bytes. Observer `before`/`after` hooks surround whole runs.
+- `Operation<'a>` and `IntoOperations<'a, Kind>` carry the text lifetime.
+  Recording observers should store `Operation<'static>` using
+  `operation.clone().into_owned()`. Parser consumers can collect owned functions
+  with `parser.feed(text).map(Function::into_owned)`.
 
 ## 0.19
 
