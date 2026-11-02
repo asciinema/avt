@@ -233,6 +233,8 @@ impl Terminal {
     }
 
     fn evict<O: Observer>(&mut self, observer: &mut O) {
+        self.engine.evict_alternate();
+
         while let Some(line) = self.engine.pop_evicted() {
             observer.evicted(&mut Observation::new(self), &line);
         }
@@ -2152,6 +2154,57 @@ mod tests {
             let pending = Pending { anchor, evicted: 0 };
             let evicted = terminal.feed_with(["aa\r\n", "bb\r\n", switch], pending);
             assert_eq!(evicted, if alternate { 0 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn alternate_history_is_removed_before_primary_eviction() {
+        #[derive(Default)]
+        struct Evictions {
+            alternate: Option<crate::Anchor>,
+            lines: Vec<String>,
+        }
+
+        impl Observer for Evictions {
+            type Output = Vec<String>;
+
+            fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+                if matches!(operation, Operation::Function(Function::Print(text)) if text == "alt")
+                {
+                    self.alternate = Some(context.anchor_at_cursor());
+                }
+            }
+
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                assert!(self.lines.is_empty());
+
+                if let Some(anchor) = &self.alternate {
+                    assert!(context.resolve(anchor).is_some());
+                    assert!(anchor.is_registered());
+                }
+            }
+
+            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+                let anchor = self.alternate.as_ref().unwrap();
+                assert!(context.resolve(anchor).is_none());
+                assert!(!anchor.is_registered());
+                self.lines.push(line.text());
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+                core::mem::take(&mut self.lines)
+            }
+        }
+
+        for switch in ["", "\x1b[?1047l"] {
+            let mut terminal = Terminal::new(4, 1).unwrap();
+
+            let lines = terminal.feed_with(
+                ["one\r\ntwo\r\n", "\x1b[?1047h", "alt", "\r\n", switch],
+                Evictions::default(),
+            );
+
+            assert_eq!(lines, ["one ", "two "]);
         }
     }
 

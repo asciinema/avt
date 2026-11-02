@@ -393,10 +393,14 @@ impl Engine {
         self.cursor
     }
 
-    pub fn pop_evicted(&mut self) -> Option<Line> {
+    #[inline]
+    pub fn evict_alternate(&mut self) {
         // A batch can scroll the alternate buffer and switch away before cleanup.
         while self.alternate_buffer.pop_evicted().is_some() {}
+    }
 
+    #[inline]
+    pub fn pop_evicted(&mut self) -> Option<Line> {
         self.primary_buffer.pop_evicted()
     }
 

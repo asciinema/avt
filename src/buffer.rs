@@ -17,7 +17,6 @@ pub(crate) struct Buffer {
     pub cols: usize,
     pub rows: usize,
     scrollback_limit: Option<usize>,
-    trim_needed: bool,
     // The first retained row continues the last evicted row's logical line.
     front_wrapped: bool,
 }
@@ -49,7 +48,6 @@ impl Buffer {
             cols,
             rows,
             scrollback_limit,
-            trim_needed: false,
             front_wrapped: false,
         }
     }
@@ -218,8 +216,6 @@ impl Buffer {
             self.visible_rows_mut(range).rotate_left(n);
             self.clear((end - n)..end, pen);
         }
-
-        self.trim_needed = true;
     }
 
     /// Counts visible rows through the last occupied row or soft-wrap terminator.
@@ -364,7 +360,6 @@ impl Buffer {
 
         self.cols = new_cols;
         self.rows = new_rows;
-        self.trim_needed = true;
 
         if reflow_enabled {
             *saved = saved_absolute.map(|(col, row)| {
@@ -398,19 +393,16 @@ impl Buffer {
         &mut self.lines.make_contiguous()[offset + range.start..offset + range.end]
     }
 
+    #[inline]
     pub fn pop_evicted(&mut self) -> Option<Line> {
-        if self.trim_needed {
-            if self
-                .scrollback_limit
-                .is_some_and(|limit| self.lines.len() - self.rows > limit)
-            {
-                let line = self.lines.pop_front()?;
-                self.front_wrapped = line.wrapped;
+        if self
+            .scrollback_limit
+            .is_some_and(|limit| self.lines.len() - self.rows > limit)
+        {
+            let line = self.lines.pop_front()?;
+            self.front_wrapped = line.wrapped;
 
-                return Some(line);
-            }
-
-            self.trim_needed = false;
+            return Some(line);
         }
 
         None
@@ -438,8 +430,7 @@ impl Buffer {
         assert_eq!((self.cols, self.rows), (other.cols, other.rows));
         assert_eq!(self.scrollback_limit, other.scrollback_limit);
         assert_eq!(self.front_wrapped, other.front_wrapped);
-        // Line equality excludes tracking registrations. Allocation layout and
-        // the trim optimization flag are not part of execution equivalence.
+        // Line equality excludes tracking registrations and allocation layout.
         assert_eq!(self.lines, other.lines);
     }
 
