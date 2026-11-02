@@ -26,6 +26,17 @@ This guide includes Git-tagged versions as well as crates.io releases.
   `operation.clone().into_owned()`. Parser consumers can collect owned functions
   with `parser.feed(text).map(Function::into_owned)`.
 
+### Batch retention
+
+- Scrollback eviction now runs at the end of each `feed`, `execute`, or `resize`
+  call, before `Observer::end`. Excess history remains available within the call
+  and can temporarily exceed the retention limit.
+- Preserve call boundaries for exact replay, especially when batching resizes.
+  Split calls when finer eviction granularity is needed.
+- `Observer::evicted` sees the final execution state during cleanup, not the
+  state of the last operation. Prune evicted anchor registrations afterward.
+  RIS discards content without eviction callbacks; inspect it in `before`.
+
 ## 0.19
 
 Requires **Rust 1.86**. Replace both `avt::Vt` and `avt::terminal::Terminal` with

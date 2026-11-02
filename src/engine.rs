@@ -394,9 +394,8 @@ impl Engine {
     }
 
     pub fn pop_evicted(&mut self) -> Option<Line> {
-        if self.active == ScreenKind::Alternate {
-            while self.alternate_buffer.pop_evicted().is_some() {}
-        }
+        // A batch can scroll the alternate buffer and switch away before cleanup.
+        while self.alternate_buffer.pop_evicted().is_some() {}
 
         self.primary_buffer.pop_evicted()
     }

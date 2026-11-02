@@ -56,9 +56,16 @@ impl<'a> Observation<'a> {
 /// Inspect the terminal in `after`, which runs before eviction.
 /// A print action can contain many characters; its hooks surround the entire
 /// run. Parser run boundaries depend on input fragmentation and the run-size
-/// limit. Eviction completes between actions, including consecutive print runs.
-/// To retain an operation beyond a callback, store
-/// `operation.clone().into_owned()` in an `Operation<'static>` collection.
+/// limit.
+///
+/// Eviction runs after all actions and before `end`. Until then, excess history
+/// remains inspectable and anchorable; later actions can reflow it into view.
+/// Limits apply at call boundaries, not between fragments or to peak memory.
+/// Use separate calls for earlier eviction callbacks.
+///
+/// Retain callback operations with `operation.clone().into_owned()` as
+/// `Operation<'static>`. Preserve call boundaries for exact replay: eviction
+/// can affect later operations, especially resizing.
 pub trait Observer {
     type Output;
 
@@ -79,8 +86,13 @@ pub trait Observer {
 
     /// A primary line evicted by the scrollback limit, immediately after removal.
     /// Resizing can evict primary lines while the alternate screen is active.
+    /// Runs after all actions in the call; the context reflects their final state
+    /// with eviction in progress, not the action that moved this line into history.
     /// Lines awaiting eviction remain available for inspection. All observers
     /// borrow the original line; it is dropped after their callbacks return.
+    /// Only lines still exceeding the limit at call end are evicted. Destructive
+    /// operations such as RIS can discard content earlier without this callback;
+    /// inspect that content in `before` if it must be preserved.
     fn evicted(&mut self, _context: &mut Observation<'_>, _line: &Line) {}
 
     /// Runs after all evictions and returns the per-call report, which may be `()`.

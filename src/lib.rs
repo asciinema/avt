@@ -11,7 +11,7 @@
 //!
 //! Stateful observers should be reused across calls when collecting
 //! dirty rows, transcripts, or shell integration events. Feed boundaries
-//! do not finish parsing or logical lines.
+//! enforce scrollback retention, but do not finish parsing or logical lines.
 //!
 //! ```
 //! use avt::observer::DirtyRows;
@@ -100,6 +100,8 @@ impl Terminal {
 
     /// Creates a terminal with zero (`Some(0)`), bounded (`Some(limit)`), or
     /// unlimited (`None`) primary scrollback.
+    /// Limits are enforced at the end of each feed, execute, or resize call.
+    /// History can temporarily exceed the limit while processing a call.
     /// Returns `InvalidSize` if either dimension is zero.
     pub fn with_scrollback(
         cols: usize,
@@ -131,6 +133,7 @@ impl Terminal {
     /// Fragment boundaries do not finish parsing, flush analysis, or invoke
     /// additional begin/end hooks. They can split print runs, so operation hooks
     /// may differ with input fragmentation even when the terminal state agrees.
+    /// Eviction follows the entire input; see [`Observer`] for callback ordering.
     pub fn feed_with<I, Kind, O>(&mut self, input: I, mut observer: O) -> O::Output
     where
         I: IntoInputs<Kind>,
@@ -141,6 +144,8 @@ impl Terminal {
         for item in input.into_inputs() {
             self.feed_fragment(item.as_input(), &mut observer);
         }
+
+        self.evict(&mut observer);
 
         observer.end(&mut Observation::new(self))
     }
@@ -171,8 +176,8 @@ impl Terminal {
 
     /// Executes operations with the supplied observer and returns its result,
     /// including for an empty iterable. Actions are processed incrementally.
-    /// Before requesting the next operation, any primary-buffer lines removed
-    /// to enforce the scrollback limit are passed to [`Observer::evicted`].
+    /// Eviction runs after the iterator is exhausted. See [`Observer`] for callback
+    /// ordering and call-boundary requirements for exact replay.
     pub fn execute_with<'a, I, Kind, O>(&mut self, operations: I, mut observer: O) -> O::Output
     where
         I: IntoOperations<'a, Kind>,
@@ -183,6 +188,8 @@ impl Terminal {
         for operation in operations.into_operations() {
             self.apply(operation.into(), &mut observer);
         }
+
+        self.evict(&mut observer);
 
         observer.end(&mut Observation::new(self))
     }
@@ -223,7 +230,6 @@ impl Terminal {
         }
 
         observer.after(&mut Observation::new(self), &operation);
-        self.evict(observer);
     }
 
     fn evict<O: Observer>(&mut self, observer: &mut O) {
@@ -1373,18 +1379,19 @@ mod tests {
     }
 
     #[test]
-    fn long_print_runs_evict_between_actions_and_preserve_text() {
-        #[derive(Default)]
+    fn long_print_runs_evict_at_call_end_and_preserve_text() {
         struct Retention {
             runs: usize,
+            printed: usize,
+            expected: usize,
             evicted: usize,
         }
 
         impl Observer for Retention {
             type Output = (usize, usize);
 
-            fn before(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
-                assert_eq!(context.terminal().primary_screen().all_lines().count(), 2);
+            fn before(&mut self, _: &mut Observation<'_>, _: &Operation<'_>) {
+                assert_eq!(self.evicted, 0);
             }
 
             fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
@@ -1394,15 +1401,19 @@ mod tests {
 
                 assert!(!text.is_empty());
                 assert!(text.len() <= 4096);
-                assert!(context.terminal().primary_screen().all_lines().count() <= 4098);
+                assert!(context.terminal().primary_screen().all_lines().count() > 2);
+                self.printed += text.chars().count();
                 self.runs += 1;
             }
 
             fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+                assert_eq!(self.printed, self.expected);
                 self.evicted += 1;
             }
 
-            fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+            fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
+                assert_eq!(context.terminal().primary_screen().all_lines().count(), 2);
+
                 (self.runs, self.evicted)
             }
         }
@@ -1411,8 +1422,14 @@ mod tests {
         let mut terminal = Terminal::new(8, 2).unwrap();
         let mut transcript = Transcript::new();
 
-        let ((runs, evicted), mut lines) =
-            terminal.feed_with(&text, (Retention::default(), &mut transcript));
+        let retention = Retention {
+            runs: 0,
+            printed: 0,
+            expected: text.chars().count(),
+            evicted: 0,
+        };
+
+        let ((runs, evicted), mut lines) = terminal.feed_with(&text, (retention, &mut transcript));
 
         assert!(runs > 1);
         assert!(evicted > 0);
@@ -1988,7 +2005,7 @@ mod tests {
     }
 
     #[test]
-    fn eviction_before_buffer_switch_is_independent_of_feed_boundaries() {
+    fn buffer_switch_preserves_retention_across_feed_boundaries() {
         let mut batched = Terminal::new(12, 5).unwrap();
         let mut split = Terminal::new(12, 5).unwrap();
         batched.feed("\x1b[2M\x1b[?1049h");
@@ -2003,6 +2020,139 @@ mod tests {
         batched.engine.assert_execution_equivalent(&split.engine);
         batched.parser.assert_continuation_equivalent(&split.parser);
         assert_eq!(batched.cursor().position(), Some((0, 0)));
+    }
+
+    #[test]
+    fn batched_resizes_can_restore_excess_history_and_anchors() {
+        for alternate in [false, true] {
+            let mut batched = Terminal::new(4, 3).unwrap();
+            let mut separate = Terminal::new(4, 3).unwrap();
+            let anchor = batched.anchor_at_cursor();
+
+            for terminal in [&mut batched, &mut separate] {
+                terminal.feed("aa\r\nbb\r\ncc");
+
+                if alternate {
+                    terminal.feed("\x1b[?1049h");
+                }
+            }
+
+            let actions = [
+                Operation::Resize { cols: 4, rows: 1 },
+                Operation::Resize { cols: 4, rows: 3 },
+            ];
+
+            let mut transcript = Transcript::new();
+            let lines = batched.execute_with(actions.clone(), &mut transcript);
+            assert!(lines.is_empty());
+            assert_eq!(batched.primary_screen().text(), ["aa", "bb", "cc"]);
+            assert_eq!(batched.resolve(&anchor).unwrap().row, 0);
+            assert_eq!(transcript.finish(&batched), ["aa", "bb", "cc"]);
+
+            for action in actions {
+                separate.execute(action);
+            }
+
+            assert_eq!(separate.primary_screen().text(), ["cc", "", ""]);
+        }
+    }
+
+    #[test]
+    fn eviction_observes_final_reflow_and_active_screen() {
+        struct Evictions(Vec<String>);
+
+        impl Observer for Evictions {
+            type Output = Vec<String>;
+
+            fn before(&mut self, _: &mut Observation<'_>, _: &Operation<'_>) {
+                assert!(self.0.is_empty());
+            }
+
+            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+                assert_eq!(context.terminal().size(), (2, 1));
+
+                assert_eq!(
+                    context.terminal().active_screen_kind(),
+                    ScreenKind::Alternate
+                );
+
+                self.0.push(line.text());
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+                core::mem::take(&mut self.0)
+            }
+        }
+
+        let mut terminal = Terminal::new(4, 1).unwrap();
+        let anchor = terminal.anchor_at_cursor();
+        let mut parser = crate::Parser::new();
+        let switch = parser.feed("\x1b[?1049h").next().unwrap();
+
+        let actions = [
+            Function::Print("abcdefgh".into()).into(),
+            Operation::Resize { cols: 2, rows: 1 },
+            switch.into(),
+        ];
+
+        let mut transcript = Transcript::new();
+
+        let (evicted, mut lines) =
+            terminal.execute_with(actions, (Evictions(Vec::new()), &mut transcript));
+
+        assert_eq!(evicted, ["ab", "cd", "ef"]);
+        assert!(terminal.resolve(&anchor).is_none());
+        assert_eq!(terminal.primary_screen().text(), ["gh"]);
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, ["abcdefgh"]);
+    }
+
+    #[test]
+    fn feed_evicts_after_all_fragments_and_cleans_inactive_alternate() {
+        struct Pending {
+            anchor: crate::Anchor,
+            evicted: usize,
+        }
+
+        impl Observer for Pending {
+            type Output = usize;
+
+            fn before(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                assert!(context.resolve(&self.anchor).is_some());
+                assert_eq!(self.evicted, 0);
+            }
+
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+                self.evicted += 1;
+            }
+
+            fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
+                assert!(context.resolve(&self.anchor).is_none());
+                assert!(!self.anchor.is_registered());
+
+                self.evicted
+            }
+        }
+
+        for alternate in [false, true] {
+            let mut terminal = Terminal::new(4, 1).unwrap();
+
+            if alternate {
+                terminal.feed("\x1b[?1049h");
+            }
+
+            let anchor = terminal.anchor_at_cursor();
+
+            let switch = if alternate {
+                "\x1b[?1049l"
+            } else {
+                "\x1b[?1049h"
+            };
+
+            let pending = Pending { anchor, evicted: 0 };
+            let evicted = terminal.feed_with(["aa\r\n", "bb\r\n", switch], pending);
+            assert_eq!(evicted, if alternate { 0 } else { 2 });
+        }
     }
 
     #[test]
@@ -2225,32 +2375,52 @@ mod tests {
     }
 
     #[test]
-    fn execute_finishes_eviction_before_advancing_iterator() {
+    fn execute_evicts_after_exhausting_iterator() {
         // A local-only observer also verifies that observers need no Send bound.
-        struct Evictions(std::rc::Rc<std::cell::Cell<usize>>);
+        struct Evictions {
+            count: std::rc::Rc<std::cell::Cell<usize>>,
+            exhausted: std::rc::Rc<std::cell::Cell<bool>>,
+        }
 
         impl Observer for Evictions {
             type Output = usize;
 
             fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
-                self.0.set(self.0.get() + 1);
+                assert!(self.exhausted.get());
+                self.count.set(self.count.get() + 1);
             }
 
             fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
-                self.0.get()
+                self.count.get()
             }
         }
 
         let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let exhausted = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut remaining = 3;
 
-        let actions = (0..3).map(|index| {
-            assert_eq!(count.get(), index);
+        let actions = std::iter::from_fn(|| {
+            assert_eq!(count.get(), 0);
 
-            Function::Lf
+            if remaining == 0 {
+                exhausted.set(true);
+
+                return None;
+            }
+
+            remaining -= 1;
+
+            Some(Function::Lf)
         });
 
         let mut terminal = Terminal::new(4, 1).unwrap();
-        assert_eq!(terminal.execute_with(actions, Evictions(count.clone())), 3);
+
+        let evictions = Evictions {
+            count: count.clone(),
+            exhausted: exhausted.clone(),
+        };
+
+        assert_eq!(terminal.execute_with(actions, evictions), 3);
     }
 
     #[test]

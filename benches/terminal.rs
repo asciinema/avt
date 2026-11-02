@@ -1,4 +1,5 @@
 use avt::Terminal;
+use avt::observer::{DirtyRows, ShellTracker, Transcript};
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{fs, hint::black_box, iter};
 
@@ -78,6 +79,101 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                 BatchSize::SmallInput,
             )
         });
+    }
+
+    let newlines = "line\r\n".repeat(10_000);
+
+    c.bench_function("terminal: feed newlines in one batch", |b| {
+        b.iter_batched(
+            || (Terminal::new(100, 24).unwrap(), vec![newlines.clone()]),
+            run_feed,
+            BatchSize::SmallInput,
+        )
+    });
+
+    c.bench_function("terminal: feed cacademo with dirty rows", |b| {
+        b.iter_batched(
+            setup_feed("cacademo.txt"),
+            |(mut terminal, text)| {
+                let rows = terminal.feed_with(&text[0], DirtyRows::new());
+
+                (terminal, text, rows)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    let session: String = (0..256)
+        .map(|n| {
+            format!(
+                "\x1b]133;A\x07$ \x1b]133;B\x07echo item-{n:04}\x1b]133;C\x07\r\nitem-{n:04}\r\n\x1b]133;D;0\x07"
+            )
+        })
+        .collect();
+
+    c.bench_function("terminal: feed shell session with observers", |b| {
+        b.iter_batched(
+            || {
+                (
+                    Terminal::new(80, 24).unwrap(),
+                    DirtyRows::new(),
+                    Transcript::new(),
+                    ShellTracker::new(),
+                    session.clone(),
+                )
+            },
+            |(mut terminal, mut dirty, mut transcript, mut shell, text)| {
+                let reports =
+                    terminal.feed_with(&text, (&mut dirty, (&mut transcript, &mut shell)));
+
+                let tail = transcript.finish(&terminal);
+
+                (terminal, dirty, shell, text, reports, tail)
+            },
+            BatchSize::SmallInput,
+        )
+    });
+
+    for prompts in [0, 10_000] {
+        c.bench_function(
+            &format!("terminal: feed with {prompts} retained prompts"),
+            |b| {
+                let mut terminal = Terminal::with_scrollback(80, 24, None).unwrap();
+                let mut shell = ShellTracker::new();
+
+                terminal.feed_with(
+                    iter::repeat_n("\x1b]133;A\x07$ \x1b]133;B\x07x\x1b]133;C\x07\r\n", prompts),
+                    &mut shell,
+                );
+
+                b.iter(|| terminal.feed_with(black_box("\rX"), &mut shell));
+            },
+        );
+    }
+
+    for chars in [10_000, 160_000] {
+        let text = "x".repeat(chars);
+
+        c.bench_function(
+            &format!("terminal: feed long shell input {chars} chars"),
+            |b| {
+                b.iter_batched(
+                    || {
+                        let mut terminal = Terminal::with_scrollback(80, 24, None).unwrap();
+                        let mut shell = ShellTracker::new();
+                        terminal.feed_with("\x1b]133;A\x07$ \x1b]133;B\x07", &mut shell);
+
+                        (terminal, shell)
+                    },
+                    |(mut terminal, mut shell)| {
+                        terminal.feed_with(text.chars(), &mut shell);
+
+                        (terminal, shell)
+                    },
+                    BatchSize::PerIteration,
+                )
+            },
+        );
     }
 
     c.bench_function("terminal: dump", |b| {

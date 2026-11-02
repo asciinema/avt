@@ -86,7 +86,7 @@ impl Observer for Trace {
             }
 
             Operation::Function(Function::Su(1)) => (
-                // The top row is discarded; other rows move up. The new bottom
+                // The top row leaves the view; other rows move up. The new bottom
                 // row uses the current foreground. Reading all moved cells is
                 // conservative when only part of the final screen is selected.
                 cells(1..ROWS).chain([Slot::Foreground]).collect(),
