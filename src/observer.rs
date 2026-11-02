@@ -55,8 +55,7 @@ impl<'a> Observation<'a> {
 /// `dirty` report effects without exposing partially updated terminal state.
 /// Inspect the terminal in `after`, which runs before eviction.
 /// A print action can contain many characters; its hooks surround the entire
-/// run. Parser run boundaries depend on input fragmentation and the run-size
-/// limit.
+/// run. Parser run boundaries depend on controls and input fragmentation.
 ///
 /// Eviction runs after all actions and before `end`. Until then, excess history
 /// remains inspectable and anchorable; later actions can reflow it into view.

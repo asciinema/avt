@@ -19,8 +19,8 @@ This guide includes Git-tagged versions as well as crates.io releases.
   Exhaust the returned iterator to consume the entire fragment.
 - `Function<'a>::Print` holds `Cow<'a, str>` instead of `char`.
   Construct it with `Function::Print(text.into())` for `&str` or `String`.
-  Parsed runs borrow the input and stop at controls, fragment boundaries, or
-  4096 UTF-8 bytes. Observer `before`/`after` hooks surround whole runs.
+  Parsed runs borrow the input and stop at controls or fragment boundaries.
+  Observer `before`/`after` hooks surround whole runs.
 - `Operation<'a>` and `IntoOperations<'a, Kind>` carry the text lifetime.
   Recording observers should store `Operation<'static>` using
   `operation.clone().into_owned()`. Parser consumers can collect owned functions

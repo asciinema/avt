@@ -1424,7 +1424,6 @@ mod tests {
                 };
 
                 assert!(!text.is_empty());
-                assert!(text.len() <= 4096);
                 assert!(context.terminal().primary_screen().all_lines().count() > 2);
                 self.printed += text.chars().count();
                 self.runs += 1;
@@ -1455,7 +1454,7 @@ mod tests {
 
         let ((runs, evicted), mut lines) = terminal.feed_with(&text, (retention, &mut transcript));
 
-        assert!(runs > 1);
+        assert_eq!(runs, 1);
         assert!(evicted > 0);
         lines.extend(transcript.finish(&terminal));
         assert_eq!(lines, [text.as_str()]);

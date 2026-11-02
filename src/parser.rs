@@ -14,8 +14,6 @@ use core::fmt::Display;
 
 const PARAMS_LEN: usize = 32;
 const OSC_BUFFER_LIMIT: usize = 1024;
-// Bound print-run size and temporary history retained until a print action ends.
-const PRINT_RUN_LIMIT: usize = 4096;
 
 #[derive(Debug, Default)]
 pub struct Parser {
@@ -550,8 +548,8 @@ impl Parser {
     /// borrow only the input, so the parser can be reused or dropped while they
     /// remain alive. Use [`Function::into_owned`] to outlive the input as well.
     ///
-    /// Printable text is emitted in nonempty runs of at most 4096 UTF-8 bytes,
-    /// ending at controls or the fragment boundary. Unfinished control sequences
+    /// Printable text is emitted in nonempty runs ending at controls or the
+    /// fragment boundary, with no fixed size limit. Unfinished control sequences
     /// continue in the next fragment; printable text is never buffered across
     /// fragments. Run boundaries may change in future versions.
     ///
@@ -589,13 +587,8 @@ impl Parser {
     #[inline(always)]
     fn take_print_run<'a>(input: &mut &'a str) -> Option<&'a str> {
         let end = input
-            .char_indices()
-            .find(|&(i, ch)| {
-                i + ch.len_utf8() > PRINT_RUN_LIMIT
-                    || ch < '\u{20}'
-                    || ('\u{80}'..='\u{9f}').contains(&ch)
-            })
-            .map_or(input.len(), |(i, _)| i);
+            .find(|ch| ch < '\u{20}' || ('\u{80}'..='\u{9f}').contains(&ch))
+            .unwrap_or(input.len());
 
         if end == 0 {
             return None;
@@ -2111,32 +2104,29 @@ mod tests {
     }
 
     #[test]
-    fn print_runs_are_bounded_at_utf8_boundaries() {
-        for prefix_len in 4092..=4097 {
-            for ch in ['x', 'é', '界', '🦀'] {
-                let input = format!(
-                    "{}{}",
-                    "a".repeat(prefix_len),
-                    String::from(ch).repeat(4097)
-                );
+    fn long_print_runs_borrow_whole_printable_spans() {
+        let text = "xé界🦀".repeat(8192);
+        // Exercise resuming printing after an ignored control as well as C1.
+        let input = format!("\0{text}\u{85}{text}");
+        let functions = parse(&input);
 
-                let functions = parse(&input);
-                let mut restored = String::new();
+        let [
+            Print(Cow::Borrowed(first)),
+            Nel,
+            Print(Cow::Borrowed(second)),
+        ] = functions.as_slice()
+        else {
+            panic!("expected two borrowed print runs separated by NEL");
+        };
 
-                for function in functions {
-                    let Print(Cow::Borrowed(text)) = function else {
-                        panic!("expected borrowed print run");
-                    };
+        assert_eq!(*first, text);
+        assert_eq!(*second, text);
+        assert_eq!(first.as_ptr(), input[1..].as_ptr());
 
-                    assert!(!text.is_empty());
-                    assert!(text.len() <= 4096);
-                    assert_eq!(text.as_ptr(), input[restored.len()..].as_ptr());
-                    restored.push_str(text);
-                }
-
-                assert_eq!(restored, input);
-            }
-        }
+        assert_eq!(
+            second.as_ptr(),
+            input[1 + text.len() + '\u{85}'.len_utf8()..].as_ptr()
+        );
     }
 
     #[test]
