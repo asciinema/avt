@@ -1180,6 +1180,18 @@ mod tests {
         notifications: Vec<Notification>,
     }
 
+    impl CallReport {
+        fn dirty_rows(&self) -> std::collections::BTreeSet<usize> {
+            self.notifications
+                .iter()
+                .flat_map(|notification| match notification {
+                    Notification::Dirty(rows) => rows.clone(),
+                    _ => 0..0,
+                })
+                .collect()
+        }
+    }
+
     #[derive(Default)]
     struct Calls {
         notifications: Vec<Notification>,
@@ -1298,12 +1310,22 @@ mod tests {
         {
             let mut expected = Terminal::new(16, 3).unwrap();
             let mut actual = Terminal::new(16, 3).unwrap();
-            let expected_report = expected.feed_with(text, Calls::default());
-            let report = actual.feed_with(input, Calls::default());
+            let mut expected_report = expected.feed_with(text, Calls::default());
+            let mut report = actual.feed_with(input, Calls::default());
             assert_eq!(report.before, expected_report.before);
             assert_eq!(report.after, expected_report.after);
             assert_eq!(report.size_before, expected_report.size_before);
             assert_eq!(report.size_after, expected_report.size_after);
+
+            // Fragmentation changes print-run boundaries, not repaint coverage.
+            assert_eq!(report.dirty_rows(), expected_report.dirty_rows());
+
+            for report in [&mut report, &mut expected_report] {
+                report
+                    .notifications
+                    .retain(|notification| !matches!(notification, Notification::Dirty(_)));
+            }
+
             assert_eq!(report.notifications, expected_report.notifications);
             assert_eq!(report.number, 1);
 
@@ -2570,6 +2592,79 @@ mod tests {
         terminal.engine.verify();
     }
 
+    #[test]
+    fn print_and_repeat_report_one_range_during_the_action() {
+        use Function::{Print, Rep};
+
+        for (size, setup, function, range) in [
+            ((4, 5), "", Print("".into()), None),
+            ((4, 5), "", Print("abc".into()), Some(0..1)),
+            ((4, 5), "\x1b[2;1H", Print("abcdefghij".into()), Some(1..4)),
+            // Include the starting row even when the run wraps immediately.
+            ((4, 5), "abcd", Print("界".into()), Some(0..2)),
+            ((4, 5), "abc", Print("界".into()), Some(0..2)),
+            (
+                (4, 5),
+                "\x1b[4hxx界\x1b[1;4H",
+                Print("界ab".into()),
+                Some(0..2),
+            ),
+            (
+                (4, 5),
+                "\x1b[5;1H",
+                Print("abcdefghijklmnop".into()),
+                Some(0..5),
+            ),
+            (
+                (4, 5),
+                "\x1b[2;4r\x1b[4;1H",
+                Print("abcdefghijklmnop".into()),
+                Some(1..4),
+            ),
+            (
+                (4, 5),
+                "\x1b[2;4r\x1b[1;1H",
+                Print("abcdefghijklmnopqrst".into()),
+                Some(0..4),
+            ),
+            (
+                (4, 5),
+                "\x1b[2;4r\x1b[5;1H",
+                Print("abcdefgh".into()),
+                Some(4..5),
+            ),
+            ((1, 3), "", Print("界界界".into()), Some(0..3)),
+            ((4, 1), "", Print("abcdefgh".into()), Some(0..1)),
+            ((4, 5), "\x1b[?7labcd", Print("界xy".into()), Some(0..1)),
+            ((4, 5), "", Rep(10), None),
+            ((4, 5), "a", Rep(0), Some(0..1)),
+            ((4, 5), "a", Rep(10), Some(0..3)),
+            ((4, 5), "\x1b[2;4r\x1b[4;1H界", Rep(10), Some(1..4)),
+        ] {
+            let mut terminal = Terminal::with_scrollback(size.0, size.1, None).unwrap();
+            terminal.feed(setup);
+            // Calls asserts that every dirty callback is between before/after.
+            let report = terminal.execute_with(function.clone(), Calls::default());
+
+            assert_eq!(
+                report.notifications,
+                range
+                    .map(Notification::Dirty)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "size {size:?}, setup {setup:?}, function {function:?}"
+            );
+
+            let dirty = report.dirty_rows();
+
+            for (row, (before, after)) in report.before.iter().zip(&report.after).enumerate() {
+                assert!(before.cells() == after.cells() || dirty.contains(&row));
+            }
+
+            terminal.engine.verify();
+        }
+    }
+
     proptest! {
         #[test]
         fn prop_dirty_observer_is_batching_independent(
@@ -2591,7 +2686,7 @@ mod tests {
             );
 
             for (functions, (cols, rows)) in [(first, first_size), (second, second_size)] {
-                // Compare a batched report with the union of per-function reports.
+                // Split print runs into characters as well as splitting actions.
                 let mut expected = std::collections::BTreeSet::new();
 
                 for function in &functions {
@@ -2601,7 +2696,14 @@ mod tests {
                         .map(|line| line.cells().to_vec())
                         .collect();
 
-                    let dirty_rows = split.execute_with(function.clone(), &mut split_dirty);
+                    let dirty_rows = match function {
+                        Function::Print(text) => {
+                            split.execute_with(text.chars().map(print), &mut split_dirty)
+                        }
+
+                        _ => split.execute_with(function.clone(), &mut split_dirty),
+                    };
+
                     split.engine.verify();
 
                     for (row, (before, after)) in before

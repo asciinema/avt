@@ -349,11 +349,7 @@ impl Engine {
 
             Nel => self.nel(observer),
 
-            Print(ref text) => {
-                for ch in text.chars() {
-                    self.print(ch, observer);
-                }
-            }
+            Print(ref text) => self.print(text.chars(), observer),
 
             Rep(n) => self.rep(n, observer),
 
@@ -754,21 +750,32 @@ impl Engine {
             .assert_execution_equivalent(&other.alternate_buffer);
     }
 
-    fn print(&mut self, mut ch: char, observer: &mut impl Effects) {
-        ch = self.charsets[self.active_charset].translate(ch);
+    fn print(&mut self, chars: impl Iterator<Item = char>, observer: &mut impl Effects) {
+        // Include the starting row: inserting can change it before a wide
+        // character wraps. Scrolling can extend the range upward.
+        let mut dirty = self.cursor.row..self.cursor.row;
 
-        match self.try_print(ch, observer) {
-            Some(width) => self.advance_cursor_after_print(width),
+        for ch in chars {
+            let ch = self.charsets[self.active_charset].translate(ch);
 
-            None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, observer),
+            match self.try_print(ch) {
+                Some(width) => self.advance_cursor_after_print(width),
 
-            None => self.print_at_line_end(ch),
+                None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, &mut dirty),
+
+                None => self.print_at_line_end(ch),
+            }
+
+            dirty.end = self.cursor.row + 1;
         }
 
-        observer.dirty(self.cursor.row..self.cursor.row + 1);
+        if !dirty.is_empty() {
+            observer.dirty(dirty);
+        }
     }
 
-    fn try_print(&mut self, ch: char, observer: &mut impl Effects) -> Option<usize> {
+    #[inline]
+    fn try_print(&mut self, ch: char) -> Option<usize> {
         if self.cursor.col >= self.cols {
             return None;
         }
@@ -778,8 +785,6 @@ impl Engine {
 
         if self.insert_mode {
             self.active_buffer_mut().shift_right(pos, 1, pen);
-            // Shifting can clear a wide pair even if printing then wraps.
-            observer.dirty(pos.1..pos.1 + 1);
         }
 
         self.active_buffer_mut().print(pos, ch, pen)
@@ -793,17 +798,17 @@ impl Engine {
         }
     }
 
-    fn wrap_and_print_at_line_start(&mut self, ch: char, observer: &mut impl Effects) {
+    #[inline]
+    fn wrap_and_print_at_line_start(&mut self, ch: char, dirty: &mut Range<usize>) {
         let row = self.cursor.row;
         let pen = self.pen;
 
         if row == self.bottom_margin {
             let range = self.top_margin..self.bottom_margin + 1;
 
-            self.active_buffer_mut()
-                .wrap_and_scroll_up(range.clone(), &pen);
+            self.active_buffer_mut().wrap_and_scroll_up(range, &pen);
 
-            observer.dirty(range);
+            dirty.start = dirty.start.min(self.top_margin);
         } else if row < self.rows - 1 {
             self.active_buffer_mut().wrap_to_next_row(row);
             self.cursor.row += 1;
@@ -1149,10 +1154,7 @@ impl Engine {
             }
 
             let char = self.active_buffer()[(col, row)].char();
-
-            for _n in 0..n {
-                self.print(char, observer);
-            }
+            self.print(core::iter::repeat_n(char, n), observer);
         }
     }
 

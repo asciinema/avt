@@ -80,6 +80,7 @@ pub trait Observer {
 
     /// Visible rows that may need repainting. Ranges can overlap or repeat, and
     /// contents may compare equal. Cursor-only changes are not included.
+    /// Notification granularity may depend on input fragmentation.
     fn dirty(&mut self, _rows: Range<usize>) {}
 
     fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation<'_>) {}
