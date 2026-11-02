@@ -571,37 +571,70 @@ impl Parser {
     }
 
     // Each call releases the parser borrow before Terminal invokes observers.
+    #[inline(always)]
     pub(crate) fn next_function<'a>(&mut self, input: &mut &'a str) -> Option<Function<'a>> {
-        while !input.is_empty() {
+        if input.is_empty() {
+            return None;
+        }
+
+        if self.state == State::Ground {
+            if let Some(text) = Self::take_print_run(input) {
+                return Some(Function::Print(Cow::Borrowed(text)));
+            }
+        }
+
+        self.next_control_function(input)
+    }
+
+    #[inline(always)]
+    fn take_print_run<'a>(input: &mut &'a str) -> Option<&'a str> {
+        let end = input
+            .char_indices()
+            .find(|&(i, ch)| {
+                i + ch.len_utf8() > PRINT_RUN_LIMIT
+                    || ch < '\u{20}'
+                    || ('\u{80}'..='\u{9f}').contains(&ch)
+            })
+            .map_or(input.len(), |(i, _)| i);
+
+        if end == 0 {
+            return None;
+        }
+
+        let (text, rest) = input.split_at(end);
+        *input = rest;
+
+        Some(text)
+    }
+
+    // Parse controls until a function is emitted, including text following an
+    // ignored sequence. State transitions stay inlined within this loop.
+    #[inline(never)]
+    fn next_control_function<'a>(&mut self, input: &mut &'a str) -> Option<Function<'a>> {
+        let mut chars = input.chars();
+
+        while let Some(ch) = chars.next() {
+            if let Some(function) = self.advance(ch) {
+                *input = chars.as_str();
+
+                return Some(function);
+            }
+
             if self.state == State::Ground {
-                let end = input
-                    .char_indices()
-                    .find(|&(i, ch)| {
-                        i + ch.len_utf8() > PRINT_RUN_LIMIT
-                            || ch < '\u{20}'
-                            || ('\u{80}'..='\u{9f}').contains(&ch)
-                    })
-                    .map_or(input.len(), |(i, _)| i);
+                *input = chars.as_str();
 
-                if end > 0 {
-                    let (text, rest) = input.split_at(end);
-                    *input = rest;
-
+                if let Some(text) = Self::take_print_run(input) {
                     return Some(Function::Print(Cow::Borrowed(text)));
                 }
             }
-
-            let ch = input.chars().next().unwrap();
-            *input = &input[ch.len_utf8()..];
-
-            if let Some(function) = self.advance(ch) {
-                return Some(function);
-            }
         }
+
+        *input = chars.as_str();
 
         None
     }
 
+    #[inline(always)]
     fn advance(&mut self, input: char) -> Option<Function<'static>> {
         use State::*;
 
@@ -2115,6 +2148,23 @@ mod tests {
         assert_eq!(parser.state, State::Ground);
         assert!(parser.feed("\x1b[31").next().is_none());
         assert_eq!(parser.state, State::CsiParam);
+    }
+
+    #[test]
+    fn yields_embedded_controls_before_finishing_csi() {
+        let mut parser = Parser::new();
+        assert_eq!(parser.feed("\x1b[3\n1mxy").next(), Some(Lf));
+        assert_eq!(parser.state, State::CsiParam);
+
+        assert_eq!(
+            parser.feed("1mxy").collect::<Vec<_>>(),
+            [
+                Sgr(sgr_ops([SetForegroundColor(Color::Indexed(1))])),
+                Print("xy".into()),
+            ]
+        );
+
+        assert_eq!(parser.state, State::Ground);
     }
 
     fn sgr_ops<const N: usize>(ops: [super::SgrOp; N]) -> SgrOps {
