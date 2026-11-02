@@ -57,9 +57,10 @@ struct PromptMarker {
 
 struct CommandInput {
     anchor: Anchor,
-    // Printing preserves validated history and extends it through soft wrapping.
-    // Other operations invalidate this cache; visible rows are always checked.
-    history_valid: bool,
+    // Validated through the cursor after the last print. Further printing
+    // preserves history, so only visible rows need rechecking afterward.
+    // Operations other than Print, REP, and SGR invalidate both guarantees.
+    validated: bool,
 }
 
 impl CommandInput {
@@ -84,7 +85,7 @@ impl CommandInput {
         } else {
             // An offscreen boundary may return after a resize. Validate its
             // historical prefix once, rather than once per print fragment.
-            if !self.history_valid {
+            if !self.validated {
                 let history = screen.all_lines().count() - terminal.size().1;
 
                 let hard_break = screen
@@ -107,7 +108,7 @@ impl CommandInput {
             .take(cursor.row - start_row)
             .any(|line| !line.is_wrapped());
 
-        self.history_valid = valid;
+        self.validated = valid;
 
         valid
     }
@@ -148,6 +149,16 @@ impl ShellTracker {
                 outcome: marker.outcome,
             })
         })
+    }
+
+    fn validate_input(&mut self, terminal: &Terminal) {
+        if self
+            .input
+            .as_mut()
+            .is_some_and(|input| !input.validate(terminal))
+        {
+            self.input = None;
+        }
     }
 
     fn set_outcome(&mut self, id: Option<PromptId>, outcome: PromptOutcome) {
@@ -198,7 +209,7 @@ impl ShellTracker {
                     (context.terminal().active_screen_kind() == ScreenKind::Primary).then(|| {
                         CommandInput {
                             anchor: context.anchor_at_cursor(),
-                            history_valid: false,
+                            validated: false,
                         }
                     });
             }
@@ -250,7 +261,7 @@ impl Observer for ShellTracker {
             Operation::Function(Function::Print(_) | Function::Rep(_) | Function::Sgr(_))
         ) {
             if let Some(input) = &mut self.input {
-                input.history_valid = false;
+                input.validated = false;
             }
         }
 
@@ -266,16 +277,23 @@ impl Observer for ShellTracker {
             self.editing = false;
             self.running = None;
             self.markers.clear();
-        } else if matches!(function, Function::Print(_) | Function::Rep(_)) {
-            // Reject hard multiline input or writing before a known boundary.
-            // For example, resize can clamp the cursor before a trailing anchor.
-            if self
-                .input
-                .as_mut()
-                .is_some_and(|input| !input.validate(context.terminal()))
-            {
-                self.input = None;
-            }
+        } else if matches!(function, Function::Print(_) | Function::Rep(_))
+            && self.input.as_ref().is_some_and(|input| !input.validated)
+        {
+            // Recheck after intervening operations, before writing can hide a
+            // hard break or advance a cursor clamped before the input boundary.
+            self.validate_input(context.terminal());
+        }
+    }
+
+    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+        if matches!(
+            operation,
+            Operation::Function(Function::Print(_) | Function::Rep(_))
+        ) {
+            // Scrolling can break a wrap above the margins within a print run.
+            // Reject it now even when submission follows without more printing.
+            self.validate_input(context.terminal());
         }
     }
 
@@ -701,18 +719,46 @@ mod tests {
 
     #[test]
     fn printing_rechecks_wraps_above_scrolling_margins() {
-        let mut terminal = Terminal::new(4, 4).unwrap();
-        let mut shell = ShellTracker::new();
+        for text in [
+            "abcdefghijklmnx",
+            "abcdefghijklmnxy",
+            "abcdefghijklmn\x1b[2b",
+        ] {
+            let input = format!("\x1b[2;4r{PROMPT}{text}{SUBMIT}");
 
-        let events = terminal.feed_with(
-            ["\x1b[2;4r", PROMPT, "abcdefghijklmn", "x", "y", SUBMIT],
-            &mut shell,
-        );
+            for fragmented in [false, true] {
+                let mut terminal = Terminal::new(4, 4).unwrap();
+                let mut shell = ShellTracker::new();
 
-        assert!(matches!(
-            &events[1],
-            ShellEvent::CommandSubmitted(command) if command.text.is_none()
-        ));
+                let events = if fragmented {
+                    terminal.feed_with(input.chars(), &mut shell)
+                } else {
+                    terminal.feed_with(&input, &mut shell)
+                };
+
+                assert!(
+                    matches!(
+                        &events[1],
+                        ShellEvent::CommandSubmitted(command) if command.text.is_none()
+                    ),
+                    "text {text:?}, fragmented {fragmented}: {events:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn newline_before_submission_preserves_command_text() {
+        for text in ["echo", "echo ok"] {
+            let mut terminal = Terminal::new(8, 3).unwrap();
+            let mut shell = ShellTracker::new();
+            let events = terminal.feed_with([PROMPT, text, "\r\n", SUBMIT], &mut shell);
+
+            assert!(matches!(
+                &events[1],
+                ShellEvent::CommandSubmitted(command) if command.text.as_deref() == Some(text)
+            ));
+        }
     }
 
     #[test]
