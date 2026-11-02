@@ -1547,7 +1547,7 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
     let mut pen = Pen::default();
 
     for (i, line) in buffer.view().take(cutoff).enumerate() {
-        for cells in line.chunks(|c1, c2| c1.pen() != c2.pen()) {
+        for cells in line.cells().chunk_by(|c1, c2| c1.pen() == c2.pen()) {
             if cells[0].pen() != &pen {
                 if let Some(sgr) = to_sgr_diff(&pen, cells[0].pen()) {
                     funs.push(sgr);
@@ -1556,7 +1556,7 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
                 pen = *cells[0].pen();
             }
 
-            dump_cells(&cells, funs);
+            dump_cells(cells, funs);
         }
 
         if i < last && !line.wrapped {
@@ -1653,14 +1653,18 @@ fn push_attr_diff(ops: &mut SgrOps, from: bool, to: bool, set: SgrOp, reset: Sgr
 }
 
 fn dump_cells(cells: &[Cell], funs: &mut Vec<Function<'static>>) {
-    let mut i = 0;
+    let mut chars = cells
+        .iter()
+        .filter(|cell| cell.occupancy() != Occupancy::WideTail)
+        .map(Cell::char)
+        .peekable();
+
     let mut text = String::new();
 
-    while i < cells.len() {
-        let ch = cells[i].char();
+    while let Some(ch) = chars.next() {
         let mut run_len = 1;
 
-        while i + run_len < cells.len() && cells[i + run_len].char() == ch {
+        while chars.next_if_eq(&ch).is_some() {
             run_len += 1;
         }
 
@@ -1673,8 +1677,6 @@ fn dump_cells(cells: &[Cell], funs: &mut Vec<Function<'static>>) {
                 text.push(ch);
             }
         }
-
-        i += run_len;
     }
 
     if !text.is_empty() {
@@ -3035,6 +3037,32 @@ mod tests {
         let funs = term.dump();
 
         assert_eq!(funs[..2], [Print("ハ".into()), Rep(5)]);
+    }
+
+    #[test]
+    fn dump_preserves_styles_and_counts_wide_glyphs_for_rep() {
+        let mut original = Terminal::new(48, 2).unwrap();
+        original.feed("A界界界界界界 \x1b[31m界界界\x1b[32m界界界界界界Z");
+        let funs = original.engine.dump();
+
+        assert_eq!(
+            funs[..9],
+            [
+                Print("A界".into()),
+                Rep(5),
+                Print(" ".into()),
+                sgr(SetForegroundColor(Color::Indexed(1))),
+                Print("界界界".into()),
+                sgr(SetForegroundColor(Color::Indexed(2))),
+                Print("界".into()),
+                Rep(5),
+                Print("Z".into()),
+            ]
+        );
+
+        let mut restored = Terminal::new(48, 2).unwrap();
+        restored.feed(original.dump());
+        original.engine.assert_dump_equivalent(&restored.engine);
     }
 
     #[test]
