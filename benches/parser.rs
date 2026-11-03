@@ -25,16 +25,16 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-fn setup(text: &str) -> impl Fn() -> (Parser, String) {
-    move || (Parser::default(), text.to_owned())
+fn setup<'a>(text: &'a str) -> impl Fn() -> (Parser, &'a str) {
+    move || (Parser::default(), text)
 }
 
-fn run((mut parser, text): (Parser, String)) -> (Parser, String) {
-    for function in parser.feed(&text) {
+fn run((mut parser, text): (Parser, &str)) -> Parser {
+    for function in parser.feed(text) {
         black_box(function);
     }
 
-    (parser, text)
+    parser
 }
 
 fn sample_text(filename: &str) -> String {

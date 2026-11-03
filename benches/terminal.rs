@@ -8,34 +8,38 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     let cacademo = sample_text("cacademo.txt");
     let licenses = sample_text("licenses.txt");
     let licenses_lolcat = sample_text("licenses-lolcat.txt");
+    let mixed_chunks = chunk(&mixed);
+    let cacademo_chunks = chunk(&cacademo);
+    let licenses_chunks = chunk(&licenses);
+    let licenses_lolcat_chunks = chunk(&licenses_lolcat);
 
     c.bench_function("terminal: feed mixed in bulk", |b| {
-        b.iter_batched(setup_feed(&mixed), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&[&mixed]), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed mixed in chunks", |b| {
-        b.iter_batched(chunk(setup_feed(&mixed)), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&mixed_chunks), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed cacademo in bulk", |b| {
-        b.iter_batched(setup_feed(&cacademo), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&[&cacademo]), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed cacademo in chunks", |b| {
         b.iter_batched(
-            chunk(setup_feed(&cacademo)),
+            setup_feed(&cacademo_chunks),
             run_feed,
             BatchSize::SmallInput,
         )
     });
 
     c.bench_function("terminal: feed licenses in bulk", |b| {
-        b.iter_batched(setup_feed(&licenses), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&[&licenses]), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed licenses in chunks", |b| {
         b.iter_batched(
-            chunk(setup_feed(&licenses)),
+            setup_feed(&licenses_chunks),
             run_feed,
             BatchSize::SmallInput,
         )
@@ -43,7 +47,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("terminal: feed licenses-lolcat in bulk", |b| {
         b.iter_batched(
-            setup_feed(&licenses_lolcat),
+            setup_feed(&[&licenses_lolcat]),
             run_feed,
             BatchSize::SmallInput,
         )
@@ -51,31 +55,41 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("terminal: feed licenses-lolcat in chunks", |b| {
         b.iter_batched(
-            chunk(setup_feed(&licenses_lolcat)),
+            setup_feed(&licenses_lolcat_chunks),
             run_feed,
             BatchSize::SmallInput,
         )
     });
 
-    c.bench_function("terminal: feed newlines - scrollback limit = 0", |b| {
-        b.iter_batched(gen_newlines(0), run_feed, BatchSize::SmallInput)
-    });
+    let newlines = vec![".\n"; 100_000];
 
-    c.bench_function("terminal: feed newlines - scrollback limit = 100", |b| {
-        b.iter_batched(gen_newlines(100), run_feed, BatchSize::SmallInput)
-    });
-
-    c.bench_function("terminal: feed newlines - scrollback limit = 1000", |b| {
-        b.iter_batched(gen_newlines(1000), run_feed, BatchSize::SmallInput)
-    });
+    for limit in [0, 100, 1000] {
+        c.bench_function(
+            &format!("terminal: feed newlines - scrollback limit = {limit}"),
+            |b| {
+                b.iter_batched(
+                    || {
+                        (
+                            Terminal::with_scrollback(100, 24, Some(limit)).unwrap(),
+                            newlines.as_slice(),
+                        )
+                    },
+                    run_feed,
+                    BatchSize::SmallInput,
+                )
+            },
+        );
+    }
 
     for (name, text) in [
         ("plain", "abcdefghijklmnopqrstuvwxyz012345".repeat(2048)),
         ("unicode", "hé界🦀".repeat(4096)),
     ] {
+        let chunks = [text.as_str()];
+
         c.bench_function(&format!("terminal: feed {name}"), |b| {
             b.iter_batched(
-                || (Terminal::new(100, 24).unwrap(), vec![text.clone()]),
+                || (Terminal::new(100, 24).unwrap(), chunks.as_slice()),
                 run_feed,
                 BatchSize::SmallInput,
             )
@@ -83,10 +97,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     }
 
     let newlines = "line\r\n".repeat(10_000);
+    let chunks = [newlines.as_str()];
 
     c.bench_function("terminal: feed newlines in one batch", |b| {
         b.iter_batched(
-            || (Terminal::new(100, 24).unwrap(), vec![newlines.clone()]),
+            || (Terminal::new(100, 24).unwrap(), chunks.as_slice()),
             run_feed,
             BatchSize::SmallInput,
         )
@@ -94,11 +109,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("terminal: feed cacademo with dirty rows", |b| {
         b.iter_batched(
-            setup_feed(&cacademo),
+            setup_feed(&[&cacademo]),
             |(mut terminal, text)| {
-                let rows = terminal.feed_with(&text[0], DirtyRows::new());
+                let rows = terminal.feed_with(text[0], DirtyRows::new());
 
-                (terminal, text, rows)
+                (terminal, rows)
             },
             BatchSize::SmallInput,
         )
@@ -120,16 +135,15 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                     DirtyRows::new(),
                     Transcript::new(),
                     ShellTracker::new(),
-                    session.clone(),
+                    session.as_str(),
                 )
             },
             |(mut terminal, mut dirty, mut transcript, mut shell, text)| {
-                let reports =
-                    terminal.feed_with(&text, (&mut dirty, (&mut transcript, &mut shell)));
+                let reports = terminal.feed_with(text, (&mut dirty, (&mut transcript, &mut shell)));
 
                 let tail = transcript.finish(&terminal);
 
-                (terminal, dirty, shell, text, reports, tail)
+                (terminal, dirty, shell, reports, tail)
             },
             BatchSize::SmallInput,
         )
@@ -222,47 +236,36 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     );
 }
 
-fn setup_feed(text: &str) -> impl Fn() -> (Terminal, Vec<String>) {
+fn setup_feed<'a>(chunks: &'a [&'a str]) -> impl Fn() -> (Terminal, &'a [&'a str]) {
     move || {
         let vt = Terminal::with_scrollback(100, 24, Some(1000)).unwrap();
 
-        (vt, vec![text.to_owned()])
+        (vt, chunks)
     }
 }
 
-fn run_feed((mut vt, chunks): (Terminal, Vec<String>)) -> (Terminal, Vec<String>) {
-    for text in &chunks {
+fn run_feed((mut vt, chunks): (Terminal, &[&str])) -> Terminal {
+    for text in chunks {
         vt.feed(text);
     }
 
-    (vt, chunks)
+    vt
 }
 
-fn chunk(f: impl Fn() -> (Terminal, Vec<String>)) -> impl Fn() -> (Terminal, Vec<String>) {
-    move || {
-        let (vt, text) = f();
+fn chunk(text: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut start = 0;
 
-        let chunks: Vec<String> = text
-            .first()
-            .unwrap()
-            .chars()
-            .collect::<Vec<char>>()
-            .chunks(32)
-            .map(String::from_iter)
-            .collect();
-
-        (vt, chunks)
+    for (end, _) in text.char_indices().skip(32).step_by(32) {
+        chunks.push(&text[start..end]);
+        start = end;
     }
-}
 
-fn gen_newlines(scrollback_limit: usize) -> impl Fn() -> (Terminal, Vec<String>) {
-    move || {
-        let vt = Terminal::with_scrollback(100, 24, Some(scrollback_limit)).unwrap();
-
-        let chunks = iter::repeat_n(".\n".to_owned(), 100_000).collect::<Vec<_>>();
-
-        (vt, chunks)
+    if start < text.len() {
+        chunks.push(&text[start..]);
     }
+
+    chunks
 }
 
 fn sample_text(filename: &str) -> String {
