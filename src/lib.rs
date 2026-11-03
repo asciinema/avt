@@ -355,6 +355,7 @@ mod tests {
         // CAN cancels CSI; OSC accepts BEL/ST; DCS/APC payload is not printed.
         // Use an unhandled DCS final ('x') to exercise payload skipping.
         for (input, expected, col) in [
+            ("\x7fA\x7f\x7fB\x7f", "AB  ", 2),
             ("A\x1b[31\x18mB", "AmB ", 3),
             ("A\x1b]2;hidden\x07B", "AB  ", 2),
             ("A\x1b]2;hidden\x1b\\B", "AB  ", 2),
@@ -395,6 +396,33 @@ mod tests {
 
             check(&terminal);
         }
+    }
+
+    #[test]
+    fn del_preserves_pending_wrap() {
+        for charset in ["\x1b(B", "\x1b(0"] {
+            let mut terminal = Terminal::new(2, 2).unwrap();
+            terminal.feed([charset, "AB"]);
+            terminal.feed("\x7f");
+            assert_eq!(terminal.cursor().position(), Some((2, 0)));
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "AB");
+            assert_eq!(terminal.screen().line(1).unwrap().text(), "  ");
+            assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+
+            terminal.feed("C");
+            assert_eq!(terminal.cursor().position(), Some((1, 1)));
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "AB");
+            assert_eq!(terminal.screen().line(1).unwrap().text(), "C ");
+            assert!(terminal.screen().line(0).unwrap().is_wrapped());
+        }
+    }
+
+    #[test]
+    fn del_preserves_repeated_character() {
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        terminal.feed("a\x7f\x1b[3b");
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "aaaa    ");
+        assert_eq!(terminal.cursor().position(), Some((4, 0)));
     }
 
     #[test]
@@ -820,10 +848,10 @@ mod tests {
     }
 
     fn gen_char() -> impl Strategy<Value = char> {
-        // Match the parser's printable domain, including DEL, while giving
+        // Match the parser's printable domain while giving
         // wide characters a substantial share of the generated printing.
         prop_oneof![
-            4 => (0x20..=0x7fu8).prop_map(char::from),
+            4 => (0x20..=0x7eu8).prop_map(char::from),
             2 => prop::sample::select(vec!['界', '日', '🦀']),
             1 => (0xa0..=0xd7ffu32).prop_map(|v| char::from_u32(v).unwrap()),
             1 => (0xe000..=0x10ffffu32).prop_map(|v| char::from_u32(v).unwrap()),

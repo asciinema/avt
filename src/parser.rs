@@ -587,7 +587,7 @@ impl Parser {
     #[inline(always)]
     fn take_print_run<'a>(input: &mut &'a str) -> Option<&'a str> {
         let end = input
-            .find(|ch| ch < '\u{20}' || ('\u{80}'..='\u{9f}').contains(&ch))
+            .find(|ch| ch < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&ch))
             .unwrap_or(input.len());
 
         if end == 0 {
@@ -665,7 +665,7 @@ impl Parser {
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
-            (Ground, '\u{20}'..='\u{7f}') => {
+            (Ground, '\u{20}'..='\u{7e}') => {
                 unreachable!("ground-state printing is handled in next_function");
             }
 
@@ -856,8 +856,8 @@ impl Parser {
                 self.clear();
             }
 
-            // DEL (0x7F) is ignored in all states except Ground and OscString
-            (Escape | EscapeIntermediate
+            // DEL (0x7F) is ignored in all states except OscString
+            (Ground | Escape | EscapeIntermediate
             | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore
             | DcsEntry | DcsParam | DcsIntermediate | DcsIgnore
             | SosPmApcString, '\u{7f}')
@@ -2090,7 +2090,8 @@ mod tests {
         assert_eq!(
             parse("hé界\x7f🦀\r\nabc\0def\u{85}ghi\u{9b}31m\u{a0}日"),
             [
-                Print("hé界\x7f🦀".into()),
+                Print("hé界".into()),
+                Print("🦀".into()),
                 Cr,
                 Lf,
                 Print("abc".into()),
