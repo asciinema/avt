@@ -696,6 +696,7 @@ impl Engine {
                     if occupancy == Occupancy::WideTail {
                         assert!(i > 0);
                         assert!(line[i - 1].occupancy() == Occupancy::WideHead);
+                        assert_eq!(line[i].pen(), line[i - 1].pen());
                     } else if occupancy == Occupancy::WideHead {
                         assert!(line[i + 1].occupancy() == Occupancy::WideTail, "{:?}", line);
                     }
@@ -1547,6 +1548,8 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
     let mut pen = Pen::default();
 
     for (i, line) in buffer.view().take(cutoff).enumerate() {
+        // Wide tails share their head's pen, so grouping before filtering tails
+        // in dump_cells preserves the same style boundaries.
         for cells in line.cells().chunk_by(|c1, c2| c1.pen() == c2.pen()) {
             if cells[0].pen() != &pen {
                 if let Some(sgr) = to_sgr_diff(&pen, cells[0].pen()) {
