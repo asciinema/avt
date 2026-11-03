@@ -3,32 +3,30 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{fs, hint::black_box};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
+    let mixed = sample_text("mixed.txt");
+    let cacademo = sample_text("cacademo.txt");
+    let licenses = sample_text("licenses.txt");
+    let licenses_lolcat = sample_text("licenses-lolcat.txt");
+
     c.bench_function("parser: feed mixed", |b| {
-        b.iter_batched(setup("mixed.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&mixed), run, BatchSize::SmallInput)
     });
 
     c.bench_function("parser: feed cacademo", |b| {
-        b.iter_batched(setup("cacademo.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&cacademo), run, BatchSize::SmallInput)
     });
 
     c.bench_function("parser: feed licenses", |b| {
-        b.iter_batched(setup("licenses.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&licenses), run, BatchSize::SmallInput)
     });
 
     c.bench_function("parser: feed licenses-lolcat", |b| {
-        b.iter_batched(setup("licenses-lolcat.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&licenses_lolcat), run, BatchSize::SmallInput)
     });
 }
 
-fn setup(filename: &str) -> impl Fn() -> (Parser, String) + use<> {
-    let filename = filename.to_owned();
-
-    move || {
-        let parser = Parser::default();
-        let text = sample_text(&filename);
-
-        (parser, text)
-    }
+fn setup(text: &str) -> impl Fn() -> (Parser, String) {
+    move || (Parser::default(), text.to_owned())
 }
 
 fn run((mut parser, text): (Parser, String)) -> (Parser, String) {

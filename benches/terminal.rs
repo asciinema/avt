@@ -4,37 +4,38 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{fs, hint::black_box, iter};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
+    let mixed = sample_text("mixed.txt");
+    let cacademo = sample_text("cacademo.txt");
+    let licenses = sample_text("licenses.txt");
+    let licenses_lolcat = sample_text("licenses-lolcat.txt");
+
     c.bench_function("terminal: feed mixed in bulk", |b| {
-        b.iter_batched(setup_feed("mixed.txt"), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&mixed), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed mixed in chunks", |b| {
-        b.iter_batched(
-            chunk(setup_feed("mixed.txt")),
-            run_feed,
-            BatchSize::SmallInput,
-        )
+        b.iter_batched(chunk(setup_feed(&mixed)), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed cacademo in bulk", |b| {
-        b.iter_batched(setup_feed("cacademo.txt"), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&cacademo), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed cacademo in chunks", |b| {
         b.iter_batched(
-            chunk(setup_feed("cacademo.txt")),
+            chunk(setup_feed(&cacademo)),
             run_feed,
             BatchSize::SmallInput,
         )
     });
 
     c.bench_function("terminal: feed licenses in bulk", |b| {
-        b.iter_batched(setup_feed("licenses.txt"), run_feed, BatchSize::SmallInput)
+        b.iter_batched(setup_feed(&licenses), run_feed, BatchSize::SmallInput)
     });
 
     c.bench_function("terminal: feed licenses in chunks", |b| {
         b.iter_batched(
-            chunk(setup_feed("licenses.txt")),
+            chunk(setup_feed(&licenses)),
             run_feed,
             BatchSize::SmallInput,
         )
@@ -42,7 +43,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("terminal: feed licenses-lolcat in bulk", |b| {
         b.iter_batched(
-            setup_feed("licenses-lolcat.txt"),
+            setup_feed(&licenses_lolcat),
             run_feed,
             BatchSize::SmallInput,
         )
@@ -50,7 +51,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("terminal: feed licenses-lolcat in chunks", |b| {
         b.iter_batched(
-            chunk(setup_feed("licenses-lolcat.txt")),
+            chunk(setup_feed(&licenses_lolcat)),
             run_feed,
             BatchSize::SmallInput,
         )
@@ -93,7 +94,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
 
     c.bench_function("terminal: feed cacademo with dirty rows", |b| {
         b.iter_batched(
-            setup_feed("cacademo.txt"),
+            setup_feed(&cacademo),
             |(mut terminal, text)| {
                 let rows = terminal.feed_with(&text[0], DirtyRows::new());
 
@@ -182,7 +183,7 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     }
 
     c.bench_function("terminal: dump", |b| {
-        b.iter_batched(setup_dump, run_dump, BatchSize::SmallInput)
+        b.iter_batched(|| setup_dump(&mixed), run_dump, BatchSize::SmallInput)
     });
 
     let mut terminal = Terminal::with_scrollback(80, 24, None).unwrap();
@@ -221,14 +222,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     );
 }
 
-fn setup_feed(filename: &str) -> impl Fn() -> (Terminal, Vec<String>) + use<> {
-    let filename = filename.to_owned();
-
+fn setup_feed(text: &str) -> impl Fn() -> (Terminal, Vec<String>) {
     move || {
         let vt = Terminal::with_scrollback(100, 24, Some(1000)).unwrap();
-        let text = sample_text(&filename);
 
-        (vt, vec![text])
+        (vt, vec![text.to_owned()])
     }
 }
 
@@ -271,10 +269,9 @@ fn sample_text(filename: &str) -> String {
     fs::read_to_string(format!("benches/data/{filename}")).unwrap()
 }
 
-fn setup_dump() -> Terminal {
+fn setup_dump(text: &str) -> Terminal {
     let mut vt = Terminal::new(100, 40).unwrap();
-    let text = &sample_text("mixed.txt")[0..128 * 1024];
-    vt.feed(text);
+    vt.feed(&text[0..128 * 1024]);
 
     vt
 }
