@@ -1,6 +1,6 @@
 use avt::Charset;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use std::fs;
+use std::{fs, hint::black_box};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("charset: ascii", |b| {
@@ -22,7 +22,7 @@ fn setup(charset: Charset) -> impl Fn() -> (Charset, String) {
 
 fn run((charset, text): (Charset, String)) -> (Charset, String) {
     for ch in text.chars() {
-        charset.translate(ch);
+        black_box(charset.translate(ch));
     }
 
     (charset, text)

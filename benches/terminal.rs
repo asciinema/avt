@@ -146,7 +146,12 @@ pub fn criterion_benchmark(c: &mut Criterion) {
                     &mut shell,
                 );
 
-                b.iter(|| terminal.feed_with(black_box("\rX"), &mut shell));
+                b.iter(|| {
+                    let events = terminal.feed_with(black_box("\rX"), &mut shell);
+                    black_box((&terminal, &shell));
+
+                    events
+                });
             },
         );
     }
