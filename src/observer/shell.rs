@@ -762,6 +762,33 @@ mod tests {
     }
 
     #[test]
+    fn del_preserves_command_tracking() {
+        for text in ["echo\r\n\x7f", "echo\r\n\x7f\x7f", "echo\r\x7f\x1b[7G"] {
+            let input = format!("{PROMPT}{text}{SUBMIT}");
+
+            for fragmented in [false, true] {
+                let mut terminal = Terminal::new(24, 4).unwrap();
+                let mut shell = ShellTracker::new();
+
+                let events = if fragmented {
+                    terminal.feed_with(input.chars(), &mut shell)
+                } else {
+                    terminal.feed_with(&input, &mut shell)
+                };
+
+                assert!(
+                    matches!(
+                        &events[1],
+                        ShellEvent::CommandSubmitted(command)
+                            if command.text.as_deref() == Some("echo")
+                    ),
+                    "text {text:?}, fragmented {fragmented}: {events:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn prompt_replacement_only_affects_the_active_buffer() {
         let mut terminal = Terminal::new(8, 2).unwrap();
         let mut shell = ShellTracker::new();

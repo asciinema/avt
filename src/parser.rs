@@ -548,8 +548,9 @@ impl Parser {
     /// borrow only the input, so the parser can be reused or dropped while they
     /// remain alive. Use [`Function::into_owned`] to outlive the input as well.
     ///
-    /// Printable text is emitted in nonempty runs ending at controls or the
-    /// fragment boundary, with no fixed size limit. Unfinished control sequences
+    /// Printable text is emitted in nonempty runs ending at C0/C1 controls, DEL,
+    /// or the fragment boundary, with no fixed size limit. DEL (U+007F) is ignored
+    /// in Ground and excluded from print runs. Unfinished control sequences
     /// continue in the next fragment; printable text is never buffered across
     /// fragments. Run boundaries may change in future versions.
     ///
@@ -584,11 +585,80 @@ impl Parser {
         self.next_control_function(input)
     }
 
+    // Find the first control using u64 arithmetic to test eight bytes at once.
+    // In valid UTF-8, stops are C0 bytes, DEL and C2 80..9F pairs (C1 controls).
+    // Each byte's high bit marks a candidate. Loads may split characters,
+    // but all stops begin a character, so returned offsets are UTF-8 boundaries.
+    #[inline(always)]
+    fn print_run_end(input: &str) -> usize {
+        const ONES: u64 = 0x0101010101010101;
+        const HIGHS: u64 = 0x8080808080808080;
+
+        if input.len() < 8 {
+            return input
+                .find(|ch| ch < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&ch))
+                .unwrap_or(input.len());
+        }
+
+        let bytes = input.as_bytes();
+
+        // Short print runs are common even when the input fragment is large.
+        // Probe bytes without decoding or changing the word-loop alignment.
+        for offset in 0..2 {
+            let byte = bytes[offset];
+
+            if byte < 0x20 || byte == 0x7f || (byte == 0xc2 && bytes[offset + 1] < 0xa0) {
+                return offset;
+            }
+        }
+
+        let mut rest = bytes;
+
+        while let Some(chunk) = rest.first_chunk::<8>() {
+            let word = u64::from_le_bytes(*chunk);
+
+            // Subtracting 0x20 flags C0; adding 1 flags DEL. !word excludes non-ASCII.
+            let ascii = (word.wrapping_sub(ONES * 0x20) | word.wrapping_add(ONES)) & !word;
+
+            // XOR makes C2 zero; subtracting 1 flags that lane. &word excludes ASCII.
+            let c2 = (word ^ (ONES * 0xc2)).wrapping_sub(ONES) & word;
+
+            // After C2, bit 5 distinguishes printable A0..BF from C1 80..9F.
+            // Shift that bit onto C2's marker to clear printable pairs.
+            // A final-byte C2 has no lookahead here and remains a candidate.
+            let mask = (ascii | (c2 & !(word >> 6))) & HIGHS;
+
+            if mask == 0 {
+                rest = &rest[8..];
+                continue;
+            }
+
+            // Little-endian puts the first candidate lowest; borrow-induced marks follow it.
+            let offset = mask.trailing_zeros() as usize / 8;
+
+            // A boundary C2 needs lookahead. Valid UTF-8 guarantees a following
+            // continuation byte; below A0 means a C1 control.
+            if rest[offset] != 0xc2 || rest[offset + 1] < 0xa0 {
+                return input.len() - rest.len() + offset;
+            }
+
+            // Skip the printable C2 pair.
+            rest = &rest[offset + 2..];
+        }
+
+        // Fewer than eight bytes remain, possibly starting inside a character.
+        for (offset, &byte) in rest.iter().enumerate() {
+            if byte < 0x20 || byte == 0x7f || (byte == 0xc2 && rest[offset + 1] < 0xa0) {
+                return input.len() - rest.len() + offset;
+            }
+        }
+
+        input.len()
+    }
+
     #[inline(always)]
     fn take_print_run<'a>(input: &mut &'a str) -> Option<&'a str> {
-        let end = input
-            .find(|ch| ch < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&ch))
-            .unwrap_or(input.len());
+        let end = Self::print_run_end(input);
 
         if end == 0 {
             return None;
@@ -856,7 +926,7 @@ impl Parser {
                 self.clear();
             }
 
-            // DEL (0x7F) is ignored in all states except OscString
+            // DEL is ignored in all states except OscString.
             (Ground | Escape | EscapeIntermediate
             | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore
             | DcsEntry | DcsParam | DcsIntermediate | DcsIgnore
@@ -2130,6 +2200,32 @@ mod tests {
         );
     }
 
+    fn assert_print_run_matches_reference(input: &str) {
+        let end = input
+            .find(|ch| ch < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&ch))
+            .unwrap_or(input.len());
+
+        let mut rest = input;
+        let text = Parser::take_print_run(&mut rest);
+        assert_eq!(text, (end > 0).then_some(&input[..end]));
+        assert_eq!(rest, &input[end..]);
+    }
+
+    #[test]
+    fn print_runs_handle_word_boundaries_and_tails() {
+        for offset in 0..16 {
+            let prefix = "x".repeat(offset);
+
+            for ch in ('\0'..='\u{ff}').chain(['界', '🦀']) {
+                for suffix in ["", "é界🦀", "\u{a0}£©±µ¿", "abcdefghi"] {
+                    let input = format!("{prefix}{ch}{suffix}");
+                    assert_print_run_matches_reference(&input);
+                    assert_print_run_matches_reference(&format!("{input}\u{85}tail"));
+                }
+            }
+        }
+    }
+
     #[test]
     fn dropping_feed_does_not_consume_the_remaining_input() {
         let mut parser = Parser::new();
@@ -3187,6 +3283,22 @@ mod tests {
     }
 
     proptest! {
+        #[test]
+        fn prop_print_runs_match_character_scanning(
+            prefix in prop::collection::vec(
+                prop_oneof![
+                    prop::char::range('\u{20}', '\u{7e}'),
+                    prop::char::range('\u{a0}', '\u{bf}'),
+                    prop::char::range('\u{a0}', char::MAX),
+                ],
+                0..=128,
+            ),
+            suffix in prop::collection::vec(any::<char>(), 0..=128),
+        ) {
+            let input: String = prefix.into_iter().chain(suffix).collect();
+            assert_print_run_matches_reference(&input);
+        }
+
         #[test]
         fn prop_feed_is_independent_of_fragment_boundaries(
             input in prop::collection::vec(

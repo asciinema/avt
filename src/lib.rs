@@ -426,6 +426,19 @@ mod tests {
     }
 
     #[test]
+    fn del_does_not_insert_or_dirty_rows() {
+        for setup in ["ABCD\r\x1b[4h", "ABCD", "ABCD\x1b[?7l"] {
+            let mut terminal = Terminal::new(4, 2).unwrap();
+            let mut dirty = DirtyRows::new();
+            terminal.feed_with(setup, &mut dirty);
+            let before = terminal.dump();
+            let rows = terminal.feed_with("\x7f\x7f", &mut dirty);
+            assert!(rows.is_empty());
+            assert_eq!(terminal.dump(), before);
+        }
+    }
+
+    #[test]
     fn screens_address_buffers_explicitly() {
         let mut terminal = Terminal::new(8, 2).unwrap();
         terminal.feed(["shell", "\x1b[?1047h", "\x1b[Hvim"]);
@@ -848,8 +861,7 @@ mod tests {
     }
 
     fn gen_char() -> impl Strategy<Value = char> {
-        // Match the parser's printable domain while giving
-        // wide characters a substantial share of the generated printing.
+        // Weight wide characters to exercise cell-pair edge cases.
         prop_oneof![
             4 => (0x20..=0x7eu8).prop_map(char::from),
             2 => prop::sample::select(vec!['界', '日', '🦀']),
@@ -1428,6 +1440,27 @@ mod tests {
             report.hooks,
             ["begin", "before", "after", "before", "after", "end"]
         );
+    }
+
+    #[test]
+    fn observers_receive_print_runs_without_del() {
+        let mut terminal = Terminal::new(16, 2).unwrap();
+        let report = terminal.feed_with(["a\x7fb", "\x7f"], Calls::default());
+
+        assert_eq!(
+            report.operations,
+            [
+                Function::Print("a".into()).into(),
+                Function::Print("b".into()).into()
+            ]
+        );
+
+        assert_eq!(terminal.screen().text(), ["ab", ""]);
+        assert_eq!(terminal.cursor().position(), Some((2, 0)));
+
+        let mut replay = Terminal::new(16, 2).unwrap();
+        replay.execute(report.operations);
+        replay.engine.assert_execution_equivalent(&terminal.engine);
     }
 
     #[test]
