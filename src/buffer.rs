@@ -314,11 +314,6 @@ impl Buffer {
             let position = positions[0].expect("live cursor must survive reflow");
             saved_absolute = positions[1];
             self.lines = lines;
-
-            for line in &mut self.lines {
-                line.clip_marks();
-            }
-
             let line_count = self.lines.len();
 
             if line_count < old_rows {
@@ -527,7 +522,10 @@ fn reflow(
 
     let lines: VecDeque<Line> = reflow
         .enumerate()
-        .map(|(row, (line, cursor))| {
+        .map(|(row, (mut line, cursor))| {
+            debug_assert_eq!(line.len(), cols);
+            line.clip_marks();
+
             for (position, cursor) in positions.iter_mut().zip(cursor) {
                 if let Some(mut c) = cursor {
                     c.clamp(cols);
@@ -538,8 +536,6 @@ fn reflow(
             line
         })
         .collect();
-
-    assert!(lines.iter().all(|l| l.len() == cols));
 
     (lines, positions)
 }
