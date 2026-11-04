@@ -156,9 +156,9 @@ impl Line {
         Some(width)
     }
 
-    /// Replaces a printable ASCII prefix in single-width cells, bounded by this
-    /// row. Returns bytes consumed (also cells written); zero leaves all state
-    /// untouched. Wide cells and other input are left for character placement.
+    /// Replaces a printable ASCII prefix, bounded by this row, repairing wide
+    /// pairs crossing either edge. Returns bytes consumed; zero leaves all state
+    /// untouched.
     #[inline]
     pub(crate) fn replace_ascii_prefix(&mut self, col: usize, text: &str, pen: Pen) -> usize {
         let Some(cells) = self.cells.get_mut(col..) else {
@@ -168,12 +168,28 @@ impl Line {
         let mut written = 0;
 
         for (cell, byte) in cells.iter_mut().zip(text.bytes()) {
-            if !(b' '..=b'~').contains(&byte) || cell.occupancy() != Occupancy::Single {
+            if !(b' '..=b'~').contains(&byte) {
                 break;
             }
 
             cell.set(char::from(byte), Occupancy::Single, pen);
             written += 1;
+        }
+
+        if written == 0 {
+            return 0;
+        }
+
+        // Only pairs crossing the edges can have a surviving half. Inspect the
+        // untouched neighbors after writing, preserving anchors and wrapping.
+        if col > 0 && self.cells[col - 1].occupancy() == Occupancy::WideHead {
+            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+        }
+
+        if let Some(tail) = self.cells.get_mut(col + written) {
+            if tail.occupancy() == Occupancy::WideTail {
+                tail.set(' ', Occupancy::Single, pen);
+            }
         }
 
         written
@@ -706,24 +722,30 @@ mod tests {
     }
 
     #[test]
-    fn ascii_prefix_stops_at_boundaries_preserving_metadata() {
+    fn ascii_prefix_repairs_wide_edges_preserving_metadata() {
         for (col, text, expected) in [
-            (0, "XY", 1),
-            (1, "X", 0),
-            (2, "X", 0),
+            (0, "XY", 2),
+            (1, "X", 1),
+            (1, "XY", 2), // Replace a complete wide pair.
+            (2, "X", 1),
+            (2, "XY", 2), // Split wide pairs at both edges.
+            (0, "XYZ123!", 6),
             (3, "XYZ!", 3),
             (3, "X界", 1),
+            (2, "X\0", 1),
+            (3, "X\x7f", 1),
             (3, " ~", 2),
-            (3, "", 0),
-            (3, "\0", 0),
-            (3, "\x7f", 0),
-            (3, "é", 0),
+            (2, "", 0),
+            (2, "\0", 0),
+            (2, "\x7f", 0),
+            (2, "é", 0),
+            (1, "\0", 0),
             (6, "X", 0),
             (7, "X", 0),
         ] {
             let mut line = Line::blank(6, Pen::default());
 
-            for (col, ch) in [(0, 'a'), (1, '界'), (3, 'b'), (4, 'c')] {
+            for (col, ch) in [(0, 'a'), (1, '界'), (3, '語'), (5, 'b')] {
                 line.replace_char(col, ch, Pen::default());
             }
 
@@ -735,13 +757,18 @@ mod tests {
             let mut pen = Pen::default();
             pen.set_italic();
             pen.background = Some(crate::Color::Indexed(2));
-            assert_eq!(line.replace_ascii_prefix(col, text, pen), expected);
+
+            assert_eq!(
+                line.replace_ascii_prefix(col, text, pen),
+                expected,
+                "col={col}, text={text:?}"
+            );
 
             for (offset, ch) in text.chars().take(expected).enumerate() {
                 reference.replace_char(col + offset, ch, pen);
             }
 
-            assert_eq!(line, reference);
+            assert_eq!(line, reference, "col={col}, text={text:?}");
             assert_eq!(line.marks.len(), 8);
             assert_eq!(line.marks[7].col, 6);
 
