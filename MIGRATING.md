@@ -6,12 +6,16 @@ Each section describes changes from the preceding version. If you skip versions,
 read the relevant sections oldest-first. Examples use the API of their section.
 This guide includes Git-tagged versions as well as crates.io releases.
 
-[Unreleased](#unreleased) · [0.19](#019) · [0.18](#018) · [0.17](#017) · [0.16](#016) ·
+[0.20](#020) · [0.19](#019) · [0.18](#018) · [0.17](#017) · [0.16](#016) ·
 [0.15](#015) · [0.14](#014) · [0.13](#013) · [0.12](#012) ·
 [0.11](#011) · [0.10](#010) · [0.9](#09) · [0.8](#08) ·
 [0.7](#07) · [0.6](#06) · [0.5](#05) · [0.1–0.4](#0104-legacy-vt)
 
-## Unreleased
+## 0.20
+
+Requires **Rust 1.86**, unchanged from 0.19. The library is now `no_std` with
+`alloc`, requiring an allocator and pointer-width atomics. Standard-library
+applications can continue using it normally.
 
 ### Parser and operation changes
 
@@ -26,7 +30,8 @@ This guide includes Git-tagged versions as well as crates.io releases.
   `operation.clone().into_owned()`. Parser consumers can collect owned functions
   with `parser.feed(text).map(Function::into_owned)`.
 - Handle the new `Function::Decrsps(CursorPresentation)` variant in exhaustive
-  matches. Dumps now use DECRSPS for cursor restoration; consumers must support it.
+  matches. Dumps now use DECRSPS for cursor restoration; custom dump readers
+  must support it.
 
 ### Batch retention
 
@@ -35,8 +40,8 @@ This guide includes Git-tagged versions as well as crates.io releases.
   and can temporarily exceed the retention limit.
 - Preserve call boundaries for exact replay, especially when batching resizes.
   Split calls when finer eviction granularity is needed.
-- `Observer::evicted` sees the final execution state during cleanup, not the
-  state of the last operation. Prune evicted anchor registrations afterward.
+- `Observer::evicted` sees call-final state, not the state when each line entered
+  history. Prune anchor metadata in `end`.
   RIS discards content without eviction callbacks; inspect it in `before`.
 
 ### Behavior changes
