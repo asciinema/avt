@@ -13,7 +13,7 @@ This guide includes Git-tagged versions as well as crates.io releases.
 
 ## Unreleased
 
-### Parser runs and operation lifetimes
+### Parser and operation changes
 
 - Replace `text.chars().filter_map(|ch| parser.feed(ch))` with `parser.feed(text)`.
   Exhaust the returned iterator to consume the entire fragment.
@@ -25,6 +25,8 @@ This guide includes Git-tagged versions as well as crates.io releases.
   Recording observers should store `Operation<'static>` using
   `operation.clone().into_owned()`. Parser consumers can collect owned functions
   with `parser.feed(text).map(Function::into_owned)`.
+- Handle the new `Function::Decrsps(CursorPresentation)` variant in exhaustive
+  matches. Dumps now use DECRSPS for cursor restoration; consumers must support it.
 
 ### Batch retention
 
@@ -36,6 +38,15 @@ This guide includes Git-tagged versions as well as crates.io releases.
 - `Observer::evicted` sees the final execution state during cleanup, not the
   state of the last operation. Prune evicted anchor registrations afterward.
   RIS discards content without eviction callbacks; inspect it in `before`.
+
+### Behavior changes
+
+- DEL (`U+007F`) is ignored in the parser's Ground state instead of printed.
+- `Observer::dirty` notifications are coalesced per `Print`/`Rep` action; do not
+  assume one callback per character.
+- Any size change, including width-only resizing, resets scrolling margins to
+  the full screen while preserving origin mode.
+- DECSTR enables autowrap and resets cursor-key mode to normal.
 
 ## 0.19
 

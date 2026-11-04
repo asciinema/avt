@@ -737,7 +737,7 @@ mod tests {
         assert_dump_equivalent(&original, &restored);
     }
 
-    fn gen_functions(max_len: usize) -> impl Strategy<Value = Vec<Function<'static>>> {
+    pub(crate) fn gen_functions(max_len: usize) -> impl Strategy<Value = Vec<Function<'static>>> {
         prop::collection::vec(gen_function(), 0..=max_len)
     }
 

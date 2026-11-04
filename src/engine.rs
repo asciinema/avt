@@ -347,7 +347,7 @@ impl Engine {
 
             Nel => self.nel(observer),
 
-            Print(ref text) => self.print_chars(text.chars(), observer),
+            Print(ref text) => self.print_text(text, observer),
 
             Rep(n) => self.rep(n, observer),
 
@@ -747,6 +747,52 @@ impl Engine {
 
         self.alternate_buffer
             .assert_execution_equivalent(&other.alternate_buffer);
+    }
+
+    fn print_text(&mut self, text: &str, observer: &mut impl Effects) {
+        if text.len() <= 1
+            || self.insert_mode
+            || self.charsets[self.active_charset] != Charset::Ascii
+        {
+            self.print_chars(text.chars(), observer);
+
+            return;
+        }
+
+        let mut dirty = self.cursor.row..self.cursor.row;
+        let mut chars = text.chars();
+
+        loop {
+            let text = chars.as_str();
+
+            let Some(ch) = chars.next() else {
+                break;
+            };
+
+            // A lone ASCII character cannot amortize the batch setup. In
+            // particular, keep CJK interspersed with spaces on the char path.
+            if matches!(ch, ' '..='~') && matches!(chars.as_str().as_bytes(), [b' '..=b'~', ..]) {
+                let pos = (self.cursor.col, self.cursor.row);
+                let pen = self.pen;
+
+                let written = self
+                    .active_buffer_mut()
+                    .replace_ascii_prefix(pos, text, pen);
+
+                if written > 0 {
+                    chars = text[written..].chars();
+                    self.advance_cursor_after_print(written);
+                    dirty.end = self.cursor.row + 1;
+                    continue;
+                }
+            }
+
+            self.print_char(ch, &mut dirty);
+        }
+
+        if !dirty.is_empty() {
+            observer.dirty(dirty);
+        }
     }
 
     fn print_chars(&mut self, chars: impl Iterator<Item = char>, observer: &mut impl Effects) {
@@ -1758,6 +1804,173 @@ mod tests {
     use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
+    use proptest::prelude::*;
+
+    #[derive(Debug, Default, PartialEq, Eq)]
+    struct PrintEffects {
+        dirty: Vec<core::ops::Range<usize>>,
+    }
+
+    impl super::Effects for PrintEffects {
+        fn dirty(&mut self, rows: core::ops::Range<usize>) {
+            self.dirty.push(rows);
+        }
+
+        fn resized(&mut self, cols: usize, rows: usize) {
+            panic!("unexpected resize to {cols}x{rows}");
+        }
+    }
+
+    fn assert_printing_matches_chars(
+        cols: usize,
+        rows: usize,
+        setup: &str,
+        functions: &[Function<'_>],
+    ) {
+        let mut batched = Terminal::with_scrollback(cols, rows, Some(3)).unwrap();
+        let mut reference = Terminal::with_scrollback(cols, rows, Some(3)).unwrap();
+        batched.feed(setup);
+        reference.feed(setup);
+        let mut anchors = Vec::new();
+
+        for screen in [ScreenKind::Primary, ScreenKind::Alternate] {
+            for row in 0..rows {
+                for col in [0, cols / 2, cols] {
+                    let position = super::Position {
+                        screen,
+                        col,
+                        row: row as isize,
+                    };
+
+                    anchors.push((
+                        batched.anchor_at(position).unwrap(),
+                        reference.anchor_at(position).unwrap(),
+                    ));
+                }
+            }
+        }
+
+        for function in functions {
+            let mut actual_effects = PrintEffects::default();
+            let mut expected_effects = PrintEffects::default();
+            batched.engine.execute_with(function, &mut actual_effects);
+
+            match function {
+                Print(text) => reference
+                    .engine
+                    .print_chars(text.chars(), &mut expected_effects),
+
+                _ => reference
+                    .engine
+                    .execute_with(function, &mut expected_effects),
+            }
+
+            assert_eq!(actual_effects, expected_effects, "{function:?}");
+            batched.engine.verify();
+
+            batched
+                .engine
+                .assert_execution_equivalent(&reference.engine);
+
+            for (actual, expected) in &anchors {
+                assert_eq!(
+                    batched.resolve(actual),
+                    reference.resolve(expected),
+                    "{function:?}, before eviction"
+                );
+            }
+
+            // Enforce retention as a normal execute call would.
+            batched.execute(core::iter::empty::<Function<'_>>());
+            reference.execute(core::iter::empty::<Function<'_>>());
+
+            batched
+                .engine
+                .assert_execution_equivalent(&reference.engine);
+
+            for (actual, expected) in &anchors {
+                assert_eq!(
+                    batched.resolve(actual),
+                    reference.resolve(expected),
+                    "{function:?}, after eviction"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn text_printing_matches_chars_across_wraps() {
+        assert_printing_matches_chars(
+            4,
+            2,
+            "",
+            &[Print("abcd".into()), Print("efghijklmnopqrstuvwxyz".into())],
+        );
+    }
+
+    #[test]
+    fn text_printing_matches_chars_on_one_column() {
+        assert_printing_matches_chars(1, 1, "", &[Print("abcdef".into())]);
+    }
+
+    #[test]
+    fn text_printing_matches_chars_on_alternate_screen() {
+        assert_printing_matches_chars(4, 2, "\x1b[?1047h", &[Print("abcdefghijkl".into())]);
+    }
+
+    #[test]
+    fn text_printing_matches_chars_in_scroll_region() {
+        assert_printing_matches_chars(
+            4,
+            4,
+            "top\r\nmid\r\nlow\r\nend\x1b[2;3r\x1b[3;4H",
+            &[Print("abcdef".into())],
+        );
+    }
+
+    #[test]
+    fn text_printing_matches_chars_without_autowrap() {
+        assert_printing_matches_chars(4, 2, "\x1b[?7l", &[Print("abcdef".into())]);
+    }
+
+    #[test]
+    fn text_printing_matches_chars_across_fallbacks() {
+        // Start on a wide tail, then encounter a wide head and mixed input.
+        // Controls here are literal Print contents, not parser actions.
+        assert_printing_matches_chars(
+            20,
+            2,
+            "界語abcd\r\x1b[2G",
+            &[Print("ABCé界 DE\0FG\x7fHI\u{301}".into())],
+        );
+    }
+
+    #[test]
+    fn text_printing_matches_chars_in_scalar_modes() {
+        for setup in [
+            "abcd\r\x1b[4h", // Insert into existing text.
+            "\x1b(0",        // G0 drawing charset.
+            "\x1b)0\x0e",    // G1 drawing charset selected with SO.
+        ] {
+            assert_printing_matches_chars(8, 2, setup, &[Print("lqk".into())]);
+        }
+    }
+
+    #[test]
+    fn empty_text_printing_matches_chars() {
+        assert_printing_matches_chars(4, 2, "ab", &[Print("".into())]);
+    }
+
+    proptest! {
+        #[test]
+        fn prop_text_printing_matches_chars(
+            cols in 1..20usize,
+            rows in 1..8usize,
+            functions in crate::tests::gen_functions(100),
+        ) {
+            assert_printing_matches_chars(cols, rows, "ab界c\r\n0123", &functions);
+        }
+    }
 
     fn print(ch: char) -> Function<'static> {
         Print(String::from(ch).into())

@@ -156,6 +156,29 @@ impl Line {
         Some(width)
     }
 
+    /// Replaces a printable ASCII prefix in single-width cells, bounded by this
+    /// row. Returns bytes consumed (also cells written); zero leaves all state
+    /// untouched. Wide cells and other input are left for character placement.
+    #[inline]
+    pub(crate) fn replace_ascii_prefix(&mut self, col: usize, text: &str, pen: Pen) -> usize {
+        let Some(cells) = self.cells.get_mut(col..) else {
+            return 0;
+        };
+
+        let mut written = 0;
+
+        for (cell, byte) in cells.iter_mut().zip(text.bytes()) {
+            if !(b' '..=b'~').contains(&byte) || cell.occupancy() != Occupancy::Single {
+                break;
+            }
+
+            cell.set(char::from(byte), Occupancy::Single, pen);
+            written += 1;
+        }
+
+        written
+    }
+
     /// Inserts one character, returning its cell width. Rejection leaves the
     /// entire row untouched, including anchor registrations and wrapping.
     pub(crate) fn insert_char(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
@@ -680,6 +703,52 @@ mod tests {
 
     fn chars(cells: &[Cell]) -> Vec<char> {
         cells.iter().map(|c| c.char()).collect()
+    }
+
+    #[test]
+    fn ascii_prefix_stops_at_boundaries_preserving_metadata() {
+        for (col, text, expected) in [
+            (0, "XY", 1),
+            (1, "X", 0),
+            (2, "X", 0),
+            (3, "XYZ!", 3),
+            (3, "X界", 1),
+            (3, " ~", 2),
+            (3, "", 0),
+            (3, "\0", 0),
+            (3, "\x7f", 0),
+            (3, "é", 0),
+            (6, "X", 0),
+            (7, "X", 0),
+        ] {
+            let mut line = Line::blank(6, Pen::default());
+
+            for (col, ch) in [(0, 'a'), (1, '界'), (3, 'b'), (4, 'c')] {
+                line.replace_char(col, ch, Pen::default());
+            }
+
+            line.set_wrapped(true);
+            let anchors: Vec<_> = (0..=6).map(|col| line.anchor_at(col).unwrap()).collect();
+            let expired = line.anchor_at(6).unwrap();
+            drop(expired);
+            let mut reference = line.clone();
+            let mut pen = Pen::default();
+            pen.set_italic();
+            pen.background = Some(crate::Color::Indexed(2));
+            assert_eq!(line.replace_ascii_prefix(col, text, pen), expected);
+
+            for (offset, ch) in text.chars().take(expected).enumerate() {
+                reference.replace_char(col + offset, ch, pen);
+            }
+
+            assert_eq!(line, reference);
+            assert_eq!(line.marks.len(), 8);
+            assert_eq!(line.marks[7].col, 6);
+
+            for (col, anchor) in anchors.iter().enumerate() {
+                assert_eq!(line.anchor_column(anchor), Some(col));
+            }
+        }
     }
 
     #[test]

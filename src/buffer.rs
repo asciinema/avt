@@ -78,6 +78,16 @@ impl Buffer {
         self[row].replace_char(col, ch, pen)
     }
 
+    #[inline]
+    pub fn replace_ascii_prefix(
+        &mut self,
+        (col, row): VisualPosition,
+        text: &str,
+        pen: Pen,
+    ) -> usize {
+        self[row].replace_ascii_prefix(col, text, pen)
+    }
+
     pub fn insert_char(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> Option<usize> {
         self[row].insert_char(col, ch, pen)
     }

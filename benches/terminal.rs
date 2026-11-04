@@ -84,6 +84,11 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     for (name, text) in [
         ("plain", "abcdefghijklmnopqrstuvwxyz012345".repeat(2048)),
         ("unicode", "hé界🦀".repeat(4096)),
+        ("CJK with spaces", "界 ".repeat(8192)),
+        (
+            "ASCII over wide cells",
+            format!("{}\r{}\r\n", "界".repeat(50), "x".repeat(100)).repeat(256),
+        ),
     ] {
         let chunks = [text.as_str()];
 
