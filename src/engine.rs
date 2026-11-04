@@ -138,10 +138,6 @@ impl SavedCursorState {
         if !self.auto_wrap_mode {
             funs.push(Function::Decset(DecModes::one(DecMode::AutoWrap)));
         }
-
-        if self.origin_mode {
-            funs.push(Function::Decrst(DecModes::one(DecMode::Origin)));
-        }
     }
 }
 
