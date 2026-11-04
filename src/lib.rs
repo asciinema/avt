@@ -297,7 +297,7 @@ impl Terminal {
     /// Retained scrollback and observer/anchor state are omitted; this is not a
     /// full-state snapshot.
     pub fn dump(&self) -> String {
-        let mut dump = ansi::dump(&self.engine.dump());
+        let mut dump = ansi::encode(&self.engine.dump());
         dump.push_str(&self.parser.dump());
 
         dump
@@ -751,7 +751,7 @@ mod tests {
 
     fn gen_function() -> impl Strategy<Value = Function<'static>> {
         use crate::ansi::{
-            AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, Osc, SgrOps, ShellIntegration,
+            AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, OscOp, SgrOps, ShellMarker,
             TbcScope, XtwinopsOp,
         };
         use Function::*;
@@ -835,14 +835,14 @@ mod tests {
             }),
             1 => prop_oneof![
                 prop::sample::select(vec![
-                    ShellIntegration::PromptStart,
-                    ShellIntegration::CommandStart,
-                    ShellIntegration::CommandExecuted,
+                    ShellMarker::PromptStart,
+                    ShellMarker::CommandStart,
+                    ShellMarker::CommandExecuted,
                 ]),
                 prop::option::of(any::<u8>()).prop_map(|exit_status| {
-                    ShellIntegration::CommandFinished { exit_status }
+                    ShellMarker::CommandFinished { exit_status }
                 }),
-            ].prop_map(|kind| Function::Osc(Osc::ShellIntegration(kind))),
+            ].prop_map(|kind| Function::Osc(OscOp::ShellIntegration(kind))),
             1 => (gen_param(), gen_param())
                 .prop_map(|(cols, rows)| Xtwinops(XtwinopsOp::Resize(cols, rows))),
         ]
@@ -2057,7 +2057,7 @@ mod tests {
 
                 // Serialized functions also exercise the feed path, including
                 // parser continuation across individual-character calls.
-                for ch in crate::ansi::dump(input).chars() {
+                for ch in crate::ansi::encode(input).chars() {
                     let (batch, text) =
                         chunked.feed_with(ch, (&mut chunked_shell, &mut chunked_transcript));
 
@@ -2080,9 +2080,9 @@ mod tests {
             plain.parser.assert_continuation_equivalent(&chunked.parser);
 
             let mut fed = Terminal::new(initial_cols, initial_rows).unwrap();
-            fed.feed(crate::ansi::dump(&first));
+            fed.feed(crate::ansi::encode(&first));
             fed.resize(cols, rows);
-            fed.feed(crate::ansi::dump(&second));
+            fed.feed(crate::ansi::encode(&second));
             plain.engine.assert_execution_equivalent(&fed.engine);
             plain.parser.assert_continuation_equivalent(&fed.parser);
         }

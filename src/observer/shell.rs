@@ -1,5 +1,5 @@
 use super::{Observation, Observer};
-use crate::ansi::{Function, Osc, ShellIntegration};
+use crate::ansi::{Function, OscOp, ShellMarker};
 use crate::{Anchor, Operation, ScreenKind, Terminal};
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;
@@ -173,9 +173,9 @@ impl ShellTracker {
         }
     }
 
-    fn marker(&mut self, context: &mut Observation<'_>, marker: ShellIntegration) {
+    fn marker(&mut self, context: &mut Observation<'_>, marker: ShellMarker) {
         match marker {
-            ShellIntegration::PromptStart => {
+            ShellMarker::PromptStart => {
                 let id = PromptId(self.next_prompt);
                 self.next_prompt += 1;
                 self.prompt = Some(id);
@@ -202,7 +202,7 @@ impl ShellTracker {
                 self.events.push(ShellEvent::PromptStarted(id));
             }
 
-            ShellIntegration::CommandStart => {
+            ShellMarker::CommandStart => {
                 self.editing = true;
 
                 self.input =
@@ -214,7 +214,7 @@ impl ShellTracker {
                     });
             }
 
-            ShellIntegration::CommandExecuted => {
+            ShellMarker::CommandExecuted => {
                 let id = CommandId(self.next_command);
                 self.next_command += 1;
 
@@ -232,7 +232,7 @@ impl ShellTracker {
                     .push(ShellEvent::CommandSubmitted(Command { id, prompt, text }));
             }
 
-            ShellIntegration::CommandFinished { exit_status } => {
+            ShellMarker::CommandFinished { exit_status } => {
                 if let Some((id, prompt)) = self.running.take() {
                     self.set_outcome(prompt, PromptOutcome::Finished { exit_status });
 
@@ -269,7 +269,7 @@ impl Observer for ShellTracker {
             return;
         };
 
-        if let Function::Osc(Osc::ShellIntegration(marker)) = function {
+        if let Function::Osc(OscOp::ShellIntegration(marker)) = function {
             self.marker(context, *marker);
         } else if matches!(function, Function::Ris) {
             self.input = None;
@@ -623,7 +623,7 @@ mod tests {
             [
                 Operation::Resize { cols: 8, rows: 1 },
                 Operation::Resize { cols: 8, rows: 3 },
-                Function::Osc(Osc::ShellIntegration(ShellIntegration::CommandExecuted)).into(),
+                Function::Osc(OscOp::ShellIntegration(ShellMarker::CommandExecuted)).into(),
             ],
             &mut shell,
         );
@@ -651,7 +651,7 @@ mod tests {
 
             let actions = input.chain([
                 Operation::Resize { cols: 8, rows: 3 },
-                Function::Osc(Osc::ShellIntegration(ShellIntegration::CommandExecuted)).into(),
+                Function::Osc(OscOp::ShellIntegration(ShellMarker::CommandExecuted)).into(),
             ]);
 
             let events = terminal.execute_with(actions, &mut shell);

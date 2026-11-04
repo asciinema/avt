@@ -16,6 +16,9 @@ This guide includes Git-tagged versions as well as crates.io releases.
 
 - Rename `avt::parser::*` imports to `avt::ansi::*`. The root-level
   `avt::Parser` re-export remains available.
+- Within `ansi`, rename `State` to `ParserState`, `Osc` to `OscOp`, and
+  `ShellIntegration` to `ShellMarker`. The variants `Function::Osc` and
+  `OscOp::ShellIntegration` keep their names.
 
 ## 0.20
 
