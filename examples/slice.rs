@@ -8,7 +8,7 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
 
-use avt::parser::{Function, SgrOp};
+use avt::ansi::{Function, SgrOp};
 use avt::{Cursor, Observation, Observer, Operation, ScreenKind, Terminal};
 
 const COLS: usize = 8;

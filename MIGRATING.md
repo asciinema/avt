@@ -6,10 +6,16 @@ Each section describes changes from the preceding version. If you skip versions,
 read the relevant sections oldest-first. Examples use the API of their section.
 This guide includes Git-tagged versions as well as crates.io releases.
 
-[0.20](#020) · [0.19](#019) · [0.18](#018) · [0.17](#017) · [0.16](#016) ·
+[Unreleased](#unreleased) · [0.20](#020) · [0.19](#019) · [0.18](#018) ·
+[0.17](#017) · [0.16](#016) ·
 [0.15](#015) · [0.14](#014) · [0.13](#013) · [0.12](#012) ·
 [0.11](#011) · [0.10](#010) · [0.9](#09) · [0.8](#08) ·
 [0.7](#07) · [0.6](#06) · [0.5](#05) · [0.1–0.4](#0104-legacy-vt)
+
+## Unreleased
+
+- Rename `avt::parser::*` imports to `avt::ansi::*`. The root-level
+  `avt::Parser` re-export remains available.
 
 ## 0.20
 

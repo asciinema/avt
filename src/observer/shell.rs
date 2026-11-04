@@ -1,5 +1,5 @@
 use super::{Observation, Observer};
-use crate::parser::{Function, Osc, ShellIntegration};
+use crate::ansi::{Function, Osc, ShellIntegration};
 use crate::{Anchor, Operation, ScreenKind, Terminal};
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;

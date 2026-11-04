@@ -1,4 +1,4 @@
-use crate::parser::Function;
+use crate::ansi::Function;
 
 /// One executable terminal action, observed before and after execution.
 /// The parser produces [`Function`] values; resizes are requested

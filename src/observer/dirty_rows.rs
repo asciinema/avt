@@ -54,7 +54,7 @@ impl Observer for DirtyRows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Operation, Terminal, parser::Function};
+    use crate::{Operation, Terminal, ansi::Function};
     use alloc::string::String;
 
     fn print(ch: char) -> Function<'static> {

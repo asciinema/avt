@@ -1,4 +1,4 @@
-use avt::parser::Parser;
+use avt::ansi::Parser;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use std::{fs, hint::black_box};
 

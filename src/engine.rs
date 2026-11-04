@@ -1,12 +1,12 @@
 use crate::Anchor;
+use crate::ansi::{
+    AnsiMode, AnsiModes, CtcOp, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
+    SgrOp, SgrOps, TbcScope,
+};
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
 use crate::line::Line;
-use crate::parser::{
-    AnsiMode, AnsiModes, CtcOp, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
-    SgrOp, SgrOps, TbcScope,
-};
 use crate::pen::{Intensity, Pen};
 use crate::tabs::Tabs;
 use alloc::string::String;
@@ -1787,14 +1787,14 @@ fn as_usize(value: u16, default: usize) -> usize {
 mod tests {
     use super::{Engine, ScreenKind};
     use crate::Terminal;
+    use crate::ansi::{
+        AnsiMode, AnsiModes, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
+        SgrOp, SgrOps,
+    };
     use crate::charset::Charset;
     use crate::color::Color;
     use crate::line::Line;
     use crate::observer::DirtyRows;
-    use crate::parser::{
-        AnsiMode, AnsiModes, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
-        SgrOp, SgrOps,
-    };
     use crate::pen::Intensity;
     use crate::pen::Pen;
     use Function::*;

@@ -1,5 +1,5 @@
 use super::{Observation, Observer};
-use crate::parser::Function;
+use crate::ansi::Function;
 use crate::{Line, Operation, Terminal};
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;

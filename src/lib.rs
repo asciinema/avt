@@ -38,6 +38,7 @@ extern crate alloc;
 extern crate std;
 
 mod anchor;
+pub mod ansi;
 mod buffer;
 mod cell;
 mod charset;
@@ -47,11 +48,11 @@ pub mod input;
 mod line;
 pub mod observer;
 pub mod operation;
-pub mod parser;
 mod pen;
 mod tabs;
 
 pub use anchor::Anchor;
+pub use ansi::Parser;
 pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
@@ -60,7 +61,6 @@ pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
 pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
-pub use parser::Parser;
 pub use pen::Pen;
 
 use alloc::string::String;
@@ -297,7 +297,7 @@ impl Terminal {
     /// Retained scrollback and observer/anchor state are omitted; this is not a
     /// full-state snapshot.
     pub fn dump(&self) -> String {
-        let mut dump = parser::dump(&self.engine.dump());
+        let mut dump = ansi::dump(&self.engine.dump());
         dump.push_str(&self.parser.dump());
 
         dump
@@ -311,8 +311,8 @@ impl Terminal {
 #[cfg(test)]
 mod tests {
 
+    use crate::ansi::{EdScope, Function};
     use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
-    use crate::parser::{EdScope, Function};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use alloc::borrow::ToOwned as _;
     use alloc::format;
@@ -750,7 +750,7 @@ mod tests {
     }
 
     fn gen_function() -> impl Strategy<Value = Function<'static>> {
-        use crate::parser::{
+        use crate::ansi::{
             AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, Osc, SgrOps, ShellIntegration,
             TbcScope, XtwinopsOp,
         };
@@ -848,10 +848,10 @@ mod tests {
         ]
     }
 
-    pub(crate) fn gen_cursor_presentation()
-    -> impl Strategy<Value = crate::parser::CursorPresentation> {
+    pub(crate) fn gen_cursor_presentation() -> impl Strategy<Value = crate::ansi::CursorPresentation>
+    {
         (gen_param(), gen_param(), any::<bool>(), any::<bool>()).prop_map(
-            |(row, col, origin_mode, pending_wrap)| crate::parser::CursorPresentation {
+            |(row, col, origin_mode, pending_wrap)| crate::ansi::CursorPresentation {
                 row,
                 col,
                 origin_mode,
@@ -870,8 +870,8 @@ mod tests {
         ]
     }
 
-    fn gen_sgr_op() -> impl Strategy<Value = crate::parser::SgrOp> {
-        use crate::parser::SgrOp::*;
+    fn gen_sgr_op() -> impl Strategy<Value = crate::ansi::SgrOp> {
+        use crate::ansi::SgrOp::*;
 
         prop_oneof![
             prop::sample::select(vec![
@@ -1826,7 +1826,7 @@ mod tests {
 
     #[test]
     fn only_host_resize_changes_geometry() {
-        use crate::parser::XtwinopsOp;
+        use crate::ansi::XtwinopsOp;
 
         let mut terminal = Terminal::new(4, 3).unwrap();
         let mut calls = Calls::default();
@@ -2057,7 +2057,7 @@ mod tests {
 
                 // Serialized functions also exercise the feed path, including
                 // parser continuation across individual-character calls.
-                for ch in crate::parser::dump(input).chars() {
+                for ch in crate::ansi::dump(input).chars() {
                     let (batch, text) =
                         chunked.feed_with(ch, (&mut chunked_shell, &mut chunked_transcript));
 
@@ -2080,9 +2080,9 @@ mod tests {
             plain.parser.assert_continuation_equivalent(&chunked.parser);
 
             let mut fed = Terminal::new(initial_cols, initial_rows).unwrap();
-            fed.feed(crate::parser::dump(&first));
+            fed.feed(crate::ansi::dump(&first));
             fed.resize(cols, rows);
-            fed.feed(crate::parser::dump(&second));
+            fed.feed(crate::ansi::dump(&second));
             plain.engine.assert_execution_equivalent(&fed.engine);
             plain.parser.assert_continuation_equivalent(&fed.parser);
         }
@@ -2560,7 +2560,7 @@ mod tests {
 
     #[test]
     fn execution_hooks_borrow_original_sgr_parameters() {
-        use crate::parser::SgrOp;
+        use crate::ansi::SgrOp;
 
         struct Parameters {
             address: *const SgrOp,
@@ -2588,7 +2588,7 @@ mod tests {
             }
         }
 
-        let ops = crate::parser::SgrOps::from(vec![SgrOp::SetBoldIntensity; 8]);
+        let ops = crate::ansi::SgrOps::from(vec![SgrOp::SetBoldIntensity; 8]);
 
         let observer = Parameters {
             address: ops.as_slice().as_ptr(),

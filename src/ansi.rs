@@ -1,3 +1,8 @@
+//! ANSI-compatible terminal functions and parsing, including DEC and xterm extensions.
+//!
+//! [`Parser`] turns text and control sequences into [`Function`] values, which
+//! can also be constructed directly for [`crate::Terminal::execute`].
+
 // Based on Paul Williams' parser for ANSI-compatible video terminals:
 // https://www.vt100.net/emu/dec_ansi_parser
 
