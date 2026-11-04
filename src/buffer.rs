@@ -1,7 +1,6 @@
 use alloc::borrow::ToOwned as _;
 use alloc::collections::VecDeque;
 use alloc::string::String;
-use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
 use core::ops::{Index, IndexMut, Range};
@@ -11,6 +10,8 @@ use crate::cell::Cell;
 use crate::line::{Line, ReflowCursor, ReflowCursors};
 use crate::pen::Pen;
 
+/// Screen/history storage. Structural edits maintain row relationships while
+/// individual lines maintain their cells and anchor columns.
 #[derive(Debug)]
 pub(crate) struct Buffer {
     lines: VecDeque<Line>,
@@ -59,7 +60,7 @@ impl Buffer {
         for line in &self.lines {
             current.extend(line.chars());
 
-            if !line.wrapped {
+            if !line.is_wrapped() {
                 text.push(current.trim_end().to_owned());
                 current.clear();
             }
@@ -68,24 +69,33 @@ impl Buffer {
         text
     }
 
-    pub fn print(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> Option<usize> {
-        self[row].print(col, ch, pen)
+    pub fn replace_char(
+        &mut self,
+        (col, row): VisualPosition,
+        ch: char,
+        pen: Pen,
+    ) -> Option<usize> {
+        self[row].replace_char(col, ch, pen)
+    }
+
+    pub fn insert_char(&mut self, (col, row): VisualPosition, ch: char, pen: Pen) -> Option<usize> {
+        self[row].insert_char(col, ch, pen)
     }
 
     pub fn wrap_to_next_row(&mut self, row: usize) {
         let marks = self.wrap(row);
-        self[row + 1].marks.extend(marks);
+        self[row + 1].add_marks(marks);
     }
 
     pub fn wrap_and_scroll_up(&mut self, range: Range<usize>, pen: &Pen) {
         let row = range.end - 1;
         let marks = self.wrap(row);
         self.scroll_up_preserving_bottom_wrap(range, 1, pen);
-        self[row].marks.extend(marks);
+        self[row].add_marks(marks);
     }
 
     fn wrap(&mut self, row: usize) -> Vec<Mark> {
-        self[row].wrapped = true;
+        self[row].set_wrapped(true);
         let cols = self.cols;
 
         self[row].split_marks(cols)
@@ -95,19 +105,7 @@ impl Buffer {
         let index = self.view_offset().checked_add_signed(row)?;
         let line = self.lines.get_mut(index)?;
 
-        if col > line.len() {
-            return None;
-        }
-
-        line.marks.retain(Mark::live);
-        let anchor = Anchor(Arc::new(()));
-
-        line.marks.push(Mark {
-            token: Arc::downgrade(&anchor.0),
-            col,
-        });
-
-        Some(anchor)
+        line.anchor_at(col)
     }
 
     pub fn resolve(&self, anchor: &Anchor) -> Option<(usize, isize)> {
@@ -120,16 +118,20 @@ impl Buffer {
         None
     }
 
-    pub fn shift_right(&mut self, (col, row): VisualPosition, mut n: usize, pen: Pen) {
-        n = n.min(self.cols - col);
-        self[row].shift_right(col, n, pen);
+    pub fn insert_blanks(&mut self, (col, row): VisualPosition, n: usize, pen: Pen) {
+        self[row].insert_blanks(col, n, pen);
     }
 
     pub fn delete(&mut self, (col, row): VisualPosition, mut n: usize, pen: &Pen) {
         n = n.min(self.cols - col);
+
+        if n == 0 {
+            return;
+        }
+
         let line = &mut self[row];
         line.delete(col, n, pen);
-        line.wrapped = false;
+        line.set_wrapped(false);
     }
 
     pub fn erase(&mut self, (col, row): VisualPosition, mode: EraseMode, pen: &Pen) {
@@ -138,20 +140,25 @@ impl Buffer {
         match mode {
             NextChars(mut n) => {
                 n = n.min(self.cols - col);
+
+                if n == 0 {
+                    return;
+                }
+
                 let end = col + n;
                 let clear_wrap = end == self.cols;
                 let line = &mut self[row];
                 line.clear(col..end, pen);
 
                 if clear_wrap {
-                    line.wrapped = false;
+                    line.set_wrapped(false);
                 }
             }
 
             FromCursorToEndOfView => {
                 let range = col..self.cols;
                 let line = &mut self[row];
-                line.wrapped = false;
+                line.set_wrapped(false);
                 line.clear(range, pen);
                 self.clear((row + 1)..self.rows, pen);
             }
@@ -170,7 +177,7 @@ impl Buffer {
                 let range = col..self.cols;
                 let line = &mut self[row];
                 line.clear(range, pen);
-                line.wrapped = false;
+                line.set_wrapped(false);
             }
 
             FromStartOfLineToCursor => {
@@ -182,14 +189,14 @@ impl Buffer {
                 let range = 0..self.cols;
                 let line = &mut self[row];
                 line.clear(range, pen);
-                line.wrapped = false;
+                line.set_wrapped(false);
             }
         }
     }
 
     pub fn scroll_up(&mut self, range: Range<usize>, n: usize, pen: &Pen) {
         if range.end < self.rows {
-            self[range.end - 1].wrapped = false;
+            self[range.end - 1].set_wrapped(false);
         }
 
         self.scroll_up_preserving_bottom_wrap(range, n, pen);
@@ -211,7 +218,7 @@ impl Buffer {
                 }
             }
         } else {
-            self[range.start - 1].wrapped = false;
+            self[range.start - 1].set_wrapped(false);
             let end = range.end;
             self.visible_rows_mut(range).rotate_left(n);
             self.clear((end - n)..end, pen);
@@ -224,11 +231,11 @@ impl Buffer {
         let mut end = 0;
 
         for (row, line) in self.view().enumerate() {
-            if previous_wrapped || line.wrapped || !line.is_blank() {
+            if previous_wrapped || line.is_wrapped() || !line.is_blank() {
                 end = row + 1;
             }
 
-            previous_wrapped = line.wrapped;
+            previous_wrapped = line.is_wrapped();
         }
 
         end
@@ -240,7 +247,7 @@ impl Buffer {
         let previous_wrapped = self
             .view_offset()
             .checked_sub(1)
-            .map_or(self.front_wrapped, |row| self.lines[row].wrapped);
+            .map_or(self.front_wrapped, |row| self.lines[row].is_wrapped());
 
         let end = self.occupied_prefix_len(previous_wrapped);
 
@@ -256,10 +263,10 @@ impl Buffer {
         self.clear(start..start + n, pen);
 
         if start > 0 {
-            self[start - 1].wrapped = false;
+            self[start - 1].set_wrapped(false);
         }
 
-        self[end - 1].wrapped = false;
+        self[end - 1].set_wrapped(false);
     }
 
     pub fn resize(
@@ -336,7 +343,7 @@ impl Buffer {
 
                 if excess > 0 {
                     self.lines.truncate(line_count - excess);
-                    self.lines.back_mut().unwrap().wrapped = false;
+                    self.lines.back_mut().unwrap().set_wrapped(false);
                 }
 
                 cursor.1 -= height_delta - excess;
@@ -400,7 +407,7 @@ impl Buffer {
             .is_some_and(|limit| self.lines.len() - self.rows > limit)
         {
             let line = self.lines.pop_front()?;
-            self.front_wrapped = line.wrapped;
+            self.front_wrapped = line.is_wrapped();
 
             return Some(line);
         }
@@ -439,7 +446,7 @@ impl Buffer {
         let mut line = Line::blank(self.cols, Pen::default());
 
         for col in 0..self.cols {
-            line.print(col, 's', Pen::default());
+            line.replace_char(col, 's', Pen::default());
         }
 
         for _ in 0..n {
@@ -536,7 +543,7 @@ impl<I: Iterator<Item = (Line, ReflowCursors)>> Iterator for Reflow<I> {
         while let Some((mut line, mut cursor)) = self.rest.take().or_else(|| self.iter.next()) {
             match self.cols.cmp(&line.len()) {
                 Less => {
-                    self.rest = line.contract(self.cols, &mut cursor);
+                    self.rest = line.split_for_reflow(self.cols, &mut cursor);
 
                     return Some((line, cursor));
                 }
@@ -547,7 +554,8 @@ impl<I: Iterator<Item = (Line, ReflowCursors)>> Iterator for Reflow<I> {
 
                 Greater => match self.iter.next() {
                     Some((next_line, next_cursor)) => {
-                        self.rest = line.extend(next_line, self.cols, &mut cursor, next_cursor);
+                        self.rest =
+                            line.append_for_reflow(next_line, self.cols, &mut cursor, next_cursor);
 
                         if line.len() == self.cols {
                             return Some((line, cursor));
@@ -558,7 +566,7 @@ impl<I: Iterator<Item = (Line, ReflowCursors)>> Iterator for Reflow<I> {
 
                     None => {
                         line.expand(self.cols);
-                        line.wrapped = false;
+                        line.set_wrapped(false);
 
                         return Some((line, cursor));
                     }
@@ -586,11 +594,11 @@ mod tests {
 
         assert_eq!(buffer.text(), vec!["", "", "", "", ""]);
 
-        buffer.print((0, 0), 'x', Pen::default());
-        buffer.print((1, 1), 'x', Pen::default());
-        buffer.print((2, 2), 'x', Pen::default());
-        buffer.print((3, 3), 'x', Pen::default());
-        buffer.print((4, 4), 'x', Pen::default());
+        buffer.replace_char((0, 0), 'x', Pen::default());
+        buffer.replace_char((1, 1), 'x', Pen::default());
+        buffer.replace_char((2, 2), 'x', Pen::default());
+        buffer.replace_char((3, 3), 'x', Pen::default());
+        buffer.replace_char((4, 4), 'x', Pen::default());
         assert_eq!(buffer.text(), vec!["x", " x", "  x", "   x", "    x"]);
 
         buffer.wrap(0);
@@ -630,7 +638,7 @@ mod tests {
         assert_eq!(line(&buf[6]), "    ");
         assert_eq!(buf.text().join("\n"), "aaaaaaaaaa\nbb\ncccccccccc\n");
         assert_eq!(buf.lines.len(), 8);
-        assert!(buf.lines[0].wrapped);
+        assert!(buf.lines[0].is_wrapped());
 
         // top of the view
 
@@ -647,7 +655,7 @@ mod tests {
         assert_eq!(line(&buf[6]), "cc  ");
         assert_eq!(buf.text().join("\n"), "aaaaaaaaaa\nbb\ncccc\n\ncccccc");
         assert_eq!(buf.lines.len(), 8);
-        assert!(buf.lines[0].wrapped);
+        assert!(buf.lines[0].is_wrapped());
 
         // bottom of the view
 
@@ -701,7 +709,7 @@ mod tests {
     fn line(line: &Line) -> String {
         let mut t = line.text();
 
-        if line.wrapped {
+        if line.is_wrapped() {
             t.push('⏎');
         }
 
@@ -972,7 +980,7 @@ mod tests {
 
         for (row, (line, wrapped)) in content.iter().enumerate() {
             for (col, ch) in line.chars().enumerate() {
-                buffer.print((col, row), ch, Pen::default());
+                buffer.replace_char((col, row), ch, Pen::default());
             }
 
             if *wrapped {

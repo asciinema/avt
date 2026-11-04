@@ -2641,13 +2641,13 @@ mod tests {
     }
 
     #[test]
-    fn insert_mode_wrap_reports_both_changed_rows() {
+    fn insert_wrap_reports_both_rows_dirty() {
         let mut terminal = Terminal::new(2, 2).unwrap();
         let mut dirty = DirtyRows::new();
         terminal.feed_with("\x1b[4h界\x1b[C", &mut dirty);
         let rows = terminal.execute_with(print('界'), &mut dirty);
         assert_eq!(rows, [0, 1]);
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "  ");
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "界");
         assert_eq!(terminal.screen().line(1).unwrap().text(), "界");
         terminal.engine.verify();
     }

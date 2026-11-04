@@ -188,7 +188,7 @@ impl ShellTracker {
 
                 // Replace annotations at this position. An unmarked position cannot
                 // have an old prompt, so avoid scanning the batch's growing history.
-                if line.marks.iter().any(|mark| mark.col == cursor.col) {
+                if line.has_anchor_at(cursor.col) {
                     self.markers
                         .retain(|marker| line.anchor_column(&marker.anchor) != Some(cursor.col));
                 }

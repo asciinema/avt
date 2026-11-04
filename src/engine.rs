@@ -20,6 +20,8 @@ pub(crate) trait Effects {
     fn resized(&mut self, cols: usize, rows: usize);
 }
 
+/// Terminal policy and live state. Chooses editing operations and reports their
+/// effects; buffers and lines implement the corresponding storage mutations.
 #[derive(Debug)]
 pub(crate) struct Engine {
     cols: usize,
@@ -349,7 +351,7 @@ impl Engine {
 
             Nel => self.nel(observer),
 
-            Print(ref text) => self.print(text.chars(), observer),
+            Print(ref text) => self.print_chars(text.chars(), observer),
 
             Rep(n) => self.rep(n, observer),
 
@@ -687,7 +689,7 @@ impl Engine {
         for buffer in buffers {
             assert_eq!(buffer.view().len(), self.rows);
             assert!(buffer.lines().all(|line| line.len() == self.cols));
-            assert!(!buffer.lines().last().unwrap().wrapped);
+            assert!(!buffer.lines().last().unwrap().is_wrapped());
 
             for line in buffer.lines() {
                 for i in 0..self.cols {
@@ -751,23 +753,13 @@ impl Engine {
             .assert_execution_equivalent(&other.alternate_buffer);
     }
 
-    fn print(&mut self, chars: impl Iterator<Item = char>, observer: &mut impl Effects) {
-        // Include the starting row: inserting can change it before a wide
-        // character wraps. Scrolling can extend the range upward.
+    fn print_chars(&mut self, chars: impl Iterator<Item = char>, observer: &mut impl Effects) {
+        // Include the starting row, whose wrap flag may change. Scrolling can
+        // extend the range upward.
         let mut dirty = self.cursor.row..self.cursor.row;
 
         for ch in chars {
-            let ch = self.charsets[self.active_charset].translate(ch);
-
-            match self.try_print(ch) {
-                Some(width) => self.advance_cursor_after_print(width),
-
-                None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, &mut dirty),
-
-                None => self.print_at_line_end(ch),
-            }
-
-            dirty.end = self.cursor.row + 1;
+            self.print_char(ch, &mut dirty);
         }
 
         if !dirty.is_empty() {
@@ -775,6 +767,23 @@ impl Engine {
         }
     }
 
+    #[inline(always)] // Avoid measurable per-character call overhead.
+    fn print_char(&mut self, ch: char, dirty: &mut Range<usize>) {
+        let ch = self.charsets[self.active_charset].translate(ch);
+
+        match self.try_print(ch) {
+            Some(width) => self.advance_cursor_after_print(width),
+
+            None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, dirty),
+
+            None => self.print_at_line_end(ch),
+        }
+
+        dirty.end = self.cursor.row + 1;
+    }
+
+    /// Attempts placement at the cursor without moving it. A rejected placement
+    /// leaves all state untouched; wrapping is the caller's responsibility.
     #[inline]
     fn try_print(&mut self, ch: char) -> Option<usize> {
         if self.cursor.col >= self.cols {
@@ -785,10 +794,10 @@ impl Engine {
         let pen = self.pen;
 
         if self.insert_mode {
-            self.active_buffer_mut().shift_right(pos, 1, pen);
+            self.active_buffer_mut().insert_char(pos, ch, pen)
+        } else {
+            self.active_buffer_mut().replace_char(pos, ch, pen)
         }
-
-        self.active_buffer_mut().print(pos, ch, pen)
     }
 
     fn advance_cursor_after_print(&mut self, width: usize) {
@@ -815,29 +824,23 @@ impl Engine {
             self.cursor.row += 1;
         }
 
-        let pos = (0, self.cursor.row);
+        self.cursor.col = 0;
 
-        if let Some(width) = self.active_buffer_mut().print(pos, ch, pen) {
+        if let Some(width) = self.try_print(ch) {
             self.cursor.col = width;
-        } else {
-            self.cursor.col = 0;
         }
     }
 
     fn print_at_line_end(&mut self, ch: char) {
-        let row = self.cursor.row;
-        let pen = self.pen;
-
+        // With autowrap disabled, back up enough to fit the character and leave
+        // the cursor at the final column.
         if self.cursor.col > 0 {
-            let col = self.cursor.col - 1;
+            self.cursor.col -= 1;
+            let printed = self.try_print(ch).is_some();
 
-            let printed = self
-                .active_buffer_mut()
-                .print((col, row), ch, pen)
-                .is_some();
-
-            if !printed && col > 0 {
-                self.active_buffer_mut().print((col - 1, row), ch, pen);
+            if !printed && self.cursor.col > 0 {
+                self.cursor.col -= 1;
+                self.try_print(ch);
             }
         }
 
@@ -935,7 +938,7 @@ impl Engine {
         for row in 0..self.rows {
             for col in 0..self.cols {
                 self.active_buffer_mut()
-                    .print((col, row), '\u{45}', Pen::default());
+                    .replace_char((col, row), '\u{45}', Pen::default());
             }
 
             observer.dirty(row..row + 1);
@@ -961,13 +964,9 @@ impl Engine {
         let row = self.cursor.row;
         let pen = self.pen;
 
-        self.active_buffer_mut().shift_right(pos, n, pen);
+        self.active_buffer_mut().insert_blanks(pos, n, pen);
 
-        for col in pos.0..pos.0 + n {
-            self.active_buffer_mut().print((col, row), ' ', pen);
-        }
-
-        observer.dirty(self.cursor.row..self.cursor.row + 1);
+        observer.dirty(row..row + 1);
     }
 
     fn cuu(&mut self, n: u16) {
@@ -1155,7 +1154,7 @@ impl Engine {
             }
 
             let char = self.active_buffer()[(col, row)].char();
-            self.print(core::iter::repeat_n(char, n), observer);
+            self.print_chars(core::iter::repeat_n(char, n), observer);
         }
     }
 
@@ -1562,7 +1561,7 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
             dump_cells(cells, funs);
         }
 
-        if i < last && !line.wrapped {
+        if i < last && !line.is_wrapped() {
             funs.push(Function::Cr);
             funs.push(Function::Lf);
         }
@@ -3665,6 +3664,83 @@ mod tests {
         term.feed("ghij");
 
         assert_eq!(text(&term), "aefg\nhij|\n\n");
+    }
+
+    #[test]
+    fn insert_mode_shifts_by_character_width() {
+        let mut term = Terminal::new(5, 2).unwrap();
+        term.feed("hello\x1b[1;2H\x1b[4h界");
+        assert_eq!(term.screen().line(0).unwrap().text(), "h界el");
+        assert_eq!(term.cursor().position(), Some((3, 0)));
+        term.engine.verify();
+    }
+
+    #[test]
+    fn insert_mode_applies_at_the_wrapped_destination() {
+        for (prefix, input, expected) in [
+            ("abcd", "X", "Xabc"),
+            ("abcd", "界", "界ab"),
+            ("abc", "界", "界ab"),
+        ] {
+            let mut term = Terminal::new(4, 2).unwrap();
+            term.feed("\x1b[2;1Habcd\x1b[H");
+            term.feed(prefix);
+            term.feed("\x1b[4h");
+            term.feed(input);
+            assert_eq!(term.screen().line(1).unwrap().text(), expected);
+            term.engine.verify();
+        }
+    }
+
+    #[test]
+    fn insert_mode_without_autowrap_fits_at_the_right_edge() {
+        let mut term = Terminal::new(4, 2).unwrap();
+        term.feed("abcd\x1b[1;4H\x1b[?7l\x1b[4h界");
+        assert_eq!(term.screen().line(0).unwrap().text(), "ab界");
+        assert_eq!(term.cursor().position(), Some((3, 0)));
+        assert_eq!(wrapped(&term), [false, false]);
+        term.engine.verify();
+    }
+
+    #[test]
+    fn one_column_insert_rejects_wide_input_without_cell_edits() {
+        for autowrap in [false, true] {
+            let mut term = Terminal::new(1, 2).unwrap();
+            term.feed("xy\x1b[H\x1b[4h");
+            let anchor = term.anchor_at_cursor();
+            let position = term.resolve(&anchor);
+
+            if !autowrap {
+                term.feed("\x1b[?7l");
+            }
+
+            term.feed("界");
+            assert_eq!(term.screen().line(0).unwrap().text(), "x");
+            assert_eq!(term.screen().line(1).unwrap().text(), "y");
+            assert_eq!(term.resolve(&anchor), position);
+            assert_eq!(term.cursor().position(), Some((0, usize::from(autowrap))));
+            term.engine.verify();
+        }
+    }
+
+    #[test]
+    fn rejected_insert_placement_preserves_cells_and_anchors() {
+        let mut term = Terminal::new(2, 2).unwrap();
+        term.feed("界\x1b[H");
+        let head = term.anchor_at_cursor();
+        term.feed("\x1b[C");
+        let tail = term.anchor_at_cursor();
+        term.feed("\x1b[4h");
+        let before = term.screen().line(0).unwrap().clone();
+        let cursor = term.cursor();
+        let head_pos = term.resolve(&head);
+        let tail_pos = term.resolve(&tail);
+        assert_eq!(term.engine.try_print('界'), None);
+        assert_eq!(term.screen().line(0).unwrap(), &before);
+        assert_eq!(term.cursor(), cursor);
+        assert_eq!(term.resolve(&head), head_pos);
+        assert_eq!(term.resolve(&tail), tail_pos);
+        term.engine.verify();
     }
 
     #[test]
