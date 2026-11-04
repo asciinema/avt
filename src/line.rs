@@ -122,66 +122,38 @@ impl Line {
     /// leaves the entire row untouched, including anchors and wrapping.
     pub(crate) fn replace_char(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
         let char_width = self.char_display_width(ch);
+        let width = char_width.as_usize();
 
-        if char_width.as_usize() > self.len().saturating_sub(col) {
+        if width > self.len().saturating_sub(col) {
             return None;
         }
 
-        let cell_occupancy = self.cells[col].occupancy();
+        // Repair wide pairs crossing either edge without invalidating anchors.
+        if self.cells[col].occupancy() == Occupancy::WideTail {
+            debug_assert!(col > 0);
+            debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
 
-        match (cell_occupancy, char_width) {
-            (Occupancy::Single, CharWidth::Single) => {
+            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+        }
+
+        if let Some(tail) = self.cells.get_mut(col + width) {
+            if tail.occupancy() == Occupancy::WideTail {
+                tail.set(' ', Occupancy::Single, pen);
+            }
+        }
+
+        match char_width {
+            CharWidth::Single => {
                 self.cells[col].set(ch, Occupancy::Single, pen);
             }
 
-            (Occupancy::Single, CharWidth::Double) => {
+            CharWidth::Double => {
                 self.cells[col].set(ch, Occupancy::WideHead, pen);
-
-                if self.cells[col + 1].occupancy() == Occupancy::WideHead {
-                    self.cells[col + 2].set(' ', Occupancy::Single, pen);
-                }
-
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
-            }
-
-            (Occupancy::WideHead, CharWidth::Single) => {
-                debug_assert_eq!(self.cells[col + 1].occupancy(), Occupancy::WideTail);
-
-                self.cells[col].set(ch, Occupancy::Single, pen);
-                self.cells[col + 1].set(' ', Occupancy::Single, pen);
-            }
-
-            (Occupancy::WideHead, CharWidth::Double) => {
-                debug_assert_eq!(self.cells[col + 1].occupancy(), Occupancy::WideTail);
-
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
-            }
-
-            (Occupancy::WideTail, CharWidth::Single) => {
-                debug_assert!(col > 0);
-                debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
-
-                self.cells[col - 1].set(' ', Occupancy::Single, pen);
-                self.cells[col].set(ch, Occupancy::Single, pen);
-            }
-
-            (Occupancy::WideTail, CharWidth::Double) => {
-                debug_assert!(col > 0);
-                debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
-
-                self.cells[col - 1].set(' ', Occupancy::Single, pen);
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-
-                if self.cells[col + 1].occupancy() == Occupancy::WideHead {
-                    self.cells[col + 2].set(' ', Occupancy::Single, pen);
-                }
-
                 self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
             }
         }
 
-        Some(char_width.as_usize())
+        Some(width)
     }
 
     /// Inserts one character, returning its cell width. Rejection leaves the
@@ -729,6 +701,52 @@ mod tests {
                     assert_eq!(line.marks.len(), 2);
                     assert_eq!(line.marks[1].col, cols);
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn replacement_repairs_wide_edges_preserving_anchors() {
+        for (col, ch, expected, widths, changed) in [
+            (0, 'x', "x界語b", [1, 2, 0, 2, 0, 1], 0..1),
+            (0, '新', "新 語b", [2, 0, 1, 2, 0, 1], 0..3),
+            (1, 'x', "ax 語b", [1, 1, 1, 2, 0, 1], 1..3),
+            (1, '新', "a新語b", [1, 2, 0, 2, 0, 1], 1..3),
+            (2, 'x', "a x語b", [1, 1, 1, 2, 0, 1], 1..3),
+            (2, '新', "a 新 b", [1, 1, 2, 0, 1, 1], 1..5),
+        ] {
+            let mut old_pen = Pen::default();
+            old_pen.set_underline();
+            let mut pen = Pen::default();
+            pen.set_italic();
+            let mut line = Line::blank(6, old_pen);
+            let mut cursor = 0;
+
+            for ch in "a界語b".chars() {
+                cursor += line.replace_char(cursor, ch, old_pen).unwrap();
+            }
+
+            line.set_wrapped(true);
+            let anchors: Vec<_> = (0..=6).map(|col| line.anchor_at(col).unwrap()).collect();
+            assert_eq!(line.replace_char(col, ch, pen), Some(widths[col]));
+            assert_eq!(line.text(), expected);
+            assert!(line.is_wrapped());
+
+            for (col, cell) in line.cells().iter().enumerate() {
+                assert_eq!(usize::from(cell.width()), widths[col]);
+
+                assert_eq!(
+                    cell.pen(),
+                    if changed.contains(&col) {
+                        &pen
+                    } else {
+                        &old_pen
+                    }
+                );
+            }
+
+            for (col, anchor) in anchors.iter().enumerate() {
+                assert_eq!(line.anchor_column(anchor), Some(col));
             }
         }
     }
