@@ -197,7 +197,12 @@ pub fn criterion_benchmark(c: &mut Criterion) {
     }
 
     c.bench_function("terminal: dump", |b| {
-        b.iter_batched(|| setup_dump(&mixed), run_dump, BatchSize::SmallInput)
+        let mut terminal = Terminal::new(100, 40).unwrap();
+        terminal.feed(&mixed[..128 * 1024]);
+
+        b.iter(|| {
+            black_box(terminal.dump());
+        });
     });
 
     let mut terminal = Terminal::with_scrollback(80, 24, None).unwrap();
@@ -270,19 +275,6 @@ fn chunk(text: &str) -> Vec<&str> {
 
 fn sample_text(filename: &str) -> String {
     fs::read_to_string(format!("benches/data/{filename}")).unwrap()
-}
-
-fn setup_dump(text: &str) -> Terminal {
-    let mut vt = Terminal::new(100, 40).unwrap();
-    vt.feed(&text[0..128 * 1024]);
-
-    vt
-}
-
-fn run_dump(vt: Terminal) -> Terminal {
-    black_box(vt.dump());
-
-    vt
 }
 
 criterion_group!(benches, criterion_benchmark);
