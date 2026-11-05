@@ -310,8 +310,7 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-
-    use crate::ansi::{EdScope, Function};
+    use crate::ansi::{self, CursorPresentation, EdScope, Function, SgrOp, SgrOps};
     use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use alloc::borrow::ToOwned as _;
@@ -750,11 +749,11 @@ mod tests {
     }
 
     fn gen_function() -> impl Strategy<Value = Function<'static>> {
-        use crate::ansi::{
-            AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, OscOp, SgrOps, ShellMarker,
-            TbcScope, XtwinopsOp,
-        };
         use Function::*;
+        use ansi::{
+            AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, OscOp, ShellMarker, TbcScope,
+            XtwinopsOp,
+        };
 
         let counted = (
             prop::sample::select(vec![
@@ -848,10 +847,9 @@ mod tests {
         ]
     }
 
-    pub(crate) fn gen_cursor_presentation() -> impl Strategy<Value = crate::ansi::CursorPresentation>
-    {
+    pub(crate) fn gen_cursor_presentation() -> impl Strategy<Value = CursorPresentation> {
         (gen_param(), gen_param(), any::<bool>(), any::<bool>()).prop_map(
-            |(row, col, origin_mode, pending_wrap)| crate::ansi::CursorPresentation {
+            |(row, col, origin_mode, pending_wrap)| CursorPresentation {
                 row,
                 col,
                 origin_mode,
@@ -870,8 +868,8 @@ mod tests {
         ]
     }
 
-    fn gen_sgr_op() -> impl Strategy<Value = crate::ansi::SgrOp> {
-        use crate::ansi::SgrOp::*;
+    fn gen_sgr_op() -> impl Strategy<Value = SgrOp> {
+        use SgrOp::*;
 
         prop_oneof![
             prop::sample::select(vec![
@@ -1826,7 +1824,7 @@ mod tests {
 
     #[test]
     fn only_host_resize_changes_geometry() {
-        use crate::ansi::XtwinopsOp;
+        use ansi::XtwinopsOp;
 
         let mut terminal = Terminal::new(4, 3).unwrap();
         let mut calls = Calls::default();
@@ -2057,7 +2055,7 @@ mod tests {
 
                 // Serialized functions also exercise the feed path, including
                 // parser continuation across individual-character calls.
-                for ch in crate::ansi::encode(input).chars() {
+                for ch in ansi::encode(input).chars() {
                     let (batch, text) =
                         chunked.feed_with(ch, (&mut chunked_shell, &mut chunked_transcript));
 
@@ -2080,9 +2078,9 @@ mod tests {
             plain.parser.assert_continuation_equivalent(&chunked.parser);
 
             let mut fed = Terminal::new(initial_cols, initial_rows).unwrap();
-            fed.feed(crate::ansi::encode(&first));
+            fed.feed(ansi::encode(&first));
             fed.resize(cols, rows);
-            fed.feed(crate::ansi::encode(&second));
+            fed.feed(ansi::encode(&second));
             plain.engine.assert_execution_equivalent(&fed.engine);
             plain.parser.assert_continuation_equivalent(&fed.parser);
         }
@@ -2560,8 +2558,6 @@ mod tests {
 
     #[test]
     fn execution_hooks_borrow_original_sgr_parameters() {
-        use crate::ansi::SgrOp;
-
         struct Parameters {
             address: *const SgrOp,
             seen: usize,
@@ -2588,7 +2584,7 @@ mod tests {
             }
         }
 
-        let ops = crate::ansi::SgrOps::from(vec![SgrOp::SetBoldIntensity; 8]);
+        let ops = SgrOps::from(vec![SgrOp::SetBoldIntensity; 8]);
 
         let observer = Parameters {
             address: ops.as_slice().as_ptr(),
