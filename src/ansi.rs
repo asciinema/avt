@@ -20,6 +20,8 @@ use core::fmt::Display;
 const PARAMS_LEN: usize = 32;
 const OSC_BUFFER_LIMIT: usize = 1024;
 
+/// Incremental parser for text and ANSI-compatible terminal control sequences.
+/// Incomplete sequences continue across calls to [`Parser::feed`].
 #[derive(Debug, Default)]
 pub struct Parser {
     pub state: ParserState,
@@ -30,6 +32,7 @@ pub struct Parser {
     dcs: dcs::Handler,
 }
 
+/// A state-machine phase of [`Parser`], excluding buffered sequence data.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum ParserState {
     #[default]
@@ -49,61 +52,112 @@ pub enum ParserState {
     SosPmApcString,
 }
 
-/// A terminal function. Print text may borrow the parser's input fragment.
-/// Use [`Function::into_owned`] to retain a function independently of its input.
+/// A terminal function. Print text may borrow the input.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Function<'a> {
+    /// Backspace.
     Bs,
+    /// Cursor Backward Tabulation: tab-stop count.
     Cbt(u16),
+    /// Cursor Character Absolute: column.
     Cha(u16),
+    /// Cursor Forward Tabulation: tab-stop count.
     Cht(u16),
+    /// Cursor Next Line: row count; moves to the first column.
     Cnl(u16),
+    /// Cursor Preceding Line: row count; moves to the first column.
     Cpl(u16),
+    /// Carriage Return.
     Cr,
+    /// Cursor Tabulation Control.
     Ctc(CtcOp),
+    /// Cursor Backward: column count.
     Cub(u16),
+    /// Cursor Down: row count.
     Cud(u16),
+    /// Cursor Forward: column count.
     Cuf(u16),
+    /// Cursor Position: `(row, column)`.
     Cup(u16, u16),
+    /// Cursor Up: row count.
     Cuu(u16),
+    /// Delete Character: column count.
     Dch(u16),
+    /// DEC Screen Alignment Test: fill the visible screen with `E` characters.
     Decaln,
+    /// DEC Restore Cursor.
     Decrc,
+    /// DEC Restore Presentation State; see [`CursorPresentation`].
     Decrsps(CursorPresentation),
+    /// DEC Reset Mode.
     Decrst(DecModes),
+    /// DEC Save Cursor.
     Decsc,
+    /// DEC Set Mode.
     Decset(DecModes),
+    /// DEC Set Top and Bottom Margins: `(top, bottom)`, inclusive.
+    /// Zero selects the first row for `top` and the last for `bottom`.
     Decstbm(u16, u16),
+    /// DEC Soft Terminal Reset.
     Decstr,
+    /// Delete Line: row count.
     Dl(u16),
+    /// Erase Character: column count.
     Ech(u16),
+    /// Erase in Display.
     Ed(EdScope),
+    /// Erase in Line.
     El(ElScope),
+    /// G1 Designate 94-Set: assign the character set selected by [`Function::So`].
     G1d4(Charset),
+    /// G0 Designate 94-Set: assign the character set selected by [`Function::Si`].
     Gzd4(Charset),
+    /// Horizontal Tabulation: next tab stop.
     Ht,
+    /// Horizontal Tabulation Set: current column.
     Hts,
+    /// Insert Character: blank-column count.
     Ich(u16),
+    /// Insert Line: blank-row count.
     Il(u16),
+    /// Line Feed; also moves to the first column in new-line mode.
     Lf,
+    /// Next Line: advance one row to the first column, scrolling if needed.
     Nel,
+    /// Operating System Command.
     Osc(OscOp),
     Print(Cow<'a, str>),
+    /// Repeat: count of copies of the character preceding the cursor.
     Rep(u16),
+    /// Reverse Index: move up one row, scrolling down at the top margin.
     Ri,
+    /// Reset to Initial State (hard reset).
     Ris,
+    /// Reset Mode.
     Rm(AnsiModes),
+    /// SCO Restore Cursor.
     Scorc,
+    /// SCO Save Cursor.
     Scosc,
+    /// Scroll Down: row count within the scrolling region.
     Sd(u16),
+    /// Select Graphic Rendition.
     Sgr(SgrOps),
+    /// Shift In: select the G0 character set.
     Si,
+    /// Set Mode.
     Sm(AnsiModes),
+    /// Shift Out: select the G1 character set.
     So,
+    /// Scroll Up: row count within the scrolling region.
     Su(u16),
+    /// Tabulation Clear.
     Tbc(TbcScope),
+    /// Vertical Position Absolute: row.
     Vpa(u16),
+    /// Vertical Position Relative: row count downward.
     Vpr(u16),
+    /// Xterm Window Operations.
     Xtwinops(XtwinopsOp),
 }
 
@@ -204,11 +258,14 @@ impl Default for CursorPresentation {
     }
 }
 
+/// A decoded Operating System Command (OSC) operation.
 #[derive(Debug, PartialEq, Clone)]
 pub enum OscOp {
     ShellIntegration(ShellMarker),
 }
 
+/// An OSC 133 marker delimiting shell prompt, command-input, and output phases.
+/// [`crate::observer::ShellTracker`] interprets these markers into shell events.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum ShellMarker {
     /// A (FTCS_PROMPT): prompt rendering begins.
@@ -221,6 +278,7 @@ pub enum ShellMarker {
     CommandFinished { exit_status: Option<u8> },
 }
 
+/// A standard ANSI mode selected by [`Function::Sm`] or [`Function::Rm`].
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum AnsiMode {
@@ -228,6 +286,7 @@ pub enum AnsiMode {
     NewLine = 20, // LNM
 }
 
+/// A Cursor Tabulation Control operation for horizontal tab stops.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CtcOp {
     Set,
@@ -235,6 +294,8 @@ pub enum CtcOp {
     ClearAll,
 }
 
+/// A DEC-private mode, including xterm extensions, selected by
+/// [`Function::Decset`] or [`Function::Decrst`].
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum DecMode {
@@ -247,21 +308,30 @@ pub enum DecMode {
     SaveCursorAltScreenBuffer = 1049, // xterm
 }
 
+/// The region selected by Erase in Display ([`Function::Ed`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EdScope {
+    /// From the cursor through the end of the visible display, inclusive.
     Below,
+    /// From the start of the visible display through the cursor, inclusive.
     Above,
+    /// The entire visible display.
     All,
+    /// Retained scrollback lines.
     SavedLines,
 }
 
+/// The region selected by Erase in Line ([`Function::El`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ElScope {
+    /// From the cursor through the end of the row, inclusive.
     ToRight,
+    /// From the start of the row through the cursor, inclusive.
     ToLeft,
     All,
 }
 
+/// A decoded Select Graphic Rendition operation affecting subsequent text.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SgrOp {
     Reset,                     // 0
@@ -284,21 +354,25 @@ pub enum SgrOp {
     ResetBackgroundColor,      // 49
 }
 
+/// The horizontal tab stops selected by Tabulation Clear ([`Function::Tbc`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TbcScope {
     CurrentColumn,
     All,
 }
 
+/// A decoded Xterm Window Operations request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum XtwinopsOp {
+    /// Request a text-area size of `(columns, rows)` in character cells.
+    /// The tuple order differs from the wire format, which puts rows first.
+    /// [`crate::Terminal`] exposes this to observers but does not resize itself.
     Resize(u16, u16),
 }
 
-/// Number of SgrOp values that fit inline without heap allocation.
 const SGR_OPS_INLINE_CAP: usize = 4;
 
-/// Small-buffer-optimized collection of SgrOp values.
+/// An ordered collection of [`SgrOp`] values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SgrOps(SgrOpsStorage);
 
@@ -382,10 +456,9 @@ impl From<&[SgrOp]> for SgrOps {
     }
 }
 
-/// Number of mode values that fit inline without heap allocation.
 const MODES_INLINE_CAP: usize = 4;
 
-/// Small-buffer-optimized collection of mode values.
+/// An ordered collection of [`AnsiMode`] values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnsiModes(AnsiModesStorage);
 
@@ -464,7 +537,7 @@ impl From<&[AnsiMode]> for AnsiModes {
     }
 }
 
-/// Small-buffer-optimized collection of DEC mode values.
+/// An ordered collection of [`DecMode`] values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecModes(DecModesStorage);
 
@@ -1337,6 +1410,7 @@ pub(crate) fn encode(funs: &[Function<'_>]) -> String {
     seq
 }
 
+// `base` is 30 for foreground or 40 for background.
 fn encode_sgr_color_params(color: Color, base: u8) -> String {
     match color {
         Color::Indexed(c) if c < 8 => (base + c).to_string(),
