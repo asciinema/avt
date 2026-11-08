@@ -7,6 +7,7 @@ use core::ops::{Index, IndexMut, Range};
 
 use crate::anchor::{Anchor, Mark};
 use crate::cell::Cell;
+use crate::line::Line;
 use crate::pen::Pen;
 use crate::row::{ReflowCursor, ReflowCursors, Row};
 
@@ -405,6 +406,24 @@ impl Buffer {
         self.rows.iter()
     }
 
+    pub fn line_at(&self, row_coord: isize) -> Option<Line<'_>> {
+        let offset = self.view_offset();
+        let index = offset.checked_add_signed(row_coord)?;
+        self.rows.get(index)?;
+        let mut start = index;
+        let mut end = index + 1;
+
+        while start > 0 && self.rows[start - 1].wraps_to_next() {
+            start -= 1;
+        }
+
+        while end < self.rows.len() && self.rows[end - 1].wraps_to_next() {
+            end += 1;
+        }
+
+        Some(Line::new(&self.rows, start..end, offset))
+    }
+
     fn view_offset(&self) -> usize {
         self.rows.len() - self.height
     }
@@ -607,6 +626,34 @@ mod tests {
     use alloc::vec;
     use alloc::vec::Vec;
     use pretty_assertions::assert_eq;
+
+    #[test]
+    fn line_crosses_split_deque_storage() {
+        let mut buffer = buffer(
+            &[("ijkl", false), ("abcd", true), ("efgh", true)],
+            Some(0),
+            0,
+        );
+
+        let first = buffer.rows.pop_front().unwrap();
+        buffer.rows.push_back(first);
+        buffer.height = 2;
+        assert!(!buffer.rows.as_slices().1.is_empty());
+
+        for coordinate in -1..=1 {
+            let line = buffer.line_at(coordinate).unwrap();
+            assert_eq!(line.row_range(), -1..2);
+
+            assert_eq!(
+                line.rows().map(Row::text).collect::<Vec<_>>(),
+                ["abcd", "efgh", "ijkl"]
+            );
+
+            for (actual, original) in line.rows().zip(&buffer.rows) {
+                assert!(core::ptr::eq(actual, original));
+            }
+        }
+    }
 
     #[test]
     fn text() {

@@ -11,7 +11,7 @@
 //!
 //! A [`Row`] is one physical terminal row. [`Screen::visible_rows`] and
 //! [`Screen::all_rows`] expose physical rows; [`Screen::text`] joins soft-wrapped
-//! rows into logical text lines.
+//! rows into logical text lines. [`Screen::line_at`] returns a borrowed [`Line`].
 //!
 //! Stateful observers should be reused across calls when collecting
 //! dirty rows, transcripts, or shell integration events. Feed boundaries
@@ -49,6 +49,7 @@ mod charset;
 mod color;
 mod engine;
 pub mod input;
+mod line;
 pub mod observer;
 pub mod operation;
 mod pen;
@@ -62,6 +63,7 @@ pub use charset::Charset;
 pub use color::{Color, Rgb};
 pub use engine::{Cursor, Position, Screen, ScreenKind};
 pub use input::{AsInput, Input, IntoInputs};
+pub use line::Line;
 pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
 pub use pen::Pen;

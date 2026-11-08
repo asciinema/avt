@@ -166,6 +166,34 @@ impl<'a> Screen<'a> {
         self.buffer.visible_rows().nth(row_index)
     }
 
+    /// The maximal retained chain of soft-wrapped rows containing `row`.
+    ///
+    /// Coordinates follow [`Position::row`]: zero is the first visible row;
+    /// negative rows address scrollback. Out-of-range coordinates return `None`.
+    /// Connections depend only on [`Row::wraps_to_next`], even for blank rows.
+    ///
+    /// Scans only this chain, without allocation or copying.
+    /// The original beginning may have been evicted.
+    ///
+    /// ```
+    /// use avt::{Row, Terminal};
+    ///
+    /// let mut terminal = Terminal::with_scrollback(6, 3, None)?;
+    /// terminal.feed("abcdefghijklmn\r\nnext");
+    ///
+    /// let line = terminal.screen().line_at(0).unwrap();
+    /// assert_eq!(line.row_range(), -1..2);
+    ///
+    /// assert_eq!(
+    ///     line.rows().map(Row::text).collect::<Vec<_>>(),
+    ///     ["abcdef", "ghijkl", "mn    "],
+    /// );
+    /// # Ok::<(), avt::InvalidSize>(())
+    /// ```
+    pub fn line_at(self, row: isize) -> Option<crate::Line<'a>> {
+        self.buffer.line_at(row)
+    }
+
     pub(crate) fn resolve(self, anchor: &Anchor) -> Option<(usize, usize)> {
         self.visible_rows()
             .enumerate()
