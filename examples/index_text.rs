@@ -2,7 +2,7 @@
 use std::collections::BTreeSet;
 
 use avt::observer::{ShellEvent, ShellTracker, Transcript};
-use avt::{Line, Observation, Observer, Operation, Terminal};
+use avt::{Observation, Observer, Operation, Row, Terminal};
 
 #[derive(Default)]
 struct TextIndex {
@@ -44,8 +44,8 @@ impl Observer for TextIndex {
         self.transcript.before(context, operation);
     }
 
-    fn evicted(&mut self, context: &mut Observation<'_>, line: &Line) {
-        self.transcript.evicted(context, line);
+    fn evicted(&mut self, context: &mut Observation<'_>, row: &Row) {
+        self.transcript.evicted(context, row);
     }
 
     fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {

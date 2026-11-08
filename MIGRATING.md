@@ -14,6 +14,12 @@ This guide includes Git-tagged versions as well as crates.io releases.
 
 ## Unreleased
 
+- Physical terminal rows now use `Row` instead of `Line`. Rename
+  `Screen::visible_lines()` to `visible_rows()`, `all_lines()` to `all_rows()`,
+  and `line(index)` to `row(index)`. `Observer::evicted` now receives `&Row`.
+- Rename `Line::is_wrapped()` to `Row::wraps_to_next()`: the flag indicates
+  continuation into the following row. `Screen::text()` returns logical text
+  lines formed by joining soft-wrapped rows.
 - Rename `avt::parser::*` imports to `avt::ansi::*`. The root-level
   `avt::Parser` re-export remains available.
 - Within `ansi`, rename `State` to `ParserState`, `Osc` to `OscOp`, and

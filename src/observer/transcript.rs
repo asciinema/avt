@@ -1,6 +1,6 @@
 use super::{Observation, Observer};
 use crate::ansi::Function;
-use crate::{Line, Operation, Terminal};
+use crate::{Operation, Row, Terminal};
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -27,17 +27,17 @@ impl Transcript {
 
     fn finish_primary(&mut self, terminal: &Terminal) {
         let screen = terminal.primary_screen();
-        let history = screen.all_lines().count() - terminal.size().1;
-        let mut lines = screen.all_lines();
+        let history = screen.all_rows().count() - terminal.size().1;
+        let mut rows = screen.all_rows();
 
-        for line in lines.by_ref().take(history) {
-            self.push(line);
+        for row in rows.by_ref().take(history) {
+            self.push(row);
         }
 
         let start = self.ready.len();
 
-        for line in lines {
-            self.push(line);
+        for row in rows {
+            self.push(row);
         }
 
         // Trim screen padding, preserving historical blanks even before eviction.
@@ -46,10 +46,10 @@ impl Transcript {
         }
     }
 
-    fn push(&mut self, line: &Line) {
-        self.pending.extend(line.chars());
+    fn push(&mut self, row: &Row) {
+        self.pending.extend(row.chars());
 
-        if !line.is_wrapped() {
+        if !row.wraps_to_next() {
             self.ready.push(self.pending.trim_end().to_owned());
             self.pending.clear();
         }
@@ -65,8 +65,8 @@ impl Observer for Transcript {
         }
     }
 
-    fn evicted(&mut self, _: &mut Observation<'_>, line: &Line) {
-        self.push(line);
+    fn evicted(&mut self, _: &mut Observation<'_>, row: &Row) {
+        self.push(row);
     }
 
     fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
@@ -348,14 +348,9 @@ mod tests {
             let mut transcript = Transcript::new();
             terminal.feed_with("history\r\none\r\ntwo", &mut transcript);
             assert!(terminal.feed_with(clear, &mut transcript).is_empty());
-            assert_eq!(terminal.primary_screen().all_lines().count(), 3);
+            assert_eq!(terminal.primary_screen().all_rows().count(), 3);
 
-            assert!(
-                terminal
-                    .screen()
-                    .visible_lines()
-                    .all(|line| line.is_blank())
-            );
+            assert!(terminal.screen().visible_rows().all(|row| row.is_blank()));
 
             assert_eq!(transcript.finish(&terminal), ["history"]);
         }

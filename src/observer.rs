@@ -13,7 +13,7 @@ pub use shell::{
 };
 pub use transcript::Transcript;
 
-use crate::{Anchor, Line, Operation, Position, Terminal};
+use crate::{Anchor, Operation, Position, Row, Terminal};
 use core::ops::Range;
 
 /// Read-only terminal inspection with permission to register tracking metadata.
@@ -84,16 +84,16 @@ pub trait Observer {
 
     fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation<'_>) {}
 
-    /// A primary line evicted by the scrollback limit, immediately after removal.
-    /// Resizing can evict primary lines while the alternate screen is active.
+    /// A primary row evicted by the scrollback limit, immediately after removal.
+    /// Resizing can evict primary rows while the alternate screen is active.
     /// Runs after all actions in the call; the context reflects their final state
-    /// with eviction in progress, not the action that moved this line into history.
-    /// Lines awaiting eviction remain available for inspection. All observers
-    /// borrow the original line; it is dropped after their callbacks return.
-    /// Only lines still exceeding the limit at call end are evicted. Destructive
+    /// with eviction in progress, not the action that moved this row into history.
+    /// Rows awaiting eviction remain available for inspection. All observers
+    /// borrow the original row; it is dropped after their callbacks return.
+    /// Only rows still exceeding the limit at call end are evicted. Destructive
     /// operations such as RIS can discard content earlier without this callback;
     /// inspect that content in `before` if it must be preserved.
-    fn evicted(&mut self, _context: &mut Observation<'_>, _line: &Line) {}
+    fn evicted(&mut self, _context: &mut Observation<'_>, _row: &Row) {}
 
     /// Runs after all evictions and returns the per-call report, which may be `()`.
     fn end(&mut self, context: &mut Observation<'_>) -> Self::Output;
@@ -138,8 +138,8 @@ impl<O: Observer + ?Sized> Observer for &mut O {
         (**self).after(context, operation);
     }
 
-    fn evicted(&mut self, context: &mut Observation<'_>, line: &Line) {
-        (**self).evicted(context, line);
+    fn evicted(&mut self, context: &mut Observation<'_>, row: &Row) {
+        (**self).evicted(context, row);
     }
 
     fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
@@ -175,9 +175,9 @@ impl<A: Observer, B: Observer> Observer for (A, B) {
         self.1.after(context, operation);
     }
 
-    fn evicted(&mut self, context: &mut Observation<'_>, line: &Line) {
-        self.0.evicted(context, line);
-        self.1.evicted(context, line);
+    fn evicted(&mut self, context: &mut Observation<'_>, row: &Row) {
+        self.0.evicted(context, row);
+        self.1.evicted(context, row);
     }
 
     fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {

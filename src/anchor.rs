@@ -4,27 +4,27 @@ use alloc::sync::{Arc, Weak};
 /// reflow. Only the originating terminal can resolve it.
 ///
 /// Inserting characters at the anchored column leaves the anchor before the
-/// inserted characters. Inserting earlier in the line shifts its column.
+/// inserted characters. Inserting earlier in the row shifts its column.
 ///
 /// Clones refer to the same position; dropping all handles releases
 /// registration lazily during subsequent registration, structural editing,
-/// reflow, or removal of the containing line.
+/// reflow, or removal of the containing row.
 // The shared allocation provides identity and lifetime tracking. Position
-// information lives in the line-local registration.
+// information lives in the row-local registration.
 #[derive(Clone, Debug)]
 pub struct Anchor(pub(crate) Arc<()>);
 
 impl Anchor {
-    /// Whether a line still holds this registration.
-    /// This includes removed lines during eviction callbacks, when the terminal
+    /// Whether a row still holds this registration.
+    /// This includes removed rows during eviction callbacks, when the terminal
     /// can no longer resolve the anchor.
     pub(crate) fn is_registered(&self) -> bool {
         Arc::weak_count(&self.0) != 0
     }
 }
 
-/// An anchor registration stored on a line.
-/// The containing line determines its row and buffer.
+/// An anchor registration stored on a row.
+/// The containing row determines its coordinate and buffer.
 #[derive(Debug)]
 pub(crate) struct Mark {
     pub token: Weak<()>,
@@ -43,18 +43,18 @@ impl Mark {
 
 #[cfg(test)]
 mod tests {
-    use crate::{Anchor, Line, Observation, Observer, Operation, Position, ScreenKind, Terminal};
+    use crate::{Anchor, Observation, Observer, Operation, Position, Row, ScreenKind, Terminal};
     use alloc::format;
     use alloc::vec;
     use alloc::vec::Vec;
     use proptest::prelude::*;
 
-    fn at(terminal: &mut Terminal, col: usize, row: isize) -> Anchor {
+    fn at(terminal: &mut Terminal, col: usize, row_coord: isize) -> Anchor {
         terminal
             .anchor_at(Position {
                 screen: terminal.active_screen_kind(),
                 col,
-                row,
+                row: row_coord,
             })
             .unwrap()
     }
@@ -90,7 +90,7 @@ mod tests {
         let later = at(&mut terminal, 2, 0);
         let clipped = at(&mut terminal, 4, 0);
         terminal.feed("\x1b[1;2H\x1b[4h界");
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "a界bcd");
+        assert_eq!(terminal.screen().row(0).unwrap().text(), "a界bcd");
         assert_eq!(pos(&terminal, &boundary), Some((1, 0)));
         assert_eq!(pos(&terminal, &later), Some((4, 0)));
         assert_eq!(pos(&terminal, &clipped), None);
@@ -108,7 +108,7 @@ mod tests {
         assert_eq!(pos(&terminal, &boundary), Some((0, 1)));
         assert_eq!(pos(&terminal, &later), Some((2, 1)));
         assert_eq!(pos(&terminal, &clipped), None);
-        assert_eq!(terminal.screen().line(1).unwrap().text(), "Qabc");
+        assert_eq!(terminal.screen().row(1).unwrap().text(), "Qabc");
         terminal.engine.verify();
     }
 
@@ -146,7 +146,7 @@ mod tests {
             assert_eq!(
                 terminal
                     .screen()
-                    .line(position.row as usize)
+                    .row(position.row as usize)
                     .unwrap()
                     .cells()[position.col]
                     .char(),
@@ -168,8 +168,8 @@ mod tests {
         assert!(terminal.resolve(&tail).is_none());
         assert_eq!(pos(&terminal, &narrow), Some((0, 2)));
 
-        for line in terminal.screen().visible_lines().take(2) {
-            let cell = &line.cells()[0];
+        for row in terminal.screen().visible_rows().take(2) {
+            let cell = &row.cells()[0];
             assert_eq!(cell.char(), ' ');
             assert_eq!(cell.width(), 1);
             assert_eq!(cell.pen().background(), Some(crate::Color::Indexed(1)));
@@ -202,7 +202,7 @@ mod tests {
             }
 
             assert_eq!(pos(&terminal, &retained), Some((0, 1)));
-            let cell = terminal.screen().line(0).unwrap().cells()[width - 1];
+            let cell = terminal.screen().row(0).unwrap().cells()[width - 1];
             assert_eq!(cell.char(), ' ');
             assert_eq!(cell.width(), 1);
             assert_eq!(cell.pen().background(), Some(crate::Color::Indexed(1)));
@@ -210,12 +210,12 @@ mod tests {
             assert_eq!(pos(&terminal, &retained), Some((0, 1)));
 
             assert_eq!(
-                terminal.screen().line(0).unwrap().text().trim_end(),
+                terminal.screen().row(0).unwrap().text().trim_end(),
                 "a".repeat(width - 1)
             );
 
             assert_eq!(
-                *terminal.screen().line(0).unwrap().cells()[width].pen(),
+                *terminal.screen().row(0).unwrap().cells()[width].pen(),
                 crate::Pen::default()
             );
         }
@@ -286,17 +286,17 @@ mod tests {
                 let terminal = context.terminal();
                 assert_eq!(pos(terminal, &self.source), Some((0, -1)));
                 assert_eq!(pos(terminal, &self.boundary), Some((0, 0)));
-                assert!(terminal.screen().all_lines().next().unwrap().is_wrapped());
-                assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+                assert!(terminal.screen().all_rows().next().unwrap().wraps_to_next());
+                assert!(!terminal.screen().row(0).unwrap().wraps_to_next());
                 assert_eq!(terminal.cursor().position(), Some((1, 0)));
                 terminal.engine.verify();
                 self.after = true;
             }
 
-            fn evicted(&mut self, context: &mut Observation<'_>, line: &Line) {
+            fn evicted(&mut self, context: &mut Observation<'_>, row: &Row) {
                 assert!(self.after);
                 assert!(!self.evicted);
-                assert!(line.is_wrapped());
+                assert!(row.wraps_to_next());
                 assert!(context.resolve(&self.source).is_none());
                 assert!(self.source.is_registered());
                 assert_eq!(pos(context.terminal(), &self.boundary), Some((0, 0)));
@@ -374,12 +374,12 @@ mod tests {
     }
 
     #[test]
-    fn anchors_are_terminal_local_and_excluded_from_line_copies() {
+    fn anchors_are_terminal_local_and_excluded_from_row_copies() {
         let mut terminal = Terminal::new(8, 3).unwrap();
         let anchor = terminal.anchor_at_cursor();
-        let copy = terminal.screen().line(0).unwrap().clone();
+        let copy = terminal.screen().row(0).unwrap().clone();
         assert!(copy.anchor_column(&anchor).is_none());
-        assert!(copy == *terminal.screen().line(0).unwrap());
+        assert!(copy == *terminal.screen().row(0).unwrap());
         let mut other = Terminal::new(8, 3).unwrap();
         other.feed(terminal.dump());
         assert!(other.resolve(&anchor).is_none());
@@ -388,7 +388,7 @@ mod tests {
         assert!(terminal.resolve(&clone).is_some());
         drop(clone);
         let live = terminal.anchor_at_cursor();
-        assert!(terminal.screen().line(0).unwrap().has_anchor_at(0));
+        assert!(terminal.screen().row(0).unwrap().has_anchor_at(0));
         assert!(terminal.resolve(&live).is_some());
 
         assert!(
@@ -413,20 +413,20 @@ mod tests {
 
             let cells: Vec<_> = terminal
                 .screen()
-                .visible_lines()
+                .visible_rows()
                 .enumerate()
-                .flat_map(|(row, line)| {
-                    line.cells()
+                .flat_map(|(row_index, row)| {
+                    row.cells()
                         .iter()
                         .enumerate()
                         .filter(|(_, cell)| cell.char() != ' ')
-                        .map(move |(col, cell)| (col, row as isize, cell.char()))
+                        .map(move |(col, cell)| (col, row_index as isize, cell.char()))
                 })
                 .collect();
 
             let anchors: Vec<_> = cells
                 .into_iter()
-                .map(|(col, row, ch)| (at(&mut terminal, col, row), ch))
+                .map(|(col, row_index, ch)| (at(&mut terminal, col, row_index), ch))
                 .collect();
 
             for (width, rows) in [(cols, 96), (8, 192)] {
@@ -441,7 +441,7 @@ mod tests {
 
                         let actual = terminal
                             .screen()
-                            .line(position.row as usize)
+                            .row(position.row as usize)
                             .unwrap()
                             .cells()[position.col]
                             .char();

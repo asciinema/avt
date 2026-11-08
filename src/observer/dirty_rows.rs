@@ -22,7 +22,7 @@ impl DirtyRows {
         self.rows
             .iter()
             .enumerate()
-            .filter_map(|(row, &dirty)| dirty.then_some(row))
+            .filter_map(|(row_index, &dirty)| dirty.then_some(row_index))
     }
 }
 
@@ -39,15 +39,15 @@ impl Observer for DirtyRows {
         self.rows.resize(rows, false);
     }
 
-    fn dirty(&mut self, rows: Range<usize>) {
-        self.rows[rows].fill(true);
+    fn dirty(&mut self, row_range: Range<usize>) {
+        self.rows[row_range].fill(true);
     }
 
     fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
-        let rows = self.iter().collect();
+        let row_indices = self.iter().collect();
         self.rows.fill(false);
 
-        rows
+        row_indices
     }
 }
 

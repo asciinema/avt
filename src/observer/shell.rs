@@ -86,13 +86,13 @@ impl CommandInput {
             // An offscreen boundary may return after a resize. Validate its
             // historical prefix once, rather than once per print fragment.
             if !self.validated {
-                let history = screen.all_lines().count() - terminal.size().1;
+                let history = screen.all_rows().count() - terminal.size().1;
 
                 let hard_break = screen
-                    .all_lines()
+                    .all_rows()
                     .take(history)
-                    .skip_while(|line| line.anchor_column(&self.anchor).is_none())
-                    .any(|line| !line.is_wrapped());
+                    .skip_while(|row| row.anchor_column(&self.anchor).is_none())
+                    .any(|row| !row.wraps_to_next());
 
                 if hard_break {
                     return false;
@@ -103,10 +103,10 @@ impl CommandInput {
         };
 
         let valid = !screen
-            .visible_lines()
+            .visible_rows()
             .skip(start_row)
             .take(cursor.row - start_row)
-            .any(|line| !line.is_wrapped());
+            .any(|row| !row.wraps_to_next());
 
         self.validated = valid;
 
@@ -184,13 +184,13 @@ impl ShellTracker {
                 self.running = None;
                 let terminal = context.terminal();
                 let cursor = terminal.cursor();
-                let line = terminal.screen().line(cursor.row).unwrap();
+                let row = terminal.screen().row(cursor.row).unwrap();
 
                 // Replace annotations at this position. An unmarked position cannot
                 // have an old prompt, so avoid scanning the batch's growing history.
-                if line.has_anchor_at(cursor.col) {
+                if row.has_anchor_at(cursor.col) {
                     self.markers
-                        .retain(|marker| line.anchor_column(&marker.anchor) != Some(cursor.col));
+                        .retain(|marker| row.anchor_column(&marker.anchor) != Some(cursor.col));
                 }
 
                 self.markers.push(PromptMarker {
@@ -320,14 +320,14 @@ fn command_text(terminal: &Terminal, anchor: &Anchor) -> Option<String> {
     let (start_col, start_row) = terminal.primary_screen().resolve(anchor)?;
     let mut text = String::new();
 
-    for (index, line) in terminal
+    for (row_index, row) in terminal
         .primary_screen()
-        .visible_lines()
+        .visible_rows()
         .skip(start_row)
         .enumerate()
     {
-        let col = if index == 0 { start_col } else { 0 };
-        let cells = line.cells().get(col..)?;
+        let col = if row_index == 0 { start_col } else { 0 };
+        let cells = row.cells().get(col..)?;
 
         if cells.first().is_some_and(|cell| cell.width() == 0) {
             return None;
@@ -340,7 +340,7 @@ fn command_text(terminal: &Terminal, anchor: &Anchor) -> Option<String> {
                 .map(|cell| cell.char()),
         );
 
-        if !line.is_wrapped() {
+        if !row.wraps_to_next() {
             return Some(text.trim_end().to_owned());
         }
     }
@@ -468,7 +468,7 @@ mod tests {
             let events =
                 terminal.feed_with(["\x1b[2;4r\x1b[4;1H", PROMPT, command, SUBMIT], &mut shell);
 
-            assert!(terminal.screen().line(2).unwrap().is_wrapped());
+            assert!(terminal.screen().row(2).unwrap().wraps_to_next());
             assert_eq!(shell.visible_prompts(&terminal).next().unwrap().row, 2);
 
             assert!(events.iter().any(|event| matches!(

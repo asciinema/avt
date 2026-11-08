@@ -13,20 +13,20 @@ fn main() {
         "\x1b[?25l",
     ] {
         let old_cursor = terminal.cursor().position();
-        let mut rows = terminal.feed_with(output, &mut dirty);
+        let mut row_indices = terminal.feed_with(output, &mut dirty);
         let cursor = terminal.cursor().position();
 
         // DirtyRows requests a full repaint initially. Cursor-only changes
         // require repainting the cursor rows separately.
-        rows.extend(old_cursor.map(|(_, row)| row));
-        rows.extend(cursor.map(|(_, row)| row));
-        rows.sort_unstable();
-        rows.dedup();
+        row_indices.extend(old_cursor.map(|(_, row)| row));
+        row_indices.extend(cursor.map(|(_, row)| row));
+        row_indices.sort_unstable();
+        row_indices.dedup();
 
-        for row in rows {
-            let line = terminal.screen().line(row).unwrap();
-            println!("row {row}: {:?}", line.text());
-            // A graphical renderer can read line.cells() for width and styling.
+        for row_index in row_indices {
+            let row = terminal.screen().row(row_index).unwrap();
+            println!("row {row_index}: {:?}", row.text());
+            // A graphical renderer can read row.cells() for width and styling.
         }
 
         println!("cursor: {cursor:?}");

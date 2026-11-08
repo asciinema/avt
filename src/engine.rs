@@ -6,8 +6,8 @@ use crate::ansi::{
 use crate::buffer::{Buffer, EraseMode};
 use crate::cell::{Cell, Occupancy};
 use crate::charset::Charset;
-use crate::line::Line;
 use crate::pen::{Intensity, Pen};
+use crate::row::Row;
 use crate::tabs::Tabs;
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -21,7 +21,7 @@ pub(crate) trait Effects {
 }
 
 /// Terminal policy and live state. Chooses editing operations and reports their
-/// effects; buffers and lines implement the corresponding storage mutations.
+/// effects; buffers and rows implement the corresponding storage mutations.
 #[derive(Debug)]
 pub(crate) struct Engine {
     cols: usize,
@@ -57,7 +57,7 @@ pub enum ScreenKind {
 }
 
 /// A screen-relative coordinate value at a particular moment.
-/// Negative rows address retained scrollback. `col` may equal the line width,
+/// Negative rows address retained scrollback. `col` may equal the row width,
 /// representing the boundary after its last cell.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Position {
@@ -151,23 +151,25 @@ pub struct Screen<'a> {
 }
 
 impl<'a> Screen<'a> {
-    pub fn visible_lines(self) -> impl ExactSizeIterator<Item = &'a Line> {
-        self.buffer.view()
+    /// Visible physical rows, from top to bottom.
+    pub fn visible_rows(self) -> impl ExactSizeIterator<Item = &'a Row> {
+        self.buffer.visible_rows()
     }
 
-    /// All lines: scrollback followed by the visible ones.
-    pub fn all_lines(self) -> impl Iterator<Item = &'a Line> {
-        self.buffer.lines()
+    /// All retained physical rows: scrollback followed by visible rows.
+    pub fn all_rows(self) -> impl Iterator<Item = &'a Row> {
+        self.buffer.all_rows()
     }
 
-    pub fn line(self, n: usize) -> Option<&'a Line> {
-        self.buffer.view().nth(n)
+    /// One visible physical row, indexed from zero at the top of the screen.
+    pub fn row(self, row_index: usize) -> Option<&'a Row> {
+        self.buffer.visible_rows().nth(row_index)
     }
 
     pub(crate) fn resolve(self, anchor: &Anchor) -> Option<(usize, usize)> {
-        self.visible_lines()
+        self.visible_rows()
             .enumerate()
-            .find_map(|(row, line)| line.anchor_column(anchor).map(|col| (col, row)))
+            .find_map(|(row_index, row)| row.anchor_column(anchor).map(|col| (col, row_index)))
     }
 
     /// Logical text lines: scrollback included, soft-wrapped rows joined,
@@ -230,8 +232,12 @@ impl Engine {
             (ScreenKind::Primary, &self.primary_buffer),
             (ScreenKind::Alternate, &self.alternate_buffer),
         ] {
-            if let Some((col, row)) = contents.resolve(anchor) {
-                return Some(Position { screen, col, row });
+            if let Some((col, row_coord)) = contents.resolve(anchor) {
+                return Some(Position {
+                    screen,
+                    col,
+                    row: row_coord,
+                });
             }
         }
 
@@ -303,7 +309,7 @@ impl Engine {
 
             Cuf(n) => self.cuf(n),
 
-            Cup(row, col) => self.cup(row, col),
+            Cup(row_index, col) => self.cup(row_index, col),
 
             Cuu(n) => self.cuu(n),
 
@@ -398,7 +404,7 @@ impl Engine {
     }
 
     #[inline]
-    pub fn pop_evicted(&mut self) -> Option<Line> {
+    pub fn pop_evicted(&mut self) -> Option<Row> {
         self.primary_buffer.pop_evicted()
     }
 
@@ -434,16 +440,16 @@ impl Engine {
         }
     }
 
-    fn move_cursor_to_row(&mut self, mut row: usize) {
+    fn move_cursor_to_row(&mut self, mut row_index: usize) {
         let top = self.actual_top_margin();
         let bottom = self.actual_bottom_margin();
-        row = (top + row).max(top).min(bottom);
-        self.do_move_cursor_to_row(row);
+        row_index = (top + row_index).max(top).min(bottom);
+        self.do_move_cursor_to_row(row_index);
     }
 
-    fn do_move_cursor_to_row(&mut self, row: usize) {
+    fn do_move_cursor_to_row(&mut self, row_index: usize) {
         self.cursor.col = self.cursor.col.min(self.cols - 1);
-        self.cursor.row = row;
+        self.cursor.row = row_index;
     }
 
     fn move_cursor_to_rel_col(&mut self, rel_col: isize) {
@@ -612,9 +618,9 @@ impl Engine {
                     .resize(cols, rows, self.primary_cursor, true, &mut saved);
         }
 
-        if let (Some(state), Some((col, row))) = (&mut self.primary_saved_cursor, saved) {
+        if let (Some(state), Some((col, row_index))) = (&mut self.primary_saved_cursor, saved) {
             state.cursor_col = col;
-            state.cursor_row = row;
+            state.cursor_row = row_index;
         }
 
         if let Some(saved) = &mut self.alternate_saved_cursor {
@@ -691,20 +697,20 @@ impl Engine {
             .chain((self.active == ScreenKind::Alternate).then_some(&self.alternate_buffer));
 
         for buffer in buffers {
-            assert_eq!(buffer.view().len(), self.rows);
-            assert!(buffer.lines().all(|line| line.len() == self.cols));
-            assert!(!buffer.lines().last().unwrap().is_wrapped());
+            assert_eq!(buffer.visible_rows().len(), self.rows);
+            assert!(buffer.all_rows().all(|row| row.len() == self.cols));
+            assert!(!buffer.all_rows().last().unwrap().wraps_to_next());
 
-            for line in buffer.lines() {
+            for row in buffer.all_rows() {
                 for i in 0..self.cols {
-                    let occupancy = line[i].occupancy();
+                    let occupancy = row[i].occupancy();
 
                     if occupancy == Occupancy::WideTail {
                         assert!(i > 0);
-                        assert!(line[i - 1].occupancy() == Occupancy::WideHead);
-                        assert_eq!(line[i].pen(), line[i - 1].pen());
+                        assert!(row[i - 1].occupancy() == Occupancy::WideHead);
+                        assert_eq!(row[i].pen(), row[i - 1].pen());
                     } else if occupancy == Occupancy::WideHead {
-                        assert!(line[i + 1].occupancy() == Occupancy::WideTail, "{:?}", line);
+                        assert!(row[i + 1].occupancy() == Occupancy::WideTail, "{:?}", row);
                     }
                 }
             }
@@ -732,16 +738,16 @@ impl Engine {
         assert_eq!(self.alternate_saved_cursor, other.alternate_saved_cursor);
 
         assert_eq!(
-            self.primary_buffer.view().collect::<Vec<_>>(),
-            other.primary_buffer.view().collect::<Vec<_>>()
+            self.primary_buffer.visible_rows().collect::<Vec<_>>(),
+            other.primary_buffer.visible_rows().collect::<Vec<_>>()
         );
 
         if self.active == ScreenKind::Alternate {
             assert_eq!(self.primary_cursor, other.primary_cursor);
 
             assert_eq!(
-                self.alternate_buffer.view().collect::<Vec<_>>(),
-                other.alternate_buffer.view().collect::<Vec<_>>()
+                self.alternate_buffer.visible_rows().collect::<Vec<_>>(),
+                other.alternate_buffer.visible_rows().collect::<Vec<_>>()
             );
         }
     }
@@ -825,9 +831,9 @@ impl Engine {
         match self.try_print(ch) {
             Some(width) => self.advance_cursor_after_print(width),
 
-            None if self.auto_wrap_mode => self.wrap_and_print_at_line_start(ch, dirty),
+            None if self.auto_wrap_mode => self.wrap_and_print_at_row_start(ch, dirty),
 
-            None => self.print_at_line_end(ch),
+            None => self.print_at_row_end(ch),
         }
 
         dirty.end = self.cursor.row + 1;
@@ -860,18 +866,18 @@ impl Engine {
     }
 
     #[inline]
-    fn wrap_and_print_at_line_start(&mut self, ch: char, dirty: &mut Range<usize>) {
-        let row = self.cursor.row;
+    fn wrap_and_print_at_row_start(&mut self, ch: char, dirty: &mut Range<usize>) {
+        let row_index = self.cursor.row;
         let pen = self.pen;
 
-        if row == self.bottom_margin {
+        if row_index == self.bottom_margin {
             let range = self.top_margin..self.bottom_margin + 1;
 
             self.active_buffer_mut().wrap_and_scroll_up(range, &pen);
 
             dirty.start = dirty.start.min(self.top_margin);
-        } else if row < self.rows - 1 {
-            self.active_buffer_mut().wrap_to_next_row(row);
+        } else if row_index < self.rows - 1 {
+            self.active_buffer_mut().wrap_to_next_row(row_index);
             self.cursor.row += 1;
         }
 
@@ -882,7 +888,7 @@ impl Engine {
         }
     }
 
-    fn print_at_line_end(&mut self, ch: char) {
+    fn print_at_row_end(&mut self, ch: char) {
         // With autowrap disabled, back up enough to fit the character and leave
         // the cursor at the final column.
         if self.cursor.col > 0 {
@@ -956,14 +962,14 @@ impl Engine {
     }
 
     fn decrsps(&mut self, presentation: &CursorPresentation) {
-        let row = usize::from(presentation.row);
+        let row_index = usize::from(presentation.row);
         let col = usize::from(presentation.col);
 
-        if row == 0 || row > self.rows || col == 0 || col > self.cols {
+        if row_index == 0 || row_index > self.rows || col == 0 || col > self.cols {
             return;
         }
 
-        self.cursor.row = row - 1;
+        self.cursor.row = row_index - 1;
 
         self.cursor.col = if presentation.pending_wrap && col == self.cols {
             self.cols
@@ -986,13 +992,13 @@ impl Engine {
     }
 
     fn decaln(&mut self, observer: &mut impl Effects) {
-        for row in 0..self.rows {
+        for row_index in 0..self.rows {
             for col in 0..self.cols {
                 self.active_buffer_mut()
-                    .replace_char((col, row), '\u{45}', Pen::default());
+                    .replace_char((col, row_index), '\u{45}', Pen::default());
             }
 
-            observer.dirty(row..row + 1);
+            observer.dirty(row_index..row_index + 1);
         }
     }
 
@@ -1012,12 +1018,12 @@ impl Engine {
         let n = as_usize(n, 1).min(self.cols - self.cursor.col);
 
         let pos = (self.cursor.col, self.cursor.row);
-        let row = self.cursor.row;
+        let row_index = self.cursor.row;
         let pen = self.pen;
 
         self.active_buffer_mut().insert_blanks(pos, n, pen);
 
-        observer.dirty(row..row + 1);
+        observer.dirty(row_index..row_index + 1);
     }
 
     fn cuu(&mut self, n: u16) {
@@ -1056,9 +1062,9 @@ impl Engine {
         self.move_cursor_to_col(as_usize(n, 1) - 1);
     }
 
-    fn cup(&mut self, row: u16, col: u16) {
+    fn cup(&mut self, row_index: u16, col: u16) {
         self.move_cursor_to_col(as_usize(col, 1) - 1);
-        self.move_cursor_to_row(as_usize(row, 1) - 1);
+        self.move_cursor_to_row(as_usize(row_index, 1) - 1);
     }
 
     fn cht(&mut self, n: u16) {
@@ -1096,19 +1102,19 @@ impl Engine {
     fn el(&mut self, scope: &ElScope, observer: &mut impl Effects) {
         match scope {
             ElScope::ToRight => {
-                self.erase_at_cursor(EraseMode::FromCursorToEndOfLine);
+                self.erase_at_cursor(EraseMode::FromCursorToEndOfRow);
 
                 observer.dirty(self.cursor.row..self.cursor.row + 1);
             }
 
             ElScope::ToLeft => {
-                self.erase_at_cursor(EraseMode::FromStartOfLineToCursor);
+                self.erase_at_cursor(EraseMode::FromStartOfRowToCursor);
 
                 observer.dirty(self.cursor.row..self.cursor.row + 1);
             }
 
             ElScope::All => {
-                self.erase_at_cursor(EraseMode::WholeLine);
+                self.erase_at_cursor(EraseMode::WholeRow);
 
                 observer.dirty(self.cursor.row..self.cursor.row + 1);
             }
@@ -1197,14 +1203,16 @@ impl Engine {
     fn rep(&mut self, n: u16, observer: &mut impl Effects) {
         if self.cursor.col > 0 {
             let n = as_usize(n, 1);
-            let row = self.cursor.row;
+            let row_index = self.cursor.row;
             let mut col = self.cursor.col - 1;
 
-            while col > 0 && self.active_buffer()[(col, row)].occupancy() == Occupancy::WideTail {
+            while col > 0
+                && self.active_buffer()[(col, row_index)].occupancy() == Occupancy::WideTail
+            {
                 col -= 1;
             }
 
-            let char = self.active_buffer()[(col, row)].char();
+            let char = self.active_buffer()[(col, row_index)].char();
             self.print_chars(core::iter::repeat_n(char, n), observer);
         }
     }
@@ -1482,9 +1490,9 @@ impl Engine {
         }
 
         if self.active == ScreenKind::Alternate {
-            let (col, row) = self.primary_cursor;
+            let (col, row_index) = self.primary_cursor;
 
-            funs.push(dump_cursor(col, row, self.cols, false));
+            funs.push(dump_cursor(col, row_index, self.cols, false));
         }
 
         // Reset the pen before switching: the alternate buffer is created with it.
@@ -1601,9 +1609,9 @@ impl Engine {
     }
 }
 
-fn dump_cursor(col: usize, row: usize, cols: usize, origin_mode: bool) -> Function<'static> {
+fn dump_cursor(col: usize, row_index: usize, cols: usize, origin_mode: bool) -> Function<'static> {
     Function::Decrsps(CursorPresentation {
-        row: as_u16(row + 1),
+        row: as_u16(row_index + 1),
         col: as_u16(col.min(cols - 1) + 1),
         origin_mode,
         pending_wrap: col == cols,
@@ -1612,13 +1620,13 @@ fn dump_cursor(col: usize, row: usize, cols: usize, origin_mode: bool) -> Functi
 
 fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
     let cutoff = buffer.occupied_prefix_len(false);
-    let last = buffer.rows - 1;
+    let last = buffer.height - 1;
     let mut pen = Pen::default();
 
-    for (i, line) in buffer.view().take(cutoff).enumerate() {
+    for (i, row) in buffer.visible_rows().take(cutoff).enumerate() {
         // Wide tails share their head's pen, so grouping before filtering tails
         // in dump_cells preserves the same style boundaries.
-        for cells in line.cells().chunk_by(|c1, c2| c1.pen() == c2.pen()) {
+        for cells in row.cells().chunk_by(|c1, c2| c1.pen() == c2.pen()) {
             if cells[0].pen() != &pen {
                 if let Some(sgr) = to_sgr_diff(&pen, cells[0].pen()) {
                     funs.push(sgr);
@@ -1630,7 +1638,7 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
             dump_cells(cells, funs);
         }
 
-        if i < last && !line.is_wrapped() {
+        if i < last && !row.wraps_to_next() {
             funs.push(Function::Cr);
             funs.push(Function::Lf);
         }
@@ -1820,10 +1828,10 @@ mod tests {
     };
     use crate::charset::Charset;
     use crate::color::Color;
-    use crate::line::Line;
     use crate::observer::DirtyRows;
     use crate::pen::Intensity;
     use crate::pen::Pen;
+    use crate::row::Row;
     use Function::*;
     use SgrOp::*;
     use alloc::borrow::ToOwned as _;
@@ -1861,12 +1869,12 @@ mod tests {
         let mut anchors = Vec::new();
 
         for screen in [ScreenKind::Primary, ScreenKind::Alternate] {
-            for row in 0..rows {
+            for row_index in 0..rows {
                 for col in [0, cols / 2, cols] {
                     let position = super::Position {
                         screen,
                         col,
-                        row: row as isize,
+                        row: row_index as isize,
                     };
 
                     anchors.push((
@@ -2042,8 +2050,8 @@ mod tests {
                 let primary_save = terminal.engine.primary_saved_cursor;
                 let alternate_save = terminal.engine.alternate_saved_cursor;
                 let primary_cursor = terminal.engine.primary_cursor;
-                let primary: Vec<_> = terminal.primary_screen().visible_lines().cloned().collect();
-                let active: Vec<_> = terminal.screen().visible_lines().cloned().collect();
+                let primary: Vec<_> = terminal.primary_screen().visible_rows().cloned().collect();
+                let active: Vec<_> = terminal.screen().visible_rows().cloned().collect();
 
                 let rows = terminal.feed_with("\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB\x1b\\", &mut dirty);
 
@@ -2060,8 +2068,8 @@ mod tests {
                 assert_eq!(engine.primary_saved_cursor, primary_save);
                 assert_eq!(engine.alternate_saved_cursor, alternate_save);
                 assert_eq!(engine.primary_cursor, primary_cursor);
-                assert!(terminal.primary_screen().visible_lines().eq(primary.iter()));
-                assert!(terminal.screen().visible_lines().eq(active.iter()));
+                assert!(terminal.primary_screen().visible_rows().eq(primary.iter()));
+                assert!(terminal.screen().visible_rows().eq(active.iter()));
                 assert_eq!(engine.charsets, [Charset::Ascii; 2]);
                 assert_eq!(engine.active_charset, 0);
                 assert!(!engine.pen.is_bold());
@@ -2080,7 +2088,7 @@ mod tests {
                 assert_eq!((engine.cursor.col, engine.cursor.row), (1, 3));
                 assert!(engine.origin_mode);
                 terminal.feed("q");
-                assert_eq!(terminal.screen().line(3).unwrap().cells()[1].char(), 'q');
+                assert_eq!(terminal.screen().row(3).unwrap().cells()[1].char(), 'q');
                 terminal.engine.verify();
             }
         }
@@ -2088,7 +2096,7 @@ mod tests {
 
     #[test]
     fn decrsps_ignores_out_of_screen_coordinates_atomically() {
-        for (row, col) in [(0, 1), (1, 0), (5, 1), (1, 5), (u16::MAX, u16::MAX)] {
+        for (row_index, col) in [(0, 1), (1, 0), (5, 1), (1, 5), (u16::MAX, u16::MAX)] {
             let setup = "ab界\x1b7\x1b[?1047h\x1b[2;3r\x1b[1;4;5;7;31m\x1b[?6h\x1b(0q";
             let mut terminal = Terminal::new(4, 4).unwrap();
             let mut expected = Terminal::new(4, 4).unwrap();
@@ -2098,7 +2106,7 @@ mod tests {
 
             let rows = terminal.execute_with(
                 Decrsps(CursorPresentation {
-                    row,
+                    row: row_index,
                     col,
                     pending_wrap: true,
                     ..CursorPresentation::default()
@@ -2134,7 +2142,7 @@ mod tests {
                         terminal.feed("\x1b[?7l");
                     }
 
-                    let before: Vec<_> = terminal.screen().visible_lines().cloned().collect();
+                    let before: Vec<_> = terminal.screen().visible_rows().cloned().collect();
 
                     let rows = terminal.execute_with(
                         Decrsps(CursorPresentation {
@@ -2147,17 +2155,17 @@ mod tests {
 
                     assert!(rows.is_empty());
                     assert_eq!(terminal.cursor().position(), Some((cols, 0)));
-                    assert!(terminal.screen().visible_lines().eq(before.iter()));
-                    assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+                    assert!(terminal.screen().visible_rows().eq(before.iter()));
+                    assert!(!terminal.screen().row(0).unwrap().wraps_to_next());
                     terminal.feed("X");
-                    assert_eq!(terminal.screen().line(0).unwrap().is_wrapped(), auto_wrap);
+                    assert_eq!(terminal.screen().row(0).unwrap().wraps_to_next(), auto_wrap);
 
                     if auto_wrap {
-                        assert_eq!(terminal.screen().line(0).unwrap().text(), text);
-                        assert_eq!(terminal.screen().line(1).unwrap().cells()[0].char(), 'X');
+                        assert_eq!(terminal.screen().row(0).unwrap().text(), text);
+                        assert_eq!(terminal.screen().row(1).unwrap().cells()[0].char(), 'X');
                         assert_eq!(terminal.cursor().position(), Some((1, 1)));
                     } else {
-                        assert_eq!(terminal.screen().line(0).unwrap().text(), overwritten);
+                        assert_eq!(terminal.screen().row(0).unwrap().text(), overwritten);
                         assert_eq!(terminal.cursor().position(), Some((cols - 1, 0)));
                     }
 
@@ -2185,7 +2193,7 @@ mod tests {
                 assert_eq!(terminal.cursor().position(), Some((expected_col, 0)));
                 terminal.feed("X");
                 assert_eq!(terminal.cursor().row, usize::from(wraps));
-                assert_eq!(terminal.screen().line(0).unwrap().is_wrapped(), wraps);
+                assert_eq!(terminal.screen().row(0).unwrap().wraps_to_next(), wraps);
                 terminal.engine.verify();
             }
         }
@@ -2258,11 +2266,11 @@ mod tests {
         terminal.feed(["abcd\x1b[H", "\x1b[?1047h"]);
         terminal.resize(2, 2);
         assert_eq!(terminal.size(), (2, 2));
-        assert_eq!(terminal.primary_screen().line(0).unwrap().text(), "ab");
-        assert_eq!(terminal.primary_screen().line(1).unwrap().text(), "cd");
+        assert_eq!(terminal.primary_screen().row(0).unwrap().text(), "ab");
+        assert_eq!(terminal.primary_screen().row(1).unwrap().text(), "cd");
         terminal.feed("\x1b[?1047l");
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "ab");
-        assert_eq!(terminal.screen().line(1).unwrap().text(), "cd");
+        assert_eq!(terminal.screen().row(0).unwrap().text(), "ab");
+        assert_eq!(terminal.screen().row(1).unwrap().text(), "cd");
     }
 
     #[test]
@@ -2279,34 +2287,34 @@ mod tests {
                 terminal.resize(cols, 3);
                 terminal.engine.verify();
 
-                let lines: Vec<_> = terminal.screen().visible_lines().map(Line::text).collect();
+                let row_texts: Vec<_> = terminal.screen().visible_rows().map(Row::text).collect();
 
-                assert_eq!(lines, expected);
+                assert_eq!(row_texts, expected);
                 assert_eq!(wrapped(&terminal), [true, false, false]);
                 assert_eq!(terminal.cursor().position(), Some((cursor_col, 2)));
-                assert_eq!(terminal.screen().all_lines().count(), 3);
+                assert_eq!(terminal.screen().all_rows().count(), 3);
             }
 
             assert_eq!(terminal.screen().text(), ["ab  ef", "gh"]);
             terminal.feed("X");
-            assert_eq!(terminal.screen().line(2).unwrap().text(), "gX  ");
+            assert_eq!(terminal.screen().row(2).unwrap().text(), "gX  ");
         }
     }
 
     #[test]
     fn alternate_resize_keeps_cursor_visible_when_shrinking_height() {
-        for (row, expected) in [(0, ["aa", "bb"]), (2, ["bb", "cc"])] {
+        for (row_index, expected) in [(0, ["aa", "bb"]), (2, ["bb", "cc"])] {
             let mut terminal = Terminal::new(4, 3).unwrap();
             terminal.feed("\x1b[?1047haaaa\r\nbbbb\r\ncccc");
-            terminal.feed(format!("\x1b[{};1H", row + 1));
+            terminal.feed(format!("\x1b[{};1H", row_index + 1));
             terminal.resize(2, 2);
             terminal.engine.verify();
 
-            let lines: Vec<_> = terminal.screen().visible_lines().map(Line::text).collect();
+            let row_texts: Vec<_> = terminal.screen().visible_rows().map(Row::text).collect();
 
-            assert_eq!(lines, expected);
-            assert_eq!(terminal.cursor().position(), Some((0, row.min(1))));
-            assert_eq!(terminal.screen().all_lines().count(), 2);
+            assert_eq!(row_texts, expected);
+            assert_eq!(terminal.cursor().position(), Some((0, row_index.min(1))));
+            assert_eq!(terminal.screen().all_rows().count(), 2);
             terminal.resize(4, 3);
             assert_eq!(terminal.screen().text(), [expected[0], expected[1], ""]);
         }
@@ -2324,11 +2332,11 @@ mod tests {
             assert_eq!(terminal.cursor().row, 0);
 
             assert_eq!(
-                terminal.screen().line(0).unwrap().cells()[4.min(cols - 1)].char(),
+                terminal.screen().row(0).unwrap().cells()[4.min(cols - 1)].char(),
                 'X'
             );
 
-            assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+            assert!(!terminal.screen().row(0).unwrap().wraps_to_next());
         }
     }
 
@@ -2374,7 +2382,7 @@ mod tests {
                 assert_eq!(terminal.screen().text(), ["", ""]);
                 assert_eq!(terminal.cursor().position(), Some((0, 0)));
                 terminal.feed("a");
-                assert_eq!(terminal.screen().line(0).unwrap().text(), "a");
+                assert_eq!(terminal.screen().row(0).unwrap().text(), "a");
             }
         }
     }
@@ -2440,8 +2448,8 @@ mod tests {
 
                     let actual = term
                         .screen()
-                        .visible_lines()
-                        .map(|line| line.text().trim_end().to_owned())
+                        .visible_rows()
+                        .map(|row| row.text().trim_end().to_owned())
                         .collect::<Vec<_>>()
                         .join("\n");
 
@@ -2531,7 +2539,7 @@ mod tests {
             assert!(terminal.engine.auto_wrap_mode);
             assert!(!terminal.engine.origin_mode);
             terminal.feed("X");
-            assert_eq!(terminal.screen().line(0).unwrap().text(), expected);
+            assert_eq!(terminal.screen().row(0).unwrap().text(), expected);
         }
     }
 
@@ -2570,8 +2578,8 @@ mod tests {
 
         terminal.feed(["\x1b[?1047h", "hello", "\x1b[?1047l", "\x1b[41m\x1b[?1047h"]);
 
-        assert_eq!(terminal.screen().line(0).unwrap().text().trim_end(), "");
-        let pen = *terminal.screen().line(0).unwrap().cells()[0].pen();
+        assert_eq!(terminal.screen().row(0).unwrap().text().trim_end(), "");
+        let pen = *terminal.screen().row(0).unwrap().cells()[0].pen();
         assert_eq!(pen.background(), Some(crate::Color::Indexed(1)));
     }
 
@@ -2587,10 +2595,7 @@ mod tests {
             terminal.feed_with("hello", &mut dirty);
             assert!(terminal.feed_with(&enter, &mut dirty).is_empty());
 
-            assert_eq!(
-                terminal.screen().line(0).unwrap().text().trim_end(),
-                "hello"
-            );
+            assert_eq!(terminal.screen().row(0).unwrap().text().trim_end(), "hello");
 
             if mode == 1049 {
                 terminal.feed_with("\x1b[2;1H\x1b8", &mut dirty);
@@ -2610,7 +2615,7 @@ mod tests {
     fn text(term: &Terminal) -> String {
         let cursor = term.cursor();
 
-        buffer_text(term.screen().visible_lines(), cursor.col, cursor.row)
+        buffer_text(term.screen().visible_rows(), cursor.col, cursor.row)
     }
 
     #[test]
@@ -2652,9 +2657,9 @@ mod tests {
 
             let addresses: Vec<_> = terminal
                 .screen()
-                .visible_lines()
+                .visible_rows()
                 .take(3)
-                .map(|line| line.cells().as_ptr())
+                .map(|row| row.cells().as_ptr())
                 .collect();
 
             let mut dirty = DirtyRows::new();
@@ -2666,14 +2671,14 @@ mod tests {
             );
 
             assert_eq!(terminal.cursor(), cursor);
-            assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+            assert_eq!(terminal.primary_screen().all_rows().count(), 9);
 
             assert_eq!(
                 terminal
                     .primary_screen()
-                    .all_lines()
+                    .all_rows()
                     .take(3)
-                    .map(|line| line.cells().as_ptr())
+                    .map(|row| row.cells().as_ptr())
                     .collect::<Vec<_>>(),
                 addresses
             );
@@ -2683,17 +2688,12 @@ mod tests {
                 ["one", "", "three", "", "", "", "", "", ""]
             );
 
-            assert!(
-                terminal
-                    .screen()
-                    .visible_lines()
-                    .all(|line| line.is_blank())
-            );
+            assert!(terminal.screen().visible_rows().all(|row| row.is_blank()));
 
             assert_eq!(terminal.resolve(&occupied).unwrap().row, -1);
             assert!(terminal.resolve(&blank).is_none());
             terminal.execute(clear);
-            assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+            assert_eq!(terminal.primary_screen().all_rows().count(), 9);
             terminal.execute([Cup(1, 1), Decrc]);
             assert_eq!(terminal.cursor(), cursor);
             terminal.execute(Cup(1, 1));
@@ -2709,19 +2709,14 @@ mod tests {
             let mut terminal = Terminal::with_scrollback(6, 5, None).unwrap();
             terminal.feed(format!("one\x1b[4;1H\x1b[{style}m \x1b[0m\x1b[2J"));
             let preserved = if style == "0" { 1 } else { 4 };
-            assert_eq!(terminal.primary_screen().all_lines().count(), 5 + preserved);
+            assert_eq!(terminal.primary_screen().all_rows().count(), 5 + preserved);
 
-            assert!(
-                terminal
-                    .screen()
-                    .visible_lines()
-                    .all(|line| line.is_blank())
-            );
+            assert!(terminal.screen().visible_rows().all(|row| row.is_blank()));
 
             if style != "0" {
-                let line = terminal.primary_screen().all_lines().nth(3).unwrap();
-                assert!(!line.cells()[0].pen().is_default());
-                assert_eq!(line.text(), "      ");
+                let row = terminal.primary_screen().all_rows().nth(3).unwrap();
+                assert!(!row.cells()[0].pen().is_default());
+                assert_eq!(row.text(), "      ");
             }
         }
     }
@@ -2738,23 +2733,18 @@ mod tests {
                 clear.clone(),
             ]);
 
-            assert_eq!(terminal.primary_screen().all_lines().count(), 3);
+            assert_eq!(terminal.primary_screen().all_rows().count(), 3);
 
-            assert!(terminal.screen().visible_lines().all(|line| {
-                line.cells()
+            assert!(terminal.screen().visible_rows().all(|row| {
+                row.cells()
                     .iter()
                     .all(|cell| cell.pen().background() == Some(crate::Color::Indexed(1)))
             }));
 
             terminal.execute([Sgr(vec![Reset].into()), clear.clone(), clear]);
-            assert_eq!(terminal.primary_screen().all_lines().count(), 6);
+            assert_eq!(terminal.primary_screen().all_rows().count(), 6);
 
-            assert!(
-                terminal
-                    .screen()
-                    .visible_lines()
-                    .all(|line| line.is_blank())
-            );
+            assert!(terminal.screen().visible_rows().all(|row| row.is_blank()));
         }
     }
 
@@ -2769,57 +2759,57 @@ mod tests {
             assert_eq!(terminal.cursor(), cursor);
             terminal.feed("X");
             assert_eq!(terminal.cursor().position(), Some((1, 1)));
-            assert_eq!(terminal.screen().line(0).unwrap().text(), "    ");
-            assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+            assert_eq!(terminal.screen().row(0).unwrap().text(), "    ");
+            assert_eq!(terminal.screen().row(1).unwrap().text(), "X   ");
         }
     }
 
-    fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(
+    fn buffer_text<'a, I: Iterator<Item = &'a Row> + 'a>(
         mut view: I,
         cursor_col: usize,
         cursor_row: usize,
     ) -> String {
-        let mut lines = Vec::new();
-        lines.extend(view.by_ref().take(cursor_row).map(|l| l.text()));
-        let cursor_line = view.next().unwrap();
+        let mut row_texts = Vec::new();
+        row_texts.extend(view.by_ref().take(cursor_row).map(|row| row.text()));
+        let cursor_row_data = view.next().unwrap();
         let mut offset = 0;
-        let mut line = String::new();
+        let mut row_text = String::new();
 
-        let mut cells = cursor_line.cells().iter().filter(|c| c.width() != 0);
+        let mut cells = cursor_row_data.cells().iter().filter(|c| c.width() != 0);
 
         for cell in cells.by_ref() {
             let width = cell.width() as usize;
 
             if offset + width <= cursor_col {
-                line.push(cell.char());
+                row_text.push(cell.char());
                 offset += width;
             } else {
-                line.push('|');
-                line.push(cell.char());
+                row_text.push('|');
+                row_text.push(cell.char());
                 offset += width;
                 break;
             }
         }
 
         if offset == cursor_col {
-            line.push('|');
+            row_text.push('|');
         }
 
-        line.extend(cells.map(|c| c.char()));
-        lines.push(line);
-        lines.extend(view.map(|l| l.text()));
+        row_text.extend(cells.map(|c| c.char()));
+        row_texts.push(row_text);
+        row_texts.extend(view.map(|row| row.text()));
 
-        lines
+        row_texts
             .into_iter()
-            .map(|line| line.trim_end().to_owned())
+            .map(|row_text| row_text.trim_end().to_owned())
             .collect::<Vec<_>>()
             .join("\n")
     }
 
     fn wrapped(term: &Terminal) -> Vec<bool> {
         term.screen()
-            .visible_lines()
-            .map(Line::is_wrapped)
+            .visible_rows()
+            .map(Row::wraps_to_next)
             .collect()
     }
 
@@ -2925,7 +2915,7 @@ mod tests {
     fn linefeed_and_reverse_index_respect_scrolling_region() {
         // LF at the bottom margin and RI at the top affect only the region;
         // LF at the screen bottom below it does not scroll.
-        for (input, expected, row) in [
+        for (input, expected, row_index) in [
             ("\x1b[4;2H\n", ["AAAA", "CCCC", "DDDD", "    ", "EEEE"], 3),
             (
                 "\x1b[2;2H\x1bM",
@@ -2937,9 +2927,9 @@ mod tests {
             let mut term = Terminal::new(4, 5).unwrap();
             term.feed("AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE");
             term.feed(["\x1b[2;4r", input]);
-            let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-            assert_eq!(lines, expected, "{input:?}");
-            assert_eq!(term.cursor().position(), Some((1, row)), "{input:?}");
+            let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+            assert_eq!(row_texts, expected, "{input:?}");
+            assert_eq!(term.cursor().position(), Some((1, row_index)), "{input:?}");
             assert_eq!(wrapped(&term), [false; 5], "{input:?}");
         }
     }
@@ -2962,8 +2952,8 @@ mod tests {
         for (input, expected, col) in [("\rX", "XBCD", 1), ("\x1b[1;2HX", "AXCD", 2)] {
             let mut term = Terminal::new(4, 2).unwrap();
             term.feed(["ABCD", input]);
-            let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-            assert_eq!(lines, [expected, "    "], "{input:?}");
+            let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+            assert_eq!(row_texts, [expected, "    "], "{input:?}");
             assert_eq!(term.cursor().position(), Some((col, 0)), "{input:?}");
             assert_eq!(wrapped(&term), [false, false], "{input:?}");
         }
@@ -3531,16 +3521,20 @@ mod tests {
 
         // EL2 clears an unwrapped row with default erase attributes even
         // outside the vertical margins, without moving the cursor.
-        for (position, expected, row) in [
+        for (position, expected, row_index) in [
             ("\x1b[3;2H", ["AAAA", "BBBB", "    ", "DDDD", "EEEE"], 2),
             ("\x1b[5;2H", ["AAAA", "BBBB", "CCCC", "DDDD", "    "], 4),
         ] {
             let mut term = Terminal::new(4, 5).unwrap();
             term.feed("AAAA\r\nBBBB\r\nCCCC\r\nDDDD\r\nEEEE");
             term.feed(["\x1b[2;4r", position, "\x1b[2K"]);
-            let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-            assert_eq!(lines, expected, "{position:?}");
-            assert_eq!(term.cursor().position(), Some((1, row)), "{position:?}");
+            let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+            assert_eq!(row_texts, expected, "{position:?}");
+            assert_eq!(
+                term.cursor().position(),
+                Some((1, row_index)),
+                "{position:?}"
+            );
         }
     }
 
@@ -3641,13 +3635,13 @@ mod tests {
         // single-width blanks without moving the cursor.
         let mut term = Terminal::new(4, 2).unwrap();
         term.feed("A界B\x1b[1;2H\x1b[2X");
-        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-        assert_eq!(lines, ["A  B", "    "]);
+        let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+        assert_eq!(row_texts, ["A  B", "    "]);
         assert_eq!(term.cursor().position(), Some((1, 0)));
 
         assert!(
             term.screen()
-                .line(0)
+                .row(0)
                 .unwrap()
                 .cells()
                 .iter()
@@ -3679,7 +3673,7 @@ mod tests {
 
                 assert_eq!(
                     term.screen()
-                        .line(0)
+                        .row(0)
                         .unwrap()
                         .cells()
                         .iter()
@@ -3749,14 +3743,14 @@ mod tests {
         term.feed("\x1b[2;3H\x1b[1;31m\x1b7\x1b[3;1H\x1b[0mY\x1b8");
         assert_eq!(term.cursor().position(), Some((2, 1)));
         term.feed("X");
-        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-        assert_eq!(lines, ["      ", "  X   ", "Y     "]);
+        let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+        assert_eq!(row_texts, ["      ", "  X   ", "Y     "]);
         assert_eq!(term.cursor().position(), Some((3, 1)));
         let screen = term.screen();
-        let pen = screen.line(1).unwrap().cells()[2].pen();
+        let pen = screen.row(1).unwrap().cells()[2].pen();
         assert!(pen.is_bold());
         assert_eq!(pen.foreground(), Some(Color::Indexed(1)));
-        assert!(screen.line(2).unwrap().cells()[0].pen().is_default());
+        assert!(screen.row(2).unwrap().cells()[0].pen().is_default());
     }
 
     #[test]
@@ -3812,8 +3806,8 @@ mod tests {
                 assert_eq!(term.cursor(), before);
                 assert_eq!(wrapped(&term), [false, false]);
                 term.feed(input);
-                let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-                assert_eq!(lines, expected);
+                let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+                assert_eq!(row_texts, expected);
                 assert_eq!(term.cursor().position(), Some(cursor));
                 assert_eq!(wrapped(&term), [wraps, false]);
             }
@@ -3844,12 +3838,12 @@ mod tests {
                     assert!(
                         !terminal
                             .screen()
-                            .line(bottom as usize - 1)
+                            .row(bottom as usize - 1)
                             .unwrap()
-                            .is_wrapped()
+                            .wraps_to_next()
                     );
 
-                    let before: Vec<_> = terminal.screen().visible_lines().cloned().collect();
+                    let before: Vec<_> = terminal.screen().visible_rows().cloned().collect();
                     let mut dirty = DirtyRows::new();
                     terminal.feed_with("", &mut dirty);
                     let rows = terminal.feed_with("E", &mut dirty);
@@ -3857,17 +3851,17 @@ mod tests {
                     assert_eq!(rows, range.clone().collect::<Vec<_>>());
                     assert_eq!(terminal.cursor().position(), Some((1, range.end - 1)));
 
-                    for (row, line) in terminal.screen().visible_lines().enumerate() {
-                        let expected = if row == range.end - 1 {
+                    for (row_index, row) in terminal.screen().visible_rows().enumerate() {
+                        let expected = if row_index == range.end - 1 {
                             "E   ".to_owned()
-                        } else if range.contains(&row) {
-                            before[row + 1].text()
+                        } else if range.contains(&row_index) {
+                            before[row_index + 1].text()
                         } else {
-                            before[row].text()
+                            before[row_index].text()
                         };
 
-                        assert_eq!(line.text(), expected);
-                        assert_eq!(line.is_wrapped(), row == range.end - 2);
+                        assert_eq!(row.text(), expected);
+                        assert_eq!(row.wraps_to_next(), row_index == range.end - 2);
                     }
 
                     assert!(terminal.screen().text().iter().any(|line| line == "ABCDE"));
@@ -3895,15 +3889,15 @@ mod tests {
             restored.resize(8, 5);
             terminal.engine.assert_dump_equivalent(&restored.engine);
             let screen = terminal.screen();
-            let line = screen.line(2).unwrap();
+            let row = screen.row(2).unwrap();
 
             if alternate {
-                assert_eq!(line.text().trim_end(), "ABCD");
-                assert_eq!(screen.line(3).unwrap().text().trim_end(), "E");
-                assert!(line.is_wrapped());
+                assert_eq!(row.text().trim_end(), "ABCD");
+                assert_eq!(screen.row(3).unwrap().text().trim_end(), "E");
+                assert!(row.wraps_to_next());
             } else {
-                assert_eq!(line.text().trim_end(), "ABCDE");
-                assert!(!line.is_wrapped());
+                assert_eq!(row.text().trim_end(), "ABCDE");
+                assert!(!row.wraps_to_next());
             }
 
             let mut replayed = Terminal::new(8, 5).unwrap();
@@ -3926,14 +3920,17 @@ mod tests {
 
     #[test]
     fn ordinary_scrolling_breaks_displaced_wrap_connections() {
-        for (function, top, row) in [(Su(1), 2, 1), (Dl(1), 1, 2), (Lf, 2, 4), (Nel, 2, 4)] {
+        for (function, top, row_index) in [(Su(1), 2, 1), (Dl(1), 1, 2), (Lf, 2, 4), (Nel, 2, 4)] {
             let mut terminal = Terminal::new(4, 5).unwrap();
             terminal.feed("abcdefghijklmnopq");
-            terminal.execute([Decstbm(top, 4), Cup(row, 1)]);
+            terminal.execute([Decstbm(top, 4), Cup(row_index, 1)]);
             terminal.execute(function);
             assert_eq!(wrapped(&terminal), [false, true, false, false, false]);
             assert_eq!(terminal.screen().text(), ["abcd", "ijklmnop", "", "q"]);
-            assert_eq!(terminal.cursor().position(), Some((0, row as usize - 1)));
+            assert_eq!(
+                terminal.cursor().position(),
+                Some((0, row_index as usize - 1))
+            );
         }
     }
 
@@ -3954,7 +3951,7 @@ mod tests {
             terminal.engine.verify();
 
             assert_eq!(
-                terminal.screen().line(1).unwrap().text().trim_end(),
+                terminal.screen().row(1).unwrap().text().trim_end(),
                 expected
             );
         }
@@ -3979,7 +3976,7 @@ mod tests {
     fn insert_mode_shifts_by_character_width() {
         let mut term = Terminal::new(5, 2).unwrap();
         term.feed("hello\x1b[1;2H\x1b[4h界");
-        assert_eq!(term.screen().line(0).unwrap().text(), "h界el");
+        assert_eq!(term.screen().row(0).unwrap().text(), "h界el");
         assert_eq!(term.cursor().position(), Some((3, 0)));
         term.engine.verify();
     }
@@ -3996,7 +3993,7 @@ mod tests {
             term.feed(prefix);
             term.feed("\x1b[4h");
             term.feed(input);
-            assert_eq!(term.screen().line(1).unwrap().text(), expected);
+            assert_eq!(term.screen().row(1).unwrap().text(), expected);
             term.engine.verify();
         }
     }
@@ -4005,7 +4002,7 @@ mod tests {
     fn insert_mode_without_autowrap_fits_at_the_right_edge() {
         let mut term = Terminal::new(4, 2).unwrap();
         term.feed("abcd\x1b[1;4H\x1b[?7l\x1b[4h界");
-        assert_eq!(term.screen().line(0).unwrap().text(), "ab界");
+        assert_eq!(term.screen().row(0).unwrap().text(), "ab界");
         assert_eq!(term.cursor().position(), Some((3, 0)));
         assert_eq!(wrapped(&term), [false, false]);
         term.engine.verify();
@@ -4024,8 +4021,8 @@ mod tests {
             }
 
             term.feed("界");
-            assert_eq!(term.screen().line(0).unwrap().text(), "x");
-            assert_eq!(term.screen().line(1).unwrap().text(), "y");
+            assert_eq!(term.screen().row(0).unwrap().text(), "x");
+            assert_eq!(term.screen().row(1).unwrap().text(), "y");
             assert_eq!(term.resolve(&anchor), position);
             assert_eq!(term.cursor().position(), Some((0, usize::from(autowrap))));
             term.engine.verify();
@@ -4040,12 +4037,12 @@ mod tests {
         term.feed("\x1b[C");
         let tail = term.anchor_at_cursor();
         term.feed("\x1b[4h");
-        let before = term.screen().line(0).unwrap().clone();
+        let before = term.screen().row(0).unwrap().clone();
         let cursor = term.cursor();
         let head_pos = term.resolve(&head);
         let tail_pos = term.resolve(&tail);
         assert_eq!(term.engine.try_print('界'), None);
-        assert_eq!(term.screen().line(0).unwrap(), &before);
+        assert_eq!(term.screen().row(0).unwrap(), &before);
         assert_eq!(term.cursor(), cursor);
         assert_eq!(term.resolve(&head), head_pos);
         assert_eq!(term.resolve(&tail), tail_pos);
@@ -4105,22 +4102,22 @@ mod tests {
         term.feed_with("AB", &mut dirty);
         let rows = term.feed_with("界", &mut dirty);
         assert!(rows.contains(&0));
-        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-        assert_eq!(lines, ["AB界", "    "]);
+        let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+        assert_eq!(row_texts, ["AB界", "    "]);
         assert_eq!(term.cursor().row, 0);
         assert_eq!(wrapped(&term), [false, false]);
 
         // Row 0's wrap flag changes, but only row 1's cells need repainting.
         let rows = term.feed_with("X", &mut dirty);
         assert!(rows.contains(&1));
-        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-        assert_eq!(lines, ["AB界", "X   "]);
+        let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+        assert_eq!(row_texts, ["AB界", "X   "]);
         assert_eq!(term.cursor().position(), Some((1, 1)));
         assert_eq!(wrapped(&term), [true, false]);
 
         assert_eq!(
             term.screen()
-                .line(0)
+                .row(0)
                 .unwrap()
                 .cells()
                 .iter()
@@ -4141,7 +4138,7 @@ mod tests {
         assert_eq!(text(&term), "A 界|\n");
         assert_eq!(wrapped(&term), vec![false, false]);
 
-        let row0 = term.screen().line(0).unwrap();
+        let row0 = term.screen().row(0).unwrap();
         assert_eq!(row0.text(), "A 界");
 
         assert_eq!(
@@ -4165,7 +4162,7 @@ mod tests {
         assert_eq!(text(&term), "A |界\n");
         assert_eq!(wrapped(&term), vec![false, false]);
 
-        let row0 = term.screen().line(0).unwrap();
+        let row0 = term.screen().row(0).unwrap();
         assert_eq!(row0.text(), "A 界");
 
         assert_eq!(
@@ -4188,8 +4185,8 @@ mod tests {
         assert_eq!(text(&term), "abcz\n界|");
         assert_eq!(wrapped(&term), vec![true, false]);
 
-        let row0 = term.screen().line(0).unwrap();
-        let row1 = term.screen().line(1).unwrap();
+        let row0 = term.screen().row(0).unwrap();
+        let row1 = term.screen().row(1).unwrap();
 
         assert_eq!(row0.text(), "abcz");
 
@@ -4224,7 +4221,7 @@ mod tests {
         term.execute([sgr(SetBoldIntensity), Su(2)]);
         assert_eq!(text(&term), "cc\ndd\nee\nff\n\n  |");
 
-        assert!(term.screen().line(5).unwrap()[0].pen().is_bold());
+        assert!(term.screen().row(5).unwrap()[0].pen().is_bold());
 
         let mut term = Terminal::with_scrollback(4, 6, None).unwrap();
 
@@ -4316,12 +4313,12 @@ mod tests {
         term.resize(7, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.screen().visible_lines().any(Line::is_wrapped));
+        assert!(!term.screen().visible_rows().any(Row::wraps_to_next));
 
         term.resize(15, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.screen().visible_lines().any(Line::is_wrapped));
+        assert!(!term.screen().visible_rows().any(Row::wraps_to_next));
 
         let mut term = Terminal::with_scrollback(6, 6, None).unwrap();
 
@@ -4360,12 +4357,12 @@ mod tests {
         term.resize(7, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.screen().visible_lines().any(Line::is_wrapped));
+        assert!(!term.screen().visible_rows().any(Row::wraps_to_next));
 
         term.resize(6, 6);
 
         assert_eq!(text(&term), "|\n\n\n\n\n");
-        assert!(!term.screen().visible_lines().any(Line::is_wrapped));
+        assert!(!term.screen().visible_rows().any(Row::wraps_to_next));
 
         let mut term = Terminal::with_scrollback(8, 2, None).unwrap();
 
@@ -4536,8 +4533,8 @@ mod tests {
         term.feed("\x1b[2;3H");
         assert_eq!(term.cursor().position(), Some((2, 2)));
         term.feed("X");
-        let lines: Vec<_> = term.screen().visible_lines().map(Line::text).collect();
-        assert_eq!(lines, ["    ", "    ", "  X ", "    ", "    "]);
+        let row_texts: Vec<_> = term.screen().visible_rows().map(Row::text).collect();
+        assert_eq!(row_texts, ["    ", "    ", "  X ", "    ", "    "]);
         assert_eq!(term.cursor().position(), Some((3, 2)));
 
         term.execute(Decrst(dec_modes([DecMode::Origin])));
@@ -4640,9 +4637,9 @@ mod tests {
         assert_eq!(term.cursor().position(), Some((3, 0)));
         assert!(!term.cursor_key_app_mode());
         term.feed("XY");
-        assert_eq!(term.screen().line(0).unwrap().text(), "abcX");
-        assert_eq!(term.screen().line(1).unwrap().text(), "Y   ");
-        assert!(term.screen().line(0).unwrap().is_wrapped());
+        assert_eq!(term.screen().row(0).unwrap().text(), "abcX");
+        assert_eq!(term.screen().row(1).unwrap().text(), "Y   ");
+        assert!(term.screen().row(0).unwrap().wraps_to_next());
         assert_eq!(term.cursor().position(), Some((1, 1)));
     }
 
@@ -4661,24 +4658,24 @@ mod tests {
             term.feed("\x1b[3g\x1b[4G\x1bH\x1b[20h\x1b[Habcdefghijkl");
             let active = term.active_screen_kind();
             let cursor = term.cursor();
-            let visible: Vec<_> = term.screen().visible_lines().cloned().collect();
-            let primary: Vec<_> = term.primary_screen().all_lines().cloned().collect();
+            let visible: Vec<_> = term.screen().visible_rows().cloned().collect();
+            let primary: Vec<_> = term.primary_screen().all_rows().cloned().collect();
             assert_eq!(cursor.position(), Some((12, 0)));
             assert_eq!(primary.len(), 4);
             term.feed("\x1b[!p");
             assert_eq!(term.size(), (12, 3));
             assert_eq!(term.active_screen_kind(), active);
             assert_eq!(term.cursor(), cursor);
-            assert!(term.screen().visible_lines().eq(visible.iter()));
-            assert!(term.primary_screen().all_lines().eq(primary.iter()));
+            assert!(term.screen().visible_rows().eq(visible.iter()));
+            assert!(term.primary_screen().all_rows().eq(primary.iter()));
             term.feed("Z");
             assert_eq!(term.cursor().position(), Some((1, 1)));
-            assert_eq!(term.screen().line(0).unwrap().text(), "abcdefghijkl");
-            assert!(term.screen().line(0).unwrap().is_wrapped());
-            assert_eq!(term.screen().line(1).unwrap().cells()[0].char(), 'Z');
+            assert_eq!(term.screen().row(0).unwrap().text(), "abcdefghijkl");
+            assert!(term.screen().row(0).unwrap().wraps_to_next());
+            assert_eq!(term.screen().row(1).unwrap().cells()[0].char(), 'Z');
             term.feed("\r\tX\nY");
-            assert_eq!(term.screen().line(1).unwrap().cells()[3].char(), 'X');
-            assert_eq!(term.screen().line(2).unwrap().cells()[0].char(), 'Y');
+            assert_eq!(term.screen().row(1).unwrap().cells()[3].char(), 'X');
+            assert_eq!(term.screen().row(2).unwrap().cells()[0].char(), 'Y');
             assert_eq!(term.cursor().position(), Some((1, 2)));
         }
     }

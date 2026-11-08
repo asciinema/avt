@@ -324,7 +324,7 @@ pub enum EdScope {
     /// Move the occupied primary-screen prefix into scrollback, then erase the
     /// entire display. On the alternate screen, erase the display.
     ScrollAll,
-    /// Retained scrollback lines.
+    /// Retained scrollback rows.
     SavedLines,
 }
 

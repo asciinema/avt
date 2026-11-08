@@ -26,9 +26,9 @@ impl CharWidth {
 
 /// One physical row. Cell edits maintain wide pairs and row-local anchors;
 /// the buffer coordinates relationships and anchor transfers between rows.
-pub struct Line {
+pub struct Row {
     cells: Vec<Cell>,
-    wrapped: bool,
+    wraps_to_next: bool,
     marks: Vec<Mark>,
 }
 
@@ -60,28 +60,28 @@ impl ReflowCursor {
     }
 }
 
-// Frames and evicted-line copies are visual values, not tracking registrations.
-impl Clone for Line {
+// Frames and evicted-row copies are visual values, not tracking registrations.
+impl Clone for Row {
     fn clone(&self) -> Self {
         Self {
             cells: self.cells.clone(),
-            wrapped: self.wrapped,
+            wraps_to_next: self.wraps_to_next,
             marks: Vec::new(),
         }
     }
 }
 
-impl PartialEq for Line {
+impl PartialEq for Row {
     fn eq(&self, other: &Self) -> bool {
-        self.cells == other.cells && self.wrapped == other.wrapped
+        self.cells == other.cells && self.wraps_to_next == other.wraps_to_next
     }
 }
 
-impl Line {
+impl Row {
     pub(crate) fn blank(cols: usize, pen: Pen) -> Self {
-        Line {
+        Row {
             cells: vec![Cell::blank(pen); cols],
-            wrapped: false,
+            wraps_to_next: false,
             marks: Vec::new(),
         }
     }
@@ -89,7 +89,7 @@ impl Line {
     pub(crate) fn reset(&mut self, pen: Pen) {
         self.marks.clear();
         self.cells.fill(Cell::blank(pen));
-        self.wrapped = false;
+        self.wraps_to_next = false;
     }
 
     pub(crate) fn clear(&mut self, range: Range<usize>, pen: &Pen) {
@@ -313,20 +313,20 @@ impl Line {
     /// the successor was fully consumed.
     pub(crate) fn append_for_reflow(
         &mut self,
-        mut other: Line,
+        mut other: Row,
         len: usize,
         cursor: &mut ReflowCursors,
         mut other_cursor: ReflowCursors,
-    ) -> Option<(Line, ReflowCursors)> {
+    ) -> Option<(Row, ReflowCursors)> {
         let mut needed = len - self.len();
 
-        if !self.wrapped {
+        if !self.wraps_to_next {
             self.expand(len);
 
             return Some((other, other_cursor));
         }
 
-        if !other.wrapped {
+        if !other.wraps_to_next {
             other.trim();
 
             for c in other_cursor.iter_mut().flatten() {
@@ -362,9 +362,9 @@ impl Line {
             cells.truncate(cells.len() - needed);
 
             return Some((
-                Line {
+                Row {
                     cells,
-                    wrapped: other.wrapped,
+                    wraps_to_next: other.wraps_to_next,
                     marks: rest_marks,
                 },
                 other_cursor,
@@ -381,8 +381,8 @@ impl Line {
         self.append_marks(&mut other, self.len());
         self.cells.extend(&other[..]);
 
-        if !other.wrapped {
-            self.wrapped = false;
+        if !other.wraps_to_next {
+            self.wraps_to_next = false;
             self.expand(len);
         }
 
@@ -417,7 +417,7 @@ impl Line {
         &mut self,
         mut len: usize,
         cursor: &mut ReflowCursors,
-    ) -> Option<(Line, ReflowCursors)> {
+    ) -> Option<(Row, ReflowCursors)> {
         // A wide pair cannot fit on a one-column row, even after wrapping.
         if len == 1 && self.cells[0].occupancy() == Occupancy::WideHead {
             let pen = *self.cells[0].pen();
@@ -428,7 +428,7 @@ impl Line {
             }
         }
 
-        if !self.wrapped {
+        if !self.wraps_to_next {
             let trimmed_len = self.len() - self.trailers();
 
             for c in cursor.iter_mut().flatten() {
@@ -445,9 +445,9 @@ impl Line {
                 len -= 1;
             }
 
-            let rest = Line {
+            let rest = Row {
                 cells: self.cells.split_off(len),
-                wrapped: self.wrapped,
+                wraps_to_next: self.wraps_to_next,
                 marks: self.split_marks(len),
             };
 
@@ -470,7 +470,7 @@ impl Line {
                 self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
             }
 
-            self.wrapped = true;
+            self.wraps_to_next = true;
 
             Some((rest, rest_cursor))
         } else {
@@ -537,7 +537,7 @@ impl Line {
         rest
     }
 
-    fn append_marks(&mut self, other: &mut Line, offset: usize) {
+    fn append_marks(&mut self, other: &mut Row, offset: usize) {
         self.marks.extend(
             other
                 .marks
@@ -566,12 +566,12 @@ impl Line {
     }
 
     /// Whether this row continues onto the next row through a soft wrap.
-    pub fn is_wrapped(&self) -> bool {
-        self.wrapped
+    pub fn wraps_to_next(&self) -> bool {
+        self.wraps_to_next
     }
 
-    pub(crate) fn set_wrapped(&mut self, wrapped: bool) {
-        self.wrapped = wrapped;
+    pub(crate) fn set_wraps_to_next(&mut self, wraps_to_next: bool) {
+        self.wraps_to_next = wraps_to_next;
     }
 
     pub fn chunks<'a>(
@@ -629,11 +629,11 @@ impl Line {
     }
 }
 
-impl core::fmt::Debug for Line {
+impl core::fmt::Debug for Row {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         let mut s = self.text();
 
-        if self.wrapped {
+        if self.wraps_to_next {
             s.push('⏎');
         }
 
@@ -688,7 +688,7 @@ impl<'a, I: Iterator<Item = &'a Cell>, F: Fn(&Cell, &Cell) -> bool> Iterator for
     }
 }
 
-impl Index<usize> for Line {
+impl Index<usize> for Row {
     type Output = Cell;
 
     fn index(&self, index: usize) -> &Self::Output {
@@ -696,7 +696,7 @@ impl Index<usize> for Line {
     }
 }
 
-impl Index<Range<usize>> for Line {
+impl Index<Range<usize>> for Row {
     type Output = [Cell];
 
     fn index(&self, range: Range<usize>) -> &Self::Output {
@@ -704,7 +704,7 @@ impl Index<Range<usize>> for Line {
     }
 }
 
-impl Index<RangeFull> for Line {
+impl Index<RangeFull> for Row {
     type Output = [Cell];
 
     fn index(&self, range: RangeFull) -> &Self::Output {
@@ -714,7 +714,7 @@ impl Index<RangeFull> for Line {
 
 #[cfg(test)]
 mod tests {
-    use super::{Cell, Chunks, Line, Occupancy, Pen};
+    use super::{Cell, Chunks, Occupancy, Pen, Row};
     use alloc::vec::Vec;
 
     fn chars(cells: &[Cell]) -> Vec<char> {
@@ -743,23 +743,23 @@ mod tests {
             (6, "X", 0),
             (7, "X", 0),
         ] {
-            let mut line = Line::blank(6, Pen::default());
+            let mut row = Row::blank(6, Pen::default());
 
             for (col, ch) in [(0, 'a'), (1, '界'), (3, '語'), (5, 'b')] {
-                line.replace_char(col, ch, Pen::default());
+                row.replace_char(col, ch, Pen::default());
             }
 
-            line.set_wrapped(true);
-            let anchors: Vec<_> = (0..=6).map(|col| line.anchor_at(col).unwrap()).collect();
-            let expired = line.anchor_at(6).unwrap();
+            row.set_wraps_to_next(true);
+            let anchors: Vec<_> = (0..=6).map(|col| row.anchor_at(col).unwrap()).collect();
+            let expired = row.anchor_at(6).unwrap();
             drop(expired);
-            let mut reference = line.clone();
+            let mut reference = row.clone();
             let mut pen = Pen::default();
             pen.set_italic();
             pen.background = Some(crate::Color::Indexed(2));
 
             assert_eq!(
-                line.replace_ascii_prefix(col, text, pen),
+                row.replace_ascii_prefix(col, text, pen),
                 expected,
                 "col={col}, text={text:?}"
             );
@@ -768,34 +768,34 @@ mod tests {
                 reference.replace_char(col + offset, ch, pen);
             }
 
-            assert_eq!(line, reference, "col={col}, text={text:?}");
-            assert_eq!(line.marks.len(), 8);
-            assert_eq!(line.marks[7].col, 6);
+            assert_eq!(row, reference, "col={col}, text={text:?}");
+            assert_eq!(row.marks.len(), 8);
+            assert_eq!(row.marks[7].col, 6);
 
             for (col, anchor) in anchors.iter().enumerate() {
-                assert_eq!(line.anchor_column(anchor), Some(col));
+                assert_eq!(row.anchor_column(anchor), Some(col));
             }
         }
     }
 
     #[test]
     fn rejected_print_preserves_all_row_state() {
-        for print in [Line::replace_char, Line::insert_char] {
+        for print in [Row::replace_char, Row::insert_char] {
             for (cols, seed) in [(1, 'x'), (2, '界'), (4, '界')] {
-                let mut line = Line::blank(cols, Pen::default());
-                assert!(line.replace_char(0, seed, Pen::default()).is_some());
-                line.set_wrapped(true);
-                let anchor = line.anchor_at(0).unwrap();
-                let expired = line.anchor_at(cols).unwrap();
+                let mut row = Row::blank(cols, Pen::default());
+                assert!(row.replace_char(0, seed, Pen::default()).is_some());
+                row.set_wraps_to_next(true);
+                let anchor = row.anchor_at(0).unwrap();
+                let expired = row.anchor_at(cols).unwrap();
                 drop(expired);
-                let before = line.clone();
+                let before = row.clone();
 
                 for col in [cols - 1, cols] {
-                    assert_eq!(print(&mut line, col, '界', Pen::default()), None);
-                    assert_eq!(line, before);
-                    assert_eq!(line.anchor_column(&anchor), Some(0));
-                    assert_eq!(line.marks.len(), 2);
-                    assert_eq!(line.marks[1].col, cols);
+                    assert_eq!(print(&mut row, col, '界', Pen::default()), None);
+                    assert_eq!(row, before);
+                    assert_eq!(row.anchor_column(&anchor), Some(0));
+                    assert_eq!(row.marks.len(), 2);
+                    assert_eq!(row.marks[1].col, cols);
                 }
             }
         }
@@ -815,20 +815,20 @@ mod tests {
             old_pen.set_underline();
             let mut pen = Pen::default();
             pen.set_italic();
-            let mut line = Line::blank(6, old_pen);
+            let mut row = Row::blank(6, old_pen);
             let mut cursor = 0;
 
             for ch in "a界語b".chars() {
-                cursor += line.replace_char(cursor, ch, old_pen).unwrap();
+                cursor += row.replace_char(cursor, ch, old_pen).unwrap();
             }
 
-            line.set_wrapped(true);
-            let anchors: Vec<_> = (0..=6).map(|col| line.anchor_at(col).unwrap()).collect();
-            assert_eq!(line.replace_char(col, ch, pen), Some(widths[col]));
-            assert_eq!(line.text(), expected);
-            assert!(line.is_wrapped());
+            row.set_wraps_to_next(true);
+            let anchors: Vec<_> = (0..=6).map(|col| row.anchor_at(col).unwrap()).collect();
+            assert_eq!(row.replace_char(col, ch, pen), Some(widths[col]));
+            assert_eq!(row.text(), expected);
+            assert!(row.wraps_to_next());
 
-            for (col, cell) in line.cells().iter().enumerate() {
+            for (col, cell) in row.cells().iter().enumerate() {
                 assert_eq!(usize::from(cell.width()), widths[col]);
 
                 assert_eq!(
@@ -842,7 +842,7 @@ mod tests {
             }
 
             for (col, anchor) in anchors.iter().enumerate() {
-                assert_eq!(line.anchor_column(anchor), Some(col));
+                assert_eq!(row.anchor_column(anchor), Some(col));
             }
         }
     }
@@ -858,18 +858,18 @@ mod tests {
             ("abcd界", 0, '語', 2, "語abcd", [2, 0, 1, 1, 1, 1]),
         ] {
             let pen = Pen::default();
-            let mut line = Line::blank(6, pen);
+            let mut row = Row::blank(6, pen);
             let mut cursor = 0;
 
             for ch in text.chars() {
-                cursor += line.replace_char(cursor, ch, pen).unwrap();
+                cursor += row.replace_char(cursor, ch, pen).unwrap();
             }
 
-            assert_eq!(line.insert_char(col, ch, pen), Some(width));
-            assert_eq!(line.text(), expected);
+            assert_eq!(row.insert_char(col, ch, pen), Some(width));
+            assert_eq!(row.text(), expected);
 
             assert_eq!(
-                line.cells().iter().map(Cell::width).collect::<Vec<_>>(),
+                row.cells().iter().map(Cell::width).collect::<Vec<_>>(),
                 widths
             );
         }
@@ -881,17 +881,17 @@ mod tests {
         old_pen.set_underline();
         let mut pen = Pen::default();
         pen.set_italic();
-        let mut line = Line::blank(7, old_pen);
+        let mut row = Row::blank(7, old_pen);
         let mut cursor = 0;
 
         for ch in "a界bc".chars() {
-            cursor += line.replace_char(cursor, ch, old_pen).unwrap();
+            cursor += row.replace_char(cursor, ch, old_pen).unwrap();
         }
 
-        assert_eq!(line.insert_char(1, '語', pen), Some(2));
+        assert_eq!(row.insert_char(1, '語', pen), Some(2));
 
         assert_eq!(
-            line.cells(),
+            row.cells(),
             &[
                 Cell::new('a', Occupancy::Single, old_pen),
                 Cell::new('語', Occupancy::WideHead, pen),
@@ -914,19 +914,19 @@ mod tests {
             ("ab界", 4, 0, 2, "  ab"),
             ("ab界", 4, 1, usize::MAX, "a   "),
         ] {
-            let mut line = Line::blank(cols, Pen::default());
+            let mut row = Row::blank(cols, Pen::default());
             let mut cursor = 0;
 
             for ch in text.chars() {
-                cursor += line.replace_char(cursor, ch, Pen::default()).unwrap();
+                cursor += row.replace_char(cursor, ch, Pen::default()).unwrap();
             }
 
             let mut pen = Pen::default();
             pen.set_italic();
-            line.insert_blanks(col, count, pen);
-            assert_eq!(line.text(), expected);
+            row.insert_blanks(col, count, pen);
+            assert_eq!(row.text(), expected);
 
-            for cell in &line[col..col + count.min(cols - col)] {
+            for cell in &row[col..col + count.min(cols - col)] {
                 assert_eq!(*cell, Cell::blank(pen));
             }
         }
@@ -934,46 +934,46 @@ mod tests {
 
     #[test]
     fn empty_insertion_preserves_cells_and_registrations() {
-        let mut line = Line::blank(2, Pen::default());
-        line.replace_char(0, '界', Pen::default());
-        line.set_wrapped(true);
-        let anchor = line.anchor_at(0).unwrap();
-        let expired = line.anchor_at(2).unwrap();
+        let mut row = Row::blank(2, Pen::default());
+        row.replace_char(0, '界', Pen::default());
+        row.set_wraps_to_next(true);
+        let anchor = row.anchor_at(0).unwrap();
+        let expired = row.anchor_at(2).unwrap();
         drop(expired);
-        let before = line.clone();
+        let before = row.clone();
 
         for (col, count) in [(1, 0), (2, 1)] {
-            line.insert_blanks(col, count, Pen::default());
-            assert_eq!(line, before);
-            assert_eq!(line.anchor_column(&anchor), Some(0));
-            assert_eq!(line.marks.len(), 2);
+            row.insert_blanks(col, count, Pen::default());
+            assert_eq!(row, before);
+            assert_eq!(row.anchor_column(&anchor), Some(0));
+            assert_eq!(row.marks.len(), 2);
         }
     }
 
     #[test]
     fn empty_clear_and_delete_preserve_wide_cells_and_anchors() {
-        let mut line = Line::blank(2, Pen::default());
-        line.replace_char(0, '界', Pen::default());
-        line.set_wrapped(true);
-        let anchor = line.anchor_at(0).unwrap();
-        let before = line.clone();
-        line.clear(1..1, &Pen::default());
-        assert_eq!(line, before);
-        assert_eq!(line.anchor_column(&anchor), Some(0));
-        line.delete(1, 0, &Pen::default());
-        assert_eq!(line, before);
-        assert_eq!(line.anchor_column(&anchor), Some(0));
+        let mut row = Row::blank(2, Pen::default());
+        row.replace_char(0, '界', Pen::default());
+        row.set_wraps_to_next(true);
+        let anchor = row.anchor_at(0).unwrap();
+        let before = row.clone();
+        row.clear(1..1, &Pen::default());
+        assert_eq!(row, before);
+        assert_eq!(row.anchor_column(&anchor), Some(0));
+        row.delete(1, 0, &Pen::default());
+        assert_eq!(row, before);
+        assert_eq!(row.anchor_column(&anchor), Some(0));
     }
 
     #[test]
     fn registering_an_anchor_releases_expired_marks() {
-        let mut line = Line::blank(2, Pen::default());
-        let old = line.anchor_at(0).unwrap();
+        let mut row = Row::blank(2, Pen::default());
+        let old = row.anchor_at(0).unwrap();
         drop(old);
-        assert!(!line.has_anchor_at(0));
-        let live = line.anchor_at(1).unwrap();
-        assert_eq!(line.marks.len(), 1);
-        assert_eq!(line.anchor_column(&live), Some(1));
+        assert!(!row.has_anchor_at(0));
+        let live = row.anchor_at(1).unwrap();
+        assert_eq!(row.marks.len(), 1);
+        assert_eq!(row.anchor_column(&live), Some(1));
     }
 
     #[test]
