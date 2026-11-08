@@ -811,6 +811,7 @@ mod tests {
                 Bs, Cr, Ctc(CtcOp::Set), Ctc(CtcOp::ClearCurrentColumn),
                 Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decst8c, Decstr,
                 Ed(EdScope::Below), Ed(EdScope::Above), Ed(EdScope::All),
+                Ed(EdScope::ScrollAll),
                 Ed(EdScope::SavedLines), El(ElScope::ToRight), El(ElScope::ToLeft),
                 El(ElScope::All), Ht, Hts, Lf, Nel, Ri, Ris, Scorc, Scosc, Si, So,
                 Tbc(TbcScope::CurrentColumn), Tbc(TbcScope::All),
@@ -2401,27 +2402,51 @@ mod tests {
     }
 
     #[test]
-    fn alternate_screen_ed2_erases_without_archiving() {
-        let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
-        let mut transcript = Transcript::new();
-        terminal.feed_with("history\r\none\r\ntwo\x1b[?1049halt", &mut transcript);
-        let cursor = terminal.cursor();
-        let anchor = terminal.anchor_at_cursor();
-        assert!(terminal.feed_with("\x1b[2J", &mut transcript).is_empty());
-        assert_eq!(terminal.cursor(), cursor);
-        assert!(terminal.resolve(&anchor).is_none());
+    fn alternate_full_ed_erases_without_archiving() {
+        use crate::ansi::{DecMode, DecModes, Function::*};
 
-        assert!(
-            terminal
-                .screen()
-                .visible_lines()
-                .all(|line| line.is_blank())
-        );
+        for clear in [Ed(EdScope::All), Ed(EdScope::ScrollAll)] {
+            let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
+            let mut transcript = Transcript::new();
 
-        assert_eq!(terminal.screen().all_lines().count(), 2);
-        assert_eq!(terminal.primary_screen().text(), ["history", "one", "two"]);
-        terminal.feed_with("\x1b[?1049l", &mut transcript);
-        assert_eq!(transcript.finish(&terminal), ["history", "one", "two"]);
+            terminal.execute_with(
+                [
+                    Print("history".into()),
+                    Cr,
+                    Lf,
+                    Print("one".into()),
+                    Cr,
+                    Lf,
+                    Print("two".into()),
+                    Decset(DecModes::one(DecMode::SaveCursorAltScreenBuffer)),
+                    Print("alt".into()),
+                ],
+                &mut transcript,
+            );
+
+            let cursor = terminal.cursor();
+            let anchor = terminal.anchor_at_cursor();
+            assert!(terminal.execute_with(clear, &mut transcript).is_empty());
+            assert_eq!(terminal.cursor(), cursor);
+            assert!(terminal.resolve(&anchor).is_none());
+
+            assert!(
+                terminal
+                    .screen()
+                    .visible_lines()
+                    .all(|line| line.is_blank())
+            );
+
+            assert_eq!(terminal.screen().all_lines().count(), 2);
+            assert_eq!(terminal.primary_screen().text(), ["history", "one", "two"]);
+
+            terminal.execute_with(
+                Decrst(DecModes::one(DecMode::SaveCursorAltScreenBuffer)),
+                &mut transcript,
+            );
+
+            assert_eq!(transcript.finish(&terminal), ["history", "one", "two"]);
+        }
     }
 
     #[test]

@@ -6,7 +6,7 @@ use alloc::string::String;
 use alloc::vec::Vec;
 
 /// Plain text from primary-buffer eviction and final retained content.
-/// ED2-cleared content follows the normal history path, including editable prompts.
+/// ED2/ED22-cleared content follows the normal history path, including editable prompts.
 /// Hard reset (RIS) finishes retained primary text before clearing the terminal.
 #[derive(Default)]
 pub struct Transcript {
@@ -266,28 +266,30 @@ mod tests {
     }
 
     #[test]
-    fn repeated_ed2_preserves_transcript_order_across_retention_limits() {
-        for limit in [Some(0), Some(1), Some(2), Some(10), None] {
-            for prompt in ["$ ", PROMPT] {
-                let input = format!(
-                    "aa\r\nbb\r\ncc\r\n{prompt}wrong\x1b[H\x1b[2J\x1b[2J{prompt}right\x1b[H\x1b[2J{prompt}done"
-                );
+    fn repeated_full_ed_preserves_transcript_order() {
+        for clear in ["\x1b[2J", "\x1b[22J"] {
+            for limit in [Some(0), Some(1), Some(2), Some(10), None] {
+                for prompt in ["$ ", PROMPT] {
+                    let input = format!(
+                        "aa\r\nbb\r\ncc\r\n{prompt}wrong\x1b[H{clear}{clear}{prompt}right\x1b[H{clear}{prompt}done"
+                    );
 
-                for chunked in [false, true] {
-                    let mut terminal = Terminal::with_scrollback(12, 2, limit).unwrap();
-                    let mut transcript = Transcript::new();
-                    let mut lines = Vec::new();
+                    for chunked in [false, true] {
+                        let mut terminal = Terminal::with_scrollback(12, 2, limit).unwrap();
+                        let mut transcript = Transcript::new();
+                        let mut lines = Vec::new();
 
-                    if chunked {
-                        for ch in input.chars() {
-                            lines.extend(terminal.feed_with(ch, &mut transcript));
+                        if chunked {
+                            for ch in input.chars() {
+                                lines.extend(terminal.feed_with(ch, &mut transcript));
+                            }
+                        } else {
+                            lines.extend(terminal.feed_with(&input, &mut transcript));
                         }
-                    } else {
-                        lines.extend(terminal.feed_with(&input, &mut transcript));
-                    }
 
-                    lines.extend(transcript.finish(&terminal));
-                    assert_eq!(lines, ["aa", "bb", "cc", "$ wrong", "$ right", "$ done"]);
+                        lines.extend(transcript.finish(&terminal));
+                        assert_eq!(lines, ["aa", "bb", "cc", "$ wrong", "$ right", "$ done"]);
+                    }
                 }
             }
         }
@@ -310,21 +312,30 @@ mod tests {
     }
 
     #[test]
-    fn ed2_keeps_blank_soft_wrap_terminators_even_after_prefix_eviction() {
-        for limit in [Some(0), Some(1), None] {
-            for rows in [1, 4] {
-                for text in ["abcd ", "     "] {
-                    let mut terminal = Terminal::with_scrollback(4, rows, limit).unwrap();
-                    let mut transcript = Transcript::new();
-                    let mut lines = terminal.feed_with(text, &mut transcript);
-                    lines.extend(terminal.feed_with("\x1b[H\x1b[2J\x1b[2Jnew", &mut transcript));
-                    lines.extend(transcript.finish(&terminal));
+    fn full_ed_keeps_blank_wrap_terminators_after_prefix_eviction() {
+        use crate::ansi::{EdScope, Function::*};
 
-                    assert_eq!(
-                        lines,
-                        [text.trim_end(), "new"],
-                        "{limit:?}, {rows}, {text:?}"
-                    );
+        for clear in [Ed(EdScope::All), Ed(EdScope::ScrollAll)] {
+            for limit in [Some(0), Some(1), None] {
+                for rows in [1, 4] {
+                    for text in ["abcd ", "     "] {
+                        let mut terminal = Terminal::with_scrollback(4, rows, limit).unwrap();
+                        let mut transcript = Transcript::new();
+                        let mut lines = terminal.feed_with(text, &mut transcript);
+
+                        lines.extend(terminal.execute_with(
+                            [Cup(1, 1), clear.clone(), clear.clone(), Print("new".into())],
+                            &mut transcript,
+                        ));
+
+                        lines.extend(transcript.finish(&terminal));
+
+                        assert_eq!(
+                            lines,
+                            [text.trim_end(), "new"],
+                            "{limit:?}, {rows}, {text:?}"
+                        );
+                    }
                 }
             }
         }

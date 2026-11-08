@@ -320,6 +320,9 @@ pub enum EdScope {
     Above,
     /// The entire visible display.
     All,
+    /// Move the occupied primary-screen prefix into scrollback, then erase the
+    /// entire display. On the alternate screen, erase the display.
+    ScrollAll,
     /// Retained scrollback lines.
     SavedLines,
 }
@@ -1154,6 +1157,7 @@ impl Parser {
                 1 => Some(Ed(EdScope::Above)),
                 2 => Some(Ed(EdScope::All)),
                 3 => Some(Ed(EdScope::SavedLines)),
+                22 => Some(Ed(EdScope::ScrollAll)),
                 _ => None,
             },
 
@@ -1532,6 +1536,7 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
                 Above => 1,
                 EdScope::All => 2,
                 SavedLines => 3,
+                ScrollAll => 22,
             };
 
             push_csi(seq, None, &[param.to_string()], 'J');
@@ -2779,6 +2784,8 @@ mod tests {
         assert_eq!(parse("\x1b[2J"), [Ed(EdScope::All)]);
         assert_eq!(parse("\u{9b}2J"), [Ed(EdScope::All)]);
         assert_eq!(parse("\x1b[3J"), [Ed(EdScope::SavedLines)]);
+        assert_eq!(parse("\x1b[22J"), [Ed(EdScope::ScrollAll)]);
+        assert_eq!(parse("\u{9b}22J"), [Ed(EdScope::ScrollAll)]);
         assert_eq!(parse("\x1b[K"), [El(ElScope::ToRight)]);
         assert_eq!(parse("\x1b[0K"), [El(ElScope::ToRight)]);
         assert_eq!(parse("\x1b[1K"), [El(ElScope::ToLeft)]);
@@ -3316,6 +3323,7 @@ mod tests {
             Ed(EdScope::Below),
             Ed(EdScope::Above),
             Ed(EdScope::All),
+            Ed(EdScope::ScrollAll),
             Ed(EdScope::SavedLines),
             El(ElScope::ToRight),
             El(ElScope::ToLeft),

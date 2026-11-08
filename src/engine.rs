@@ -1072,7 +1072,7 @@ impl Engine {
                 observer.dirty(0..self.cursor.row + 1);
             }
 
-            EdScope::All => {
+            EdScope::All | EdScope::ScrollAll => {
                 if self.active == ScreenKind::Primary {
                     self.primary_buffer.scroll_out(&self.pen);
                 }
@@ -2593,77 +2593,93 @@ mod tests {
     }
 
     #[test]
-    fn ed2_archives_rows_and_anchors_preserving_cursor_and_margins() {
-        let mut terminal = Terminal::with_scrollback(8, 6, None).unwrap();
-        terminal.feed("one\r\n\r\nthree\x1b[2;4r\x1b[?6h\x1b[2;5H\x1b[?25l\x1b7");
-        let cursor = terminal.cursor();
+    fn full_ed_archives_rows_and_anchors() {
+        for clear in [Ed(EdScope::All), Ed(EdScope::ScrollAll)] {
+            let mut terminal = Terminal::with_scrollback(8, 6, None).unwrap();
 
-        let occupied = terminal
-            .anchor_at(crate::Position {
-                screen: crate::ScreenKind::Primary,
-                col: 1,
-                row: 2,
-            })
-            .unwrap();
+            terminal.execute([
+                Print("one".into()),
+                Cr,
+                Lf,
+                Cr,
+                Lf,
+                Print("three".into()),
+                Decstbm(2, 4),
+                Decset(DecModes::one(DecMode::Origin)),
+                Cup(2, 5),
+                Decrst(DecModes::one(DecMode::TextCursorEnable)),
+                Decsc,
+            ]);
 
-        let blank = terminal
-            .anchor_at(crate::Position {
-                screen: crate::ScreenKind::Primary,
-                col: 0,
-                row: 5,
-            })
-            .unwrap();
+            let cursor = terminal.cursor();
 
-        let addresses: Vec<_> = terminal
-            .screen()
-            .visible_lines()
-            .take(3)
-            .map(|line| line.cells().as_ptr())
-            .collect();
+            let occupied = terminal
+                .anchor_at(crate::Position {
+                    screen: crate::ScreenKind::Primary,
+                    col: 1,
+                    row: 2,
+                })
+                .unwrap();
 
-        let mut dirty = DirtyRows::new();
-        terminal.feed_with("", &mut dirty);
+            let blank = terminal
+                .anchor_at(crate::Position {
+                    screen: crate::ScreenKind::Primary,
+                    col: 0,
+                    row: 5,
+                })
+                .unwrap();
 
-        assert_eq!(
-            terminal.feed_with("\x1b[2J", &mut dirty),
-            [0, 1, 2, 3, 4, 5]
-        );
-
-        assert_eq!(terminal.cursor(), cursor);
-        assert_eq!(terminal.primary_screen().all_lines().count(), 9);
-
-        assert_eq!(
-            terminal
-                .primary_screen()
-                .all_lines()
-                .take(3)
-                .map(|line| line.cells().as_ptr())
-                .collect::<Vec<_>>(),
-            addresses
-        );
-
-        assert_eq!(
-            terminal.screen().text(),
-            ["one", "", "three", "", "", "", "", "", ""]
-        );
-
-        assert!(
-            terminal
+            let addresses: Vec<_> = terminal
                 .screen()
                 .visible_lines()
-                .all(|line| line.is_blank())
-        );
+                .take(3)
+                .map(|line| line.cells().as_ptr())
+                .collect();
 
-        assert_eq!(terminal.resolve(&occupied).unwrap().row, -1);
-        assert!(terminal.resolve(&blank).is_none());
-        terminal.feed("\x1b[2J");
-        assert_eq!(terminal.primary_screen().all_lines().count(), 9);
-        terminal.feed("\x1b[H\x1b8");
-        assert_eq!(terminal.cursor(), cursor);
-        terminal.feed("\x1b[H");
-        assert_eq!(terminal.cursor().row, 1); // Origin mode still uses the top margin.
-        terminal.feed("\x1b[99B");
-        assert_eq!(terminal.cursor().row, 3); // The bottom margin also survives.
+            let mut dirty = DirtyRows::new();
+            terminal.execute_with(core::iter::empty::<Function<'_>>(), &mut dirty);
+
+            assert_eq!(
+                terminal.execute_with(clear.clone(), &mut dirty),
+                [0, 1, 2, 3, 4, 5]
+            );
+
+            assert_eq!(terminal.cursor(), cursor);
+            assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+
+            assert_eq!(
+                terminal
+                    .primary_screen()
+                    .all_lines()
+                    .take(3)
+                    .map(|line| line.cells().as_ptr())
+                    .collect::<Vec<_>>(),
+                addresses
+            );
+
+            assert_eq!(
+                terminal.screen().text(),
+                ["one", "", "three", "", "", "", "", "", ""]
+            );
+
+            assert!(
+                terminal
+                    .screen()
+                    .visible_lines()
+                    .all(|line| line.is_blank())
+            );
+
+            assert_eq!(terminal.resolve(&occupied).unwrap().row, -1);
+            assert!(terminal.resolve(&blank).is_none());
+            terminal.execute(clear);
+            assert_eq!(terminal.primary_screen().all_lines().count(), 9);
+            terminal.execute([Cup(1, 1), Decrc]);
+            assert_eq!(terminal.cursor(), cursor);
+            terminal.execute(Cup(1, 1));
+            assert_eq!(terminal.cursor().row, 1); // Origin mode still uses the top margin.
+            terminal.execute(Cud(99));
+            assert_eq!(terminal.cursor().row, 3); // The bottom margin also survives.
+        }
     }
 
     #[test]
@@ -2690,40 +2706,51 @@ mod tests {
     }
 
     #[test]
-    fn ed2_uses_erase_pen_and_skips_default_blank_screens() {
-        let mut terminal = Terminal::with_scrollback(6, 3, None).unwrap();
-        terminal.feed("\x1b[2J\x1b[2J\x1b[41m\x1b[2J");
-        assert_eq!(terminal.primary_screen().all_lines().count(), 3);
+    fn full_ed_uses_erase_pen_and_skips_blank_screens() {
+        for clear in [Ed(EdScope::All), Ed(EdScope::ScrollAll)] {
+            let mut terminal = Terminal::with_scrollback(6, 3, None).unwrap();
 
-        assert!(terminal.screen().visible_lines().all(|line| {
-            line.cells()
-                .iter()
-                .all(|cell| cell.pen().background() == Some(crate::Color::Indexed(1)))
-        }));
+            terminal.execute([
+                clear.clone(),
+                clear.clone(),
+                Sgr(vec![SetBackgroundColor(Color::Indexed(1))].into()),
+                clear.clone(),
+            ]);
 
-        terminal.feed("\x1b[0m\x1b[2J\x1b[2J");
-        assert_eq!(terminal.primary_screen().all_lines().count(), 6);
+            assert_eq!(terminal.primary_screen().all_lines().count(), 3);
 
-        assert!(
-            terminal
-                .screen()
-                .visible_lines()
-                .all(|line| line.is_blank())
-        );
+            assert!(terminal.screen().visible_lines().all(|line| {
+                line.cells()
+                    .iter()
+                    .all(|cell| cell.pen().background() == Some(crate::Color::Indexed(1)))
+            }));
+
+            terminal.execute([Sgr(vec![Reset].into()), clear.clone(), clear]);
+            assert_eq!(terminal.primary_screen().all_lines().count(), 6);
+
+            assert!(
+                terminal
+                    .screen()
+                    .visible_lines()
+                    .all(|line| line.is_blank())
+            );
+        }
     }
 
     #[test]
-    fn ed2_preserves_pending_wrap() {
-        let mut terminal = Terminal::with_scrollback(4, 2, None).unwrap();
-        terminal.feed("abcd");
-        let cursor = terminal.cursor();
-        assert_eq!(cursor.col, 4);
-        terminal.feed("\x1b[2J");
-        assert_eq!(terminal.cursor(), cursor);
-        terminal.feed("X");
-        assert_eq!(terminal.cursor().position(), Some((1, 1)));
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "    ");
-        assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+    fn full_ed_preserves_pending_wrap() {
+        for clear in [Ed(EdScope::All), Ed(EdScope::ScrollAll)] {
+            let mut terminal = Terminal::with_scrollback(4, 2, None).unwrap();
+            terminal.feed("abcd");
+            let cursor = terminal.cursor();
+            assert_eq!(cursor.col, 4);
+            terminal.execute(clear);
+            assert_eq!(terminal.cursor(), cursor);
+            terminal.feed("X");
+            assert_eq!(terminal.cursor().position(), Some((1, 1)));
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "    ");
+            assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+        }
     }
 
     fn buffer_text<'a, I: Iterator<Item = &'a Line> + 'a>(
