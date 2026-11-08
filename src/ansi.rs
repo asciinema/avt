@@ -761,7 +761,7 @@ impl Parser {
         let mut chars = input.chars();
 
         while let Some(ch) = chars.next() {
-            if let Some(function) = self.advance(ch) {
+            if let Some(function) = self.advance(ch, &mut chars) {
                 *input = chars.as_str();
 
                 return Some(function);
@@ -782,7 +782,11 @@ impl Parser {
     }
 
     #[inline(always)]
-    fn advance(&mut self, input: char) -> Option<Function<'static>> {
+    fn advance(
+        &mut self,
+        input: char,
+        chars: &mut core::str::Chars<'_>,
+    ) -> Option<Function<'static>> {
         use ParserState::*;
 
         // DCS framing is independent of the selected command's payload syntax.
@@ -823,7 +827,12 @@ impl Parser {
                 unreachable!("ground-state printing is handled in next_function");
             }
 
-            (CsiParam, '\u{30}'..='\u{3b}') => {
+            (CsiEntry | CsiParam, '0'..='9') => {
+                self.state = CsiParam;
+                self.csi_digits(input, chars);
+            }
+
+            (CsiParam, ':' | ';') => {
                 self.param(input);
             }
 
@@ -845,7 +854,7 @@ impl Parser {
                 return self.csi_dispatch(input);
             }
 
-            (CsiEntry, '\u{30}'..='\u{39}') | (CsiEntry, '\u{3b}') => {
+            (CsiEntry, ';') => {
                 self.state = CsiParam;
                 self.param(input);
             }
@@ -1081,6 +1090,26 @@ impl Parser {
 
     fn collect(&mut self, input: char) {
         self.intermediate = Some(input);
+    }
+
+    // The state machine handles the first digit; consume the rest without
+    // dispatching each byte. The first non-digit remains for normal parsing.
+    fn csi_digits(&mut self, first: char, chars: &mut core::str::Chars<'_>) {
+        let param = &mut self.params[self.cur_param];
+        param.add_digit(first as u8 - b'0');
+        let rest = chars.as_str();
+        let mut consumed = 0;
+
+        for byte in rest.bytes() {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+
+            param.add_digit(byte - b'0');
+            consumed += 1;
+        }
+
+        *chars = rest[consumed..].chars();
     }
 
     fn param(&mut self, input: char) {
@@ -2343,6 +2372,44 @@ mod tests {
         );
 
         assert_eq!(parser.state, ParserState::Ground);
+    }
+
+    #[test]
+    fn csi_digit_runs_match_character_feeds_and_resume() {
+        for input in [
+            "\x1b[123;456H",
+            "\u{9b}38:2::123:45:6m",
+            "\x1b[?1049;25h",
+            "\x1b[12\n34;56H",
+            "\x1b[123\x18abc",
+            "\x1b[123\x1b[45C",
+            "\x1b[123\x7f45C",
+            "\x1b[123é",
+            "\x1b[;000123;;45H",
+            "\x1b[65536;999999999999999999999999H",
+            "\x1b[12:34:56:78:90:12:34",
+            "\x1b[123;456",
+        ] {
+            let input: Vec<_> = input.chars().collect();
+            let mut scalar = Parser::new();
+            let mut expected = Vec::new();
+
+            for ch in &input {
+                expected.extend(emit(&mut scalar, core::slice::from_ref(ch)));
+            }
+
+            let expected = coalesce(expected);
+
+            for split in 0..=input.len() {
+                let mut parser = Parser::new();
+                let mut actual = emit(&mut parser, &input[..split]);
+                actual.extend(emit(&mut parser, &input[split..]));
+                assert_eq!(coalesce(actual), expected, "{input:?}, split {split}");
+                parser.assert_continuation_equivalent(&scalar);
+            }
+        }
+
+        assert_eq!(parse("\x1b[65536C"), [Cuf(0)]);
     }
 
     fn sgr_ops<const N: usize>(ops: [super::SgrOp; N]) -> SgrOps {
