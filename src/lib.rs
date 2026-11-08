@@ -530,6 +530,42 @@ mod tests {
     }
 
     #[test]
+    fn dump_preserves_title_continuation_at_every_boundary() {
+        for end in ["\x1b\\", "\u{9c}"] {
+            let title = format!("\x1bkuser@host$ echo '日'; pwd\x07\r\nignored{end}");
+
+            for split in title.char_indices().map(|(i, _)| i).chain([title.len()]) {
+                let mut original = Terminal::new(16, 3).unwrap();
+                original.feed("before");
+                let before = original.dump();
+                let mut dirty = DirtyRows::new();
+                original.feed_with("", &mut dirty);
+                assert!(original.feed_with(&title[..split], &mut dirty).is_empty());
+                let mut restored = Terminal::new(16, 3).unwrap();
+                restored.feed(original.dump());
+                assert_dump_equivalent(&original, &restored);
+                assert!(original.feed_with(&title[split..], &mut dirty).is_empty());
+                restored.feed(&title[split..]);
+                assert_eq!(original.dump(), before);
+                assert_dump_equivalent(&original, &restored);
+                original.feed("OK");
+                restored.feed("OK");
+                assert_dump_equivalent(&original, &restored);
+                assert_eq!(original.screen().text()[0], "beforeOK");
+            }
+
+            let mut terminal = Terminal::new(16, 3).unwrap();
+
+            for ch in title.chars() {
+                terminal.feed(ch);
+            }
+
+            terminal.feed("OK");
+            assert_eq!(terminal.screen().text(), ["OK", "", ""]);
+        }
+    }
+
+    #[test]
     fn cursor_position_is_none_when_hidden() {
         let mut terminal = Terminal::new(4, 2).unwrap();
         terminal.feed("ab");

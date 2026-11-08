@@ -873,6 +873,11 @@ impl Parser {
                 self.collect(input);
             }
 
+            // Legacy screen/tmux titles have the same framing as ignored strings.
+            (Escape, 'k') => {
+                self.state = SosPmApcString;
+            }
+
             (EscapeIntermediate, '\u{30}'..='\u{7e}')
             | (Escape, '\u{30}'..='\u{4f}')
             | (Escape, '\u{51}'..='\u{57}')
@@ -2455,8 +2460,8 @@ mod tests {
                 '\x1b', '\x18', '\x1a', '\u{9b}', '\u{9c}', '\u{9d}', '\u{90}', '\u{98}', '\u{9e}',
                 '\u{9f}', '[', ']', 'P', 'X', '^', '_', '?', '!', ';', ':', ' ', '#', '(', ')',
                 '@', 'A', 'B', 'C', 'D', 'H', 'J', 'K', 'L', 'M', 'P', 'S', 'T', 'W', 'X', 'Z',
-                '`', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'l', 'm', 'p', 'r', 's', 't', 'u', '0',
-                '1', '2', '3', '4', '5', '6', '7', '8', '9', '\x08', '\x09', '\x0a', '\x0d',
+                '`', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'k', 'l', 'm', 'p', 'r', 's', 't', 'u',
+                '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '\x08', '\x09', '\x0a', '\x0d',
                 '\x0e', '\x0f',
             ]),
             (0x20u8..=0x7eu8).prop_map(|b| b as char),
@@ -2498,6 +2503,7 @@ mod tests {
             Just("\x1bP:".chars().collect()),
             Just("\x1bX".chars().collect()),
             Just("\x1bXabc".chars().collect()),
+            Just("\x1bk$ echo title".chars().collect()),
             Just("\u{9b}".chars().collect()),
             Just("\u{9b}12".chars().collect()),
             Just("\u{9d}title".chars().collect()),
@@ -3116,6 +3122,25 @@ mod tests {
                     let input = format!("{start}?{params}{final_char}");
                     assert_eq!(parse(&input), core::slice::from_ref(&function));
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_titles_follow_ignored_string_framing() {
+        for (suffix, expected) in [
+            ("\x1b\\X", vec![print('X')]),
+            ("\u{9c}X", vec![print('X')]),
+            ("\x18X", vec![print('X')]),
+            ("\x1aX", vec![print('X')]),
+            ("\x1b[2;3HX", vec![Cup(2, 3), print('X')]),
+            ("\u{9b}2;3HX", vec![Cup(2, 3), print('X')]),
+            ("\u{84}X", vec![Lf, print('X')]),
+        ] {
+            for intro in ["\x1bk", "\x1b_"] {
+                let prefix = format!("{intro}$ echo '日'; pwd\x07\r\n\t\x08\x7fhidden");
+
+                assert_dump_continuation(&prefix, ParserState::SosPmApcString, suffix, &expected);
             }
         }
     }
