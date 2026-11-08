@@ -95,6 +95,8 @@ pub enum Function<'a> {
     Decsc,
     /// DEC Set Mode.
     Decset(DecModes),
+    /// DEC Set Tab at Every 8 Columns: replace all tab stops with defaults.
+    Decst8c,
     /// DEC Set Top and Bottom Margins: `(top, bottom)`, inclusive.
     /// Zero selects the first row for `top` and the last for `bottom`.
     Decstbm(u16, u16),
@@ -186,6 +188,7 @@ impl Function<'_> {
             Self::Decrst(modes) => Function::Decrst(modes),
             Self::Decsc => Function::Decsc,
             Self::Decset(modes) => Function::Decset(modes),
+            Self::Decst8c => Function::Decst8c,
             Self::Decstbm(top, bottom) => Function::Decstbm(top, bottom),
             Self::Decstr => Function::Decstr,
             Self::Dl(n) => Function::Dl(n),
@@ -1231,6 +1234,8 @@ impl Parser {
 
             (Some('!'), 'p') => Some(Decstr),
 
+            (Some('?'), 'W') if self.cur_param == 0 && ps[0].parts() == [5] => Some(Decst8c),
+
             (Some('?'), 'h') => Some(Decset(DecModes::collect(
                 ps[..=self.cur_param].iter().filter_map(dec_mode),
             ))),
@@ -1510,6 +1515,8 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
 
             push_csi(seq, Some('?'), &params, 'h');
         }
+
+        Decst8c => push_csi(seq, Some('?'), &["5".to_owned()], 'W'),
 
         Decstbm(top, bottom) => {
             push_csi(seq, None, &[top.to_string(), bottom.to_string()], 'r');
@@ -2718,6 +2725,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_decst8c_across_fragments() {
+        for input in ["\x1b[?5W", "\u{9b}?5W", "\x1b[?05W"] {
+            for (split, _) in input.char_indices() {
+                let mut parser = Parser::new();
+                feed(&mut parser, &input[..split]);
+
+                assert_eq!(parser.feed(&input[split..]).collect::<Vec<_>>(), [Decst8c]);
+            }
+        }
+    }
+
+    #[test]
+    fn parse_decst8c_rejects_unsupported_parameters() {
+        for params in ["", "0", "4", "5;0", "5;", "5:0"] {
+            assert_eq!(parse(&format!("\x1b[?{params}WX")), [print('X')]);
+        }
+    }
+
+    #[test]
     fn parse_csi_seq() {
         // Cursor movement and positioning.
         assert_eq!(parse("\x1b[A"), [Cuu(0)]);
@@ -3124,6 +3150,12 @@ mod tests {
         for (input, state, suffix, expected) in [
             ("\x1b", ParserState::Escape, "7X", vec![Decsc, print('X')]),
             (
+                "\x1b[?5",
+                ParserState::CsiParam,
+                "WX",
+                vec![Decst8c, print('X')],
+            ),
+            (
                 "\x1b(",
                 ParserState::EscapeIntermediate,
                 "0X",
@@ -3276,6 +3308,7 @@ mod tests {
                 DecMode::SaveCursor,
                 DecMode::SaveCursorAltScreenBuffer,
             ])),
+            Decst8c,
             Decstbm(2, 5),
             Decstr,
             Dl(17),

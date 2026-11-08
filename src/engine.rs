@@ -319,6 +319,8 @@ impl Engine {
 
             Decset(ref modes) => self.decset(modes, observer),
 
+            Decst8c => self.decst8c(),
+
             Decstbm(top, bottom) => self.decstbm(top, bottom),
 
             Decstr => self.decstr(),
@@ -1332,6 +1334,10 @@ impl Engine {
         }
     }
 
+    fn decst8c(&mut self) {
+        self.tabs = Tabs::new(self.cols);
+    }
+
     fn decstbm(&mut self, top: u16, bottom: u16) {
         let top = as_usize(top, 1) - 1;
         let bottom = as_usize(bottom, self.rows) - 1;
@@ -1789,7 +1795,7 @@ mod tests {
     use crate::Terminal;
     use crate::ansi::{
         AnsiMode, AnsiModes, CursorPresentation, DecMode, DecModes, EdScope, ElScope, Function,
-        SgrOp, SgrOps,
+        SgrOp, SgrOps, TbcScope,
     };
     use crate::charset::Charset;
     use crate::color::Color;
@@ -3149,6 +3155,52 @@ mod tests {
         assert_eq!(term.cursor().position(), Some((5, 0)));
         term.feed("\r\t");
         assert_eq!(term.cursor().position(), Some((19, 0)));
+    }
+
+    #[test]
+    fn decst8c_replaces_custom_stops_with_defaults() {
+        let mut term = Terminal::new(25, 2).unwrap();
+        term.execute([Tbc(TbcScope::All), Cha(6), Hts, Decst8c]);
+        assert_eq!(term.cursor().position(), Some((5, 0)));
+
+        term.execute([Cr, Ht]);
+        assert_eq!(term.cursor().position(), Some((8, 0)));
+
+        term.execute(Cht(2));
+        assert_eq!(term.cursor().position(), Some((24, 0)));
+
+        term.execute(Cbt(2));
+        assert_eq!(term.cursor().position(), Some((8, 0)));
+    }
+
+    #[test]
+    fn decst8c_uses_current_width() {
+        for (cols, expected) in [(9, vec![8]), (25, vec![8, 16, 24])] {
+            let mut term = Engine::new((20, 2), None);
+            term.tabs.set(5);
+            term.resize_with(cols, 2, &mut ());
+            term.execute_with(&Decst8c, &mut ());
+
+            assert_eq!(term.tabs, expected);
+        }
+    }
+
+    #[test]
+    fn decst8c_preserves_pending_wrap_without_repainting() {
+        let mut term = Engine::new((9, 2), None);
+        term.execute_with(&Sgr(vec![SetBoldIntensity].into()), &mut ());
+        term.execute_with(&Print("123456789".into()), &mut ());
+        let cursor = term.cursor();
+        let pen = term.pen;
+        let text = term.active_screen().text();
+        let mut effects = PrintEffects::default();
+        term.execute_with(&Decst8c, &mut effects);
+
+        assert_eq!(cursor.col, 9);
+        assert_eq!(term.cursor(), cursor);
+        assert_eq!(term.pen, pen);
+        assert_eq!(term.active_screen().text(), text);
+        assert!(effects.dirty.is_empty());
     }
 
     #[test]

@@ -809,7 +809,7 @@ mod tests {
             1 => (0..=20u16).prop_map(Rep),
             4 => prop::sample::select(vec![
                 Bs, Cr, Ctc(CtcOp::Set), Ctc(CtcOp::ClearCurrentColumn),
-                Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decstr,
+                Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decst8c, Decstr,
                 Ed(EdScope::Below), Ed(EdScope::Above), Ed(EdScope::All),
                 Ed(EdScope::SavedLines), El(ElScope::ToRight), El(ElScope::ToLeft),
                 El(ElScope::All), Ht, Hts, Lf, Nel, Ri, Ris, Scorc, Scosc, Si, So,
