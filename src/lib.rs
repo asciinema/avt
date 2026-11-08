@@ -306,11 +306,19 @@ impl Terminal {
     pub fn cursor_key_app_mode(&self) -> bool {
         self.engine.cursor_keys_app_mode()
     }
+
+    /// Whether bracketed paste mode (DEC private mode 2004) is enabled.
+    /// Disabled initially and by RIS; preserved by soft resets.
+    pub fn bracketed_paste_mode(&self) -> bool {
+        self.engine.bracketed_paste_mode()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ansi::{self, CursorPresentation, EdScope, Function, SgrOp, SgrOps};
+    use crate::ansi::{
+        self, CursorPresentation, DecMode, DecModes, EdScope, Function, SgrOp, SgrOps,
+    };
     use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use alloc::borrow::ToOwned as _;
@@ -325,6 +333,200 @@ mod tests {
 
     fn print(ch: char) -> Function<'static> {
         Function::Print(String::from(ch).into())
+    }
+
+    #[test]
+    fn bracketed_paste_tracks_settings_and_resets() {
+        use Function::*;
+
+        let mut terminal = Terminal::new(8, 3).unwrap();
+        assert!(!terminal.bracketed_paste_mode());
+
+        for (function, enabled) in [
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true),
+            (Decstr, true),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true),
+            (Ris, false),
+        ] {
+            terminal.execute(function.clone());
+            assert_eq!(terminal.bracketed_paste_mode(), enabled, "{function:?}");
+        }
+    }
+
+    #[test]
+    fn bracketed_paste_is_terminal_wide() {
+        use Function::*;
+
+        for enabled in [false, true] {
+            for screen_mode in [DecMode::AltScreenBuffer, DecMode::SaveCursorAltScreenBuffer] {
+                let mut terminal = Terminal::new(8, 3).unwrap();
+
+                if enabled {
+                    terminal.execute(Decset(DecModes::one(DecMode::BracketedPaste)));
+                }
+
+                terminal.resize(12, 4);
+                assert_eq!(terminal.bracketed_paste_mode(), enabled);
+                terminal.execute(Decset(DecModes::one(screen_mode)));
+                assert_eq!(terminal.bracketed_paste_mode(), enabled);
+                terminal.resize(6, 2);
+                assert_eq!(terminal.bracketed_paste_mode(), enabled);
+
+                // Changing the mode on the alternate screen affects the primary too.
+                terminal.execute(if enabled {
+                    Decrst(DecModes::one(DecMode::BracketedPaste))
+                } else {
+                    Decset(DecModes::one(DecMode::BracketedPaste))
+                });
+
+                terminal.execute(Decrst(DecModes::one(screen_mode)));
+                assert_eq!(terminal.bracketed_paste_mode(), !enabled);
+            }
+
+            for (save, restore) in [
+                (Decsc, Decrc),
+                (Scosc, Scorc),
+                (
+                    Decset(DecModes::one(DecMode::SaveCursor)),
+                    Decrst(DecModes::one(DecMode::SaveCursor)),
+                ),
+            ] {
+                let mut terminal = Terminal::new(8, 3).unwrap();
+
+                if enabled {
+                    terminal.execute(Decset(DecModes::one(DecMode::BracketedPaste)));
+                }
+
+                terminal.execute(save);
+
+                terminal.execute(if enabled {
+                    Decrst(DecModes::one(DecMode::BracketedPaste))
+                } else {
+                    Decset(DecModes::one(DecMode::BracketedPaste))
+                });
+
+                terminal.execute(restore);
+                assert_eq!(terminal.bracketed_paste_mode(), !enabled);
+            }
+        }
+    }
+
+    #[test]
+    fn observers_see_complete_grouped_paste_mode_changes() {
+        use Function::*;
+
+        #[derive(Default)]
+        struct Modes(Vec<(bool, ScreenKind, crate::Cursor)>);
+
+        impl Observer for Modes {
+            type Output = ();
+
+            fn before(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                let terminal = context.terminal();
+
+                self.0.push((
+                    terminal.bracketed_paste_mode(),
+                    terminal.active_screen_kind(),
+                    terminal.cursor(),
+                ));
+            }
+
+            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+                self.before(context, operation);
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) {}
+        }
+
+        let mut terminal = Terminal::new(8, 3).unwrap();
+        let cursor = terminal.cursor();
+
+        for (function, before, after) in [
+            (Decset(DecModes::one(DecMode::BracketedPaste)), false, true),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true, true),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), true, false),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false, false),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), false, true),
+            (Ris, true, false),
+        ] {
+            let mut modes = Modes::default();
+            terminal.execute_with(function, &mut modes);
+
+            assert_eq!(
+                modes.0,
+                [
+                    (before, ScreenKind::Primary, cursor),
+                    (after, ScreenKind::Primary, cursor),
+                ]
+            );
+        }
+
+        let mode_orders = [
+            [DecMode::SaveCursorAltScreenBuffer, DecMode::BracketedPaste],
+            [DecMode::BracketedPaste, DecMode::SaveCursorAltScreenBuffer],
+        ];
+
+        for set in mode_orders {
+            for reset in mode_orders {
+                let mut terminal = Terminal::new(8, 3).unwrap();
+                terminal.feed("ab");
+                let primary_cursor = terminal.cursor();
+                let mut modes = Modes::default();
+                terminal.execute_with(Decset(DecModes::collect(set)), &mut modes);
+
+                assert_eq!(
+                    modes.0,
+                    [
+                        (false, ScreenKind::Primary, primary_cursor),
+                        (true, ScreenKind::Alternate, primary_cursor),
+                    ]
+                );
+
+                terminal.execute(Cup(2, 4));
+                let alternate_cursor = terminal.cursor();
+                modes.0.clear();
+                terminal.execute_with(Decrst(DecModes::collect(reset)), &mut modes);
+
+                assert_eq!(
+                    modes.0,
+                    [
+                        (true, ScreenKind::Alternate, alternate_cursor),
+                        (false, ScreenKind::Primary, primary_cursor),
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dump_preserves_bracketed_paste_mode() {
+        use Function::*;
+
+        for alternate in [false, true] {
+            let mut original = Terminal::new(16, 3).unwrap();
+
+            original.execute([
+                Decset(DecModes::one(DecMode::BracketedPaste)),
+                Print("primary".into()),
+            ]);
+
+            if alternate {
+                original.execute([
+                    Decset(DecModes::one(DecMode::SaveCursorAltScreenBuffer)),
+                    Cup(1, 1),
+                    Print("alt".into()),
+                ]);
+            }
+
+            let mut restored = Terminal::new(16, 3).unwrap();
+            restored.feed(original.dump());
+            assert!(restored.bracketed_paste_mode());
+            assert_dump_equivalent(&original, &restored);
+        }
     }
 
     #[test]
@@ -795,6 +997,7 @@ mod tests {
                 DecMode::AltScreenBuffer,
                 DecMode::SaveCursor,
                 DecMode::SaveCursorAltScreenBuffer,
+                DecMode::BracketedPaste,
             ]),
             0..=6,
         )
@@ -1061,12 +1264,14 @@ mod tests {
             let cursor = terminal.cursor();
             let visible: Vec<_> = terminal.screen().all_lines().cloned().collect();
             let primary: Vec<_> = terminal.primary_screen().all_lines().cloned().collect();
+            let bracketed_paste = terminal.bracketed_paste_mode();
             terminal.execute(Function::Decstr);
             terminal.engine.verify();
             prop_assert_eq!(terminal.size(), (cols, rows));
             prop_assert_eq!(terminal.active_screen_kind(), active);
             prop_assert_eq!(terminal.cursor().position(), Some((cursor.col, cursor.row)));
             prop_assert!(!terminal.cursor_key_app_mode());
+            prop_assert_eq!(terminal.bracketed_paste_mode(), bracketed_paste);
             prop_assert!(terminal.screen().all_lines().eq(visible.iter()));
             prop_assert!(terminal.primary_screen().all_lines().eq(primary.iter()));
 

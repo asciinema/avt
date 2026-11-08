@@ -309,6 +309,7 @@ pub enum DecMode {
     AltScreenBuffer = 1047,           // xterm
     SaveCursor = 1048,                // xterm
     SaveCursorAltScreenBuffer = 1049, // xterm
+    BracketedPaste = 2004,            // xterm
 }
 
 /// The region selected by Erase in Display ([`Function::Ed`]).
@@ -1521,6 +1522,7 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
+                    BracketedPaste => 2004,
                 })
                 .map(|param| param.to_string())
                 .collect::<Vec<_>>();
@@ -1542,6 +1544,7 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
+                    BracketedPaste => 2004,
                 })
                 .map(|param| param.to_string())
                 .collect::<Vec<_>>();
@@ -2060,6 +2063,7 @@ fn dec_mode(param: &Param) -> Option<DecMode> {
         1047 => Some(AltScreenBuffer),
         1048 => Some(SaveCursor),
         1049 => Some(SaveCursorAltScreenBuffer),
+        2004 => Some(BracketedPaste),
         _ => None,
     }
 }
@@ -3085,6 +3089,35 @@ mod tests {
                 Reset,
             ]))]
         );
+    }
+
+    #[test]
+    fn bracketed_paste_modes_parse_and_encode() {
+        for (params, modes) in [
+            ("2004", dec_modes([DecMode::BracketedPaste])),
+            (
+                "1;2004;25",
+                dec_modes([
+                    DecMode::CursorKeys,
+                    DecMode::BracketedPaste,
+                    DecMode::TextCursorEnable,
+                ]),
+            ),
+            (
+                "2004;2004",
+                dec_modes([DecMode::BracketedPaste, DecMode::BracketedPaste]),
+            ),
+        ] {
+            for (final_char, function) in [('h', Decset(modes.clone())), ('l', Decrst(modes))] {
+                let encoded = format!("\x1b[?{params}{final_char}");
+                assert_eq!(super::encode(core::slice::from_ref(&function)), encoded);
+
+                for start in ["\x1b[", "\u{9b}"] {
+                    let input = format!("{start}?{params}{final_char}");
+                    assert_eq!(parse(&input), core::slice::from_ref(&function));
+                }
+            }
+        }
     }
 
     #[test]

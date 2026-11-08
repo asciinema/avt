@@ -42,6 +42,7 @@ pub(crate) struct Engine {
     auto_wrap_mode: bool,
     new_line_mode: bool,
     cursor_keys_mode: CursorKeysMode,
+    bracketed_paste_mode: bool,
     top_margin: usize,
     bottom_margin: usize,
     primary_saved_cursor: Option<SavedCursorState>,
@@ -201,6 +202,7 @@ impl Engine {
             auto_wrap_mode: true,
             new_line_mode: false,
             cursor_keys_mode: CursorKeysMode::Normal,
+            bracketed_paste_mode: false,
             top_margin: 0,
             bottom_margin: (rows - 1),
             primary_saved_cursor: None,
@@ -663,6 +665,10 @@ impl Engine {
         self.cursor_keys_mode == CursorKeysMode::Application
     }
 
+    pub fn bracketed_paste_mode(&self) -> bool {
+        self.bracketed_paste_mode
+    }
+
     #[cfg(test)]
     pub(crate) fn verify(&self) {
         assert!(self.cursor.row < self.rows);
@@ -719,6 +725,7 @@ impl Engine {
         assert_eq!(self.auto_wrap_mode, other.auto_wrap_mode);
         assert_eq!(self.new_line_mode, other.new_line_mode);
         assert_eq!(self.cursor_keys_mode, other.cursor_keys_mode);
+        assert_eq!(self.bracketed_paste_mode, other.bracketed_paste_mode);
         assert_eq!(self.top_margin, other.top_margin);
         assert_eq!(self.bottom_margin, other.bottom_margin);
         assert_eq!(self.primary_saved_cursor, other.primary_saved_cursor);
@@ -1396,6 +1403,10 @@ impl Engine {
                     self.save_cursor();
                     self.switch_to_alternate_buffer(observer);
                 }
+
+                BracketedPaste => {
+                    self.bracketed_paste_mode = true;
+                }
             }
         }
     }
@@ -1433,6 +1444,10 @@ impl Engine {
                 SaveCursorAltScreenBuffer => {
                     self.switch_to_primary_buffer(observer);
                     self.restore_cursor();
+                }
+
+                BracketedPaste => {
+                    self.bracketed_paste_mode = false;
                 }
             }
         }
@@ -1574,6 +1589,12 @@ impl Engine {
 
         if self.cursor_keys_mode == CursorKeysMode::Application {
             funs.push(Function::Decset(DecModes::one(DecMode::CursorKeys)));
+        }
+
+        // 14. setup bracketed paste mode
+
+        if self.bracketed_paste_mode {
+            funs.push(Function::Decset(DecModes::one(DecMode::BracketedPaste)));
         }
 
         funs
