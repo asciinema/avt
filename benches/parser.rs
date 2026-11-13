@@ -1,42 +1,40 @@
-use avt::parser::Parser;
+use avt::ansi::Parser;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
-use std::fs;
+use std::{fs, hint::black_box};
 
 pub fn criterion_benchmark(c: &mut Criterion) {
+    let mixed = sample_text("mixed.txt");
+    let cacademo = sample_text("cacademo.txt");
+    let licenses = sample_text("licenses.txt");
+    let licenses_lolcat = sample_text("licenses-lolcat.txt");
+
     c.bench_function("parser: feed mixed", |b| {
-        b.iter_batched(setup("mixed.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&mixed), run, BatchSize::SmallInput)
     });
 
     c.bench_function("parser: feed cacademo", |b| {
-        b.iter_batched(setup("cacademo.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&cacademo), run, BatchSize::SmallInput)
     });
 
     c.bench_function("parser: feed licenses", |b| {
-        b.iter_batched(setup("licenses.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&licenses), run, BatchSize::SmallInput)
     });
 
     c.bench_function("parser: feed licenses-lolcat", |b| {
-        b.iter_batched(setup("licenses-lolcat.txt"), run, BatchSize::SmallInput)
+        b.iter_batched(setup(&licenses_lolcat), run, BatchSize::SmallInput)
     });
 }
 
-fn setup(filename: &str) -> impl Fn() -> (Parser, String) + use<> {
-    let filename = filename.to_owned();
+fn setup<'a>(text: &'a str) -> impl Fn() -> (Parser, &'a str) {
+    move || (Parser::default(), text)
+}
 
-    move || {
-        let parser = Parser::default();
-        let text = sample_text(&filename);
-
-        (parser, text)
+fn run((mut parser, text): (Parser, &str)) -> Parser {
+    for function in parser.feed(text) {
+        black_box(function);
     }
-}
 
-fn run((mut parser, text): (Parser, String)) -> (Parser, String) {
-    text.chars().for_each(|ch| {
-        parser.feed(ch);
-    });
-
-    (parser, text)
+    parser
 }
 
 fn sample_text(filename: &str) -> String {

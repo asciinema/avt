@@ -54,11 +54,22 @@ impl<'a> Observation<'a> {
 /// resizes, and receive the same operation. During execution, `resized` and
 /// `dirty` report effects without exposing partially updated terminal state.
 /// Inspect the terminal in `after`, which runs before eviction.
+/// A print action can contain many characters; its hooks surround the entire
+/// run. Parser run boundaries depend on controls and input fragmentation.
+///
+/// Eviction runs after all actions and before `end`. Until then, excess history
+/// remains inspectable and anchorable; later actions can reflow it into view.
+/// Limits apply at call boundaries, not between fragments or to peak memory.
+/// Use separate calls for earlier eviction callbacks.
+///
+/// Retain callback operations with `operation.clone().into_owned()` as
+/// `Operation<'static>`. Preserve call boundaries for exact replay: eviction
+/// can affect later operations, especially resizing.
 pub trait Observer {
     type Output;
 
     fn begin(&mut self, _context: &mut Observation<'_>) {}
-    fn before(&mut self, _context: &mut Observation<'_>, _operation: &Operation) {}
+    fn before(&mut self, _context: &mut Observation<'_>, _operation: &Operation<'_>) {}
 
     /// Actual geometry changes from caller-requested resize actions. Runs
     /// before dirty notifications referring to the new dimensions. An
@@ -68,14 +79,20 @@ pub trait Observer {
 
     /// Visible rows that may need repainting. Ranges can overlap or repeat, and
     /// contents may compare equal. Cursor-only changes are not included.
+    /// Notification granularity may depend on input fragmentation.
     fn dirty(&mut self, _rows: Range<usize>) {}
 
-    fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation) {}
+    fn after(&mut self, _context: &mut Observation<'_>, _operation: &Operation<'_>) {}
 
     /// A primary line evicted by the scrollback limit, immediately after removal.
     /// Resizing can evict primary lines while the alternate screen is active.
+    /// Runs after all actions in the call; the context reflects their final state
+    /// with eviction in progress, not the action that moved this line into history.
     /// Lines awaiting eviction remain available for inspection. All observers
     /// borrow the original line; it is dropped after their callbacks return.
+    /// Only lines still exceeding the limit at call end are evicted. Destructive
+    /// operations such as RIS can discard content earlier without this callback;
+    /// inspect that content in `before` if it must be preserved.
     fn evicted(&mut self, _context: &mut Observation<'_>, _line: &Line) {}
 
     /// Runs after all evictions and returns the per-call report, which may be `()`.
@@ -105,7 +122,7 @@ impl<O: Observer + ?Sized> Observer for &mut O {
         (**self).begin(context);
     }
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         (**self).before(context, operation);
     }
 
@@ -117,7 +134,7 @@ impl<O: Observer + ?Sized> Observer for &mut O {
         (**self).dirty(rows);
     }
 
-    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         (**self).after(context, operation);
     }
 
@@ -138,7 +155,7 @@ impl<A: Observer, B: Observer> Observer for (A, B) {
         self.1.begin(context);
     }
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         self.0.before(context, operation);
         self.1.before(context, operation);
     }
@@ -153,7 +170,7 @@ impl<A: Observer, B: Observer> Observer for (A, B) {
         self.1.dirty(rows);
     }
 
-    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         self.0.after(context, operation);
         self.1.after(context, operation);
     }

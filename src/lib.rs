@@ -11,7 +11,7 @@
 //!
 //! Stateful observers should be reused across calls when collecting
 //! dirty rows, transcripts, or shell integration events. Feed boundaries
-//! do not finish parsing or logical lines.
+//! enforce scrollback retention, but do not finish parsing or logical lines.
 //!
 //! ```
 //! use avt::observer::DirtyRows;
@@ -38,6 +38,7 @@ extern crate alloc;
 extern crate std;
 
 mod anchor;
+pub mod ansi;
 mod buffer;
 mod cell;
 mod charset;
@@ -47,11 +48,11 @@ pub mod input;
 mod line;
 pub mod observer;
 pub mod operation;
-pub mod parser;
 mod pen;
 mod tabs;
 
 pub use anchor::Anchor;
+pub use ansi::Parser;
 pub use cell::Cell;
 pub use charset::Charset;
 pub use color::{Color, Rgb};
@@ -60,7 +61,6 @@ pub use input::{AsInput, Input, IntoInputs};
 pub use line::Line;
 pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
-pub use parser::Parser;
 pub use pen::Pen;
 
 use alloc::string::String;
@@ -100,6 +100,8 @@ impl Terminal {
 
     /// Creates a terminal with zero (`Some(0)`), bounded (`Some(limit)`), or
     /// unlimited (`None`) primary scrollback.
+    /// Limits are enforced at the end of each feed, execute, or resize call.
+    /// History can temporarily exceed the limit while processing a call.
     /// Returns `InvalidSize` if either dimension is zero.
     pub fn with_scrollback(
         cols: usize,
@@ -129,7 +131,9 @@ impl Terminal {
 
     /// Processes input with the supplied observer and returns its result.
     /// Fragment boundaries do not finish parsing, flush analysis, or invoke
-    /// additional begin/end hooks.
+    /// additional begin/end hooks. They can split print runs, so operation hooks
+    /// may differ with input fragmentation even when the terminal state agrees.
+    /// Eviction follows the entire input; see [`Observer`] for callback ordering.
     pub fn feed_with<I, Kind, O>(&mut self, input: I, mut observer: O) -> O::Output
     where
         I: IntoInputs<Kind>,
@@ -141,44 +145,42 @@ impl Terminal {
             self.feed_fragment(item.as_input(), &mut observer);
         }
 
+        self.evict(&mut observer);
+
         observer.end(&mut Observation::new(self))
     }
 
     fn feed_fragment<O: Observer>(&mut self, input: Input<'_>, observer: &mut O) {
-        match input {
-            Input::Text(text) => {
-                for ch in text.chars() {
-                    self.feed_char(ch, observer);
-                }
-            }
+        let mut encoded = [0; 4];
 
-            Input::Char(ch) => self.feed_char(ch, observer),
-        }
-    }
+        let mut text = match input {
+            Input::Text(text) => text,
+            Input::Char(ch) => ch.encode_utf8(&mut encoded),
+        };
 
-    fn feed_char<O: Observer>(&mut self, ch: char, observer: &mut O) {
-        if let Some(function) = self.parser.feed(ch) {
+        while let Some(function) = self.parser.next_function(&mut text) {
             self.apply(Operation::Function(function), observer);
         }
     }
 
-    /// Executes a function, operation, or flat iterable of either. Owned values
-    /// are moved into execution; use `.iter().cloned()` to execute operations
+    /// Executes a function, operation, or flat iterable of either. Actions are
+    /// moved into execution, but their print text may borrow input.
+    /// Use `.iter().cloned()` to execute operations
     /// from a borrowed collection. Pending text-parser state is preserved.
-    pub fn execute<I, Kind>(&mut self, operations: I)
+    pub fn execute<'a, I, Kind>(&mut self, operations: I)
     where
-        I: IntoOperations<Kind>,
+        I: IntoOperations<'a, Kind>,
     {
         self.execute_with(operations, ());
     }
 
     /// Executes operations with the supplied observer and returns its result,
     /// including for an empty iterable. Actions are processed incrementally.
-    /// Before requesting the next operation, any primary-buffer lines removed
-    /// to enforce the scrollback limit are passed to [`Observer::evicted`].
-    pub fn execute_with<I, Kind, O>(&mut self, operations: I, mut observer: O) -> O::Output
+    /// Eviction runs after the iterator is exhausted. See [`Observer`] for callback
+    /// ordering and call-boundary requirements for exact replay.
+    pub fn execute_with<'a, I, Kind, O>(&mut self, operations: I, mut observer: O) -> O::Output
     where
-        I: IntoOperations<Kind>,
+        I: IntoOperations<'a, Kind>,
         O: Observer,
     {
         observer.begin(&mut Observation::new(self));
@@ -186,6 +188,8 @@ impl Terminal {
         for operation in operations.into_operations() {
             self.apply(operation.into(), &mut observer);
         }
+
+        self.evict(&mut observer);
 
         observer.end(&mut Observation::new(self))
     }
@@ -197,6 +201,9 @@ impl Terminal {
     /// even if the original size is restored. Reflow to one column erases wide
     /// characters that cannot fit, preserving their style and invalidating
     /// anchors in the erased cells.
+    ///
+    /// Any size change resets scrolling margins to the full screen and preserves
+    /// origin mode. Resizing to the current dimensions does nothing.
     pub fn resize(&mut self, cols: usize, rows: usize) {
         self.resize_with(cols, rows, ());
     }
@@ -206,7 +213,7 @@ impl Terminal {
     }
 
     #[inline]
-    fn apply<O: Observer>(&mut self, mut operation: Operation, observer: &mut O) {
+    fn apply<O: Observer>(&mut self, mut operation: Operation<'_>, observer: &mut O) {
         if let Operation::Resize { cols, rows } = &mut operation {
             *cols = (*cols).max(1);
             *rows = (*rows).max(1);
@@ -223,10 +230,11 @@ impl Terminal {
         }
 
         observer.after(&mut Observation::new(self), &operation);
-        self.evict(observer);
     }
 
     fn evict<O: Observer>(&mut self, observer: &mut O) {
+        self.engine.evict_alternate();
+
         while let Some(line) = self.engine.pop_evicted() {
             observer.evicted(&mut Observation::new(self), &line);
         }
@@ -283,12 +291,13 @@ impl Terminal {
         self.engine.active_screen_kind()
     }
 
-    /// Escape-sequence initialization for a terminal of the same size, including
-    /// visible buffers, cursor state, terminal modes, and unfinished parsing.
+    /// Escape-sequence initialization for a fresh avt terminal of the same size,
+    /// including visible buffers, cursor state, modes, and unfinished parsing.
+    /// Uses DECRSPS cursor-information restoration, including pending wrap.
     /// Retained scrollback and observer/anchor state are omitted; this is not a
     /// full-state snapshot.
     pub fn dump(&self) -> String {
-        let mut dump = parser::dump(&self.engine.dump());
+        let mut dump = ansi::encode(&self.engine.dump());
         dump.push_str(&self.parser.dump());
 
         dump
@@ -301,9 +310,8 @@ impl Terminal {
 
 #[cfg(test)]
 mod tests {
-
+    use crate::ansi::{self, CursorPresentation, EdScope, Function, SgrOp, SgrOps};
     use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
-    use crate::parser::{EdScope, Function};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use alloc::borrow::ToOwned as _;
     use alloc::format;
@@ -314,6 +322,10 @@ mod tests {
 
     const PROMPT: &str = "\x1b]133;A\x07$ \x1b]133;B\x07";
     const SUBMIT: &str = "\x1b]133;C\x07";
+
+    fn print(ch: char) -> Function<'static> {
+        Function::Print(String::from(ch).into())
+    }
 
     #[test]
     fn cursor_position_is_none_when_hidden() {
@@ -335,6 +347,94 @@ mod tests {
         assert_eq!(terminal.screen().all_lines().count(), 3);
         assert_eq!(terminal.screen().line(0).unwrap().text(), "bb");
         assert!(terminal.screen().line(2).is_none());
+    }
+
+    #[test]
+    fn control_sequences_resume_printing_across_feed_boundaries() {
+        // CAN cancels CSI; OSC accepts BEL/ST; DCS/APC payload is not printed.
+        // Use an unhandled DCS final ('x') to exercise payload skipping.
+        for (input, expected, col) in [
+            ("\x7fA\x7f\x7fB\x7f", "AB  ", 2),
+            ("A\x1b[31\x18mB", "AmB ", 3),
+            ("A\x1b]2;hidden\x07B", "AB  ", 2),
+            ("A\x1b]2;hidden\x1b\\B", "AB  ", 2),
+            ("A\x1bP0xhidden\x1b\\B", "AB  ", 2),
+            ("A\x1b_hidden\x1b\\B", "AB  ", 2),
+        ] {
+            let check = |terminal: &Terminal| {
+                let lines: Vec<_> = terminal
+                    .screen()
+                    .visible_lines()
+                    .map(crate::Line::text)
+                    .collect();
+
+                assert_eq!(lines, [expected, "    "], "{input:?}");
+                assert_eq!(terminal.cursor().position(), Some((col, 0)), "{input:?}");
+
+                for line in terminal.screen().visible_lines() {
+                    assert!(!line.is_wrapped(), "{input:?}");
+
+                    for cell in line.cells() {
+                        assert!(cell.pen().is_default(), "{input:?}");
+                    }
+                }
+            };
+
+            for split in input.char_indices().map(|(i, _)| i).chain([input.len()]) {
+                let mut terminal = Terminal::new(4, 2).unwrap();
+                terminal.feed(&input[..split]);
+                terminal.feed(&input[split..]);
+                check(&terminal);
+            }
+
+            let mut terminal = Terminal::new(4, 2).unwrap();
+
+            for ch in input.chars() {
+                terminal.feed(ch);
+            }
+
+            check(&terminal);
+        }
+    }
+
+    #[test]
+    fn del_preserves_pending_wrap() {
+        for charset in ["\x1b(B", "\x1b(0"] {
+            let mut terminal = Terminal::new(2, 2).unwrap();
+            terminal.feed([charset, "AB"]);
+            terminal.feed("\x7f");
+            assert_eq!(terminal.cursor().position(), Some((2, 0)));
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "AB");
+            assert_eq!(terminal.screen().line(1).unwrap().text(), "  ");
+            assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+
+            terminal.feed("C");
+            assert_eq!(terminal.cursor().position(), Some((1, 1)));
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "AB");
+            assert_eq!(terminal.screen().line(1).unwrap().text(), "C ");
+            assert!(terminal.screen().line(0).unwrap().is_wrapped());
+        }
+    }
+
+    #[test]
+    fn del_preserves_repeated_character() {
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        terminal.feed("a\x7f\x1b[3b");
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "aaaa    ");
+        assert_eq!(terminal.cursor().position(), Some((4, 0)));
+    }
+
+    #[test]
+    fn del_does_not_insert_or_dirty_rows() {
+        for setup in ["ABCD\r\x1b[4h", "ABCD", "ABCD\x1b[?7l"] {
+            let mut terminal = Terminal::new(4, 2).unwrap();
+            let mut dirty = DirtyRows::new();
+            terminal.feed_with(setup, &mut dirty);
+            let before = terminal.dump();
+            let rows = terminal.feed_with("\x7f\x7f", &mut dirty);
+            assert!(rows.is_empty());
+            assert_eq!(terminal.dump(), before);
+        }
     }
 
     #[test]
@@ -384,7 +484,7 @@ mod tests {
                 restored.feed(original.dump());
                 assert_dump_equivalent(&original, &restored);
 
-                for (cols, rows) in [(4, 1), (2, 3), (4, 3), (1, 2), (4, 3)] {
+                for (cols, rows) in [(3, 4), (4, 1), (2, 3), (4, 3), (1, 2), (4, 3)] {
                     original.resize(cols, rows);
                     restored.resize(cols, rows);
                     original.engine.verify();
@@ -400,7 +500,7 @@ mod tests {
     }
 
     #[test]
-    fn resize_clamps_saved_cursors_in_both_buffers() {
+    fn resize_keeps_saved_cursors_valid_across_buffer_switches() {
         for alternate in [false, true] {
             let mut original = Terminal::new(8, 4).unwrap();
             original.feed("\x1b[4;8H\x1b7\x1b[?1047h\x1b[4;8H\x1b7");
@@ -436,6 +536,106 @@ mod tests {
             original.feed(input);
             restored.feed(input);
             assert_dump_equivalent(&original, &restored);
+        }
+    }
+
+    #[test]
+    fn explicit_home_save_reflows_but_absent_save_stays_default() {
+        for saved in [false, true] {
+            let mut original = Terminal::with_scrollback(4, 2, None).unwrap();
+            original.feed("aa\r\nbb\r\ncc\x1b[H");
+
+            if saved {
+                original.feed("\x1b7");
+            }
+
+            // Dumps omit history; check absence versus an explicit default save
+            // before testing history-driven relocation on the original.
+            let mut restored = Terminal::new(4, 2).unwrap();
+            restored.feed(original.dump());
+            assert_dump_equivalent(&original, &restored);
+            original.resize(4, 3);
+            original.feed("\x1b8");
+            assert_eq!(original.cursor().position(), Some((0, usize::from(saved))));
+        }
+    }
+
+    #[test]
+    fn dump_preserves_saved_wrap_after_edge_edits() {
+        for alternate in [false, true] {
+            for edit in ["", "\x1b[H\x1b[2K", "\x1b[HAB界", "\x1b[4GZ"] {
+                for inactive in [false, true] {
+                    let mut original = Terminal::new(4, 3).unwrap();
+
+                    if alternate {
+                        original.feed("\x1b[?1047h");
+                    }
+
+                    original.feed(["\x1b[31mABCD\x1b7\x1b[0m", edit, "\x1b[2;2H"]);
+
+                    if inactive {
+                        original.feed(if alternate {
+                            "\x1b[?1047l"
+                        } else {
+                            "\x1b[?1047h"
+                        });
+                    }
+
+                    let mut restored = Terminal::new(4, 3).unwrap();
+                    restored.feed(original.dump());
+                    assert_dump_equivalent(&original, &restored);
+
+                    for terminal in [&mut original, &mut restored] {
+                        if inactive {
+                            terminal.feed(if alternate {
+                                "\x1b[?1047h"
+                            } else {
+                                "\x1b[?1047l"
+                            });
+                        }
+
+                        terminal.feed("\x1b8X");
+                        assert_eq!(terminal.cursor().position(), Some((1, 1)));
+                        assert_eq!(terminal.screen().line(1).unwrap().cells()[0].char(), 'X');
+                    }
+
+                    assert_dump_equivalent(&original, &restored);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dump_restores_saved_wrap_outside_origin_margins() {
+        for saved_autowrap in [false, true] {
+            for current_autowrap in [false, true] {
+                let mut original = Terminal::new(4, 4).unwrap();
+                original.feed("\x1b[?6hABCD");
+
+                if !saved_autowrap {
+                    original.feed("\x1b[?7l");
+                }
+
+                original.feed("\x1b7\x1b[2;4r\x1b8");
+                original.feed(if current_autowrap {
+                    "\x1b[?7h"
+                } else {
+                    "\x1b[?7l"
+                });
+                assert_eq!(original.cursor().position(), Some((4, 0)));
+                let mut restored = Terminal::new(4, 4).unwrap();
+                restored.feed(original.dump());
+                assert_dump_equivalent(&original, &restored);
+
+                for terminal in [&mut original, &mut restored] {
+                    terminal.feed("\x1b[?7hX");
+                    assert_eq!(terminal.cursor().position(), Some((1, 1)));
+                    assert_eq!(terminal.screen().line(0).unwrap().text(), "ABCD");
+                    assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+                }
+
+                assert_dump_equivalent(&original, &restored);
+            }
         }
     }
 
@@ -524,6 +724,80 @@ mod tests {
     }
 
     #[test]
+    fn dump_preserves_saved_wrap_with_autowrap_disabled() {
+        let mut original = Terminal::new(4, 2).unwrap();
+        original.feed("ABCD\x1b[?7l\x1b7\x1b[?7h\x1b[H");
+        let mut restored = Terminal::new(4, 2).unwrap();
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+
+        for terminal in [&mut original, &mut restored] {
+            terminal.feed("\x1b8");
+            assert_eq!(terminal.cursor().position(), Some((4, 0)));
+            terminal.feed("X");
+            assert_eq!(terminal.screen().line(0).unwrap().text(), "ABCX");
+        }
+
+        assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
+    fn dump_preserves_origin_after_width_reflow() {
+        let mut original = Terminal::new(1, 7).unwrap();
+        original.feed("\x1b[2;0r界\x08\x1b[?6h");
+        // Reflow moves the cursor above the former top margin.
+        original.resize(2, 7);
+        assert_eq!(original.cursor().position(), Some((1, 0)));
+        let mut restored = Terminal::new(2, 7).unwrap();
+        restored.feed(original.dump());
+        assert_dump_equivalent(&original, &restored);
+    }
+
+    #[test]
+    fn dump_preserves_origin_after_buffer_switch_above_margin() {
+        for content in ["", "A", "0123456789"] {
+            let mut original = Terminal::new(10, 5).unwrap();
+            original.feed("\x1b[?6;1048h\x1b[?1047h\x1b[2;3r \x1b[?1049l\x1b[?1047h");
+            assert_eq!(original.cursor().position(), Some((0, 0)));
+            original.feed(content);
+            let mut restored = Terminal::new(10, 5).unwrap();
+            restored.feed(original.dump());
+            assert_dump_equivalent(&original, &restored);
+
+            for tail in ["X", "\x1b8q", "\x1b[?1047l\x1b8q", "\x1b[?1047h\x1b8q"] {
+                original.feed(tail);
+                restored.feed(tail);
+                assert_dump_equivalent(&original, &restored);
+            }
+        }
+    }
+
+    #[test]
+    fn dump_resumes_cursor_reports_at_every_boundary() {
+        let setup = "AB界\x1b7\x1b[?1047h\x1b[Halt\x1b7\x1b[2;3r";
+
+        for report in [
+            "\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB\x1b\\",
+            "\u{90}1$t1;4;1;@;@;I;0;2;@;BBBB\u{9c}",
+            "\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB\x1b[31m",
+        ] {
+            for split in report.char_indices().map(|(i, _)| i).chain([report.len()]) {
+                let mut original = Terminal::new(4, 4).unwrap();
+                original.feed([setup, &report[..split]]);
+                let mut restored = Terminal::new(4, 4).unwrap();
+                restored.feed(original.dump());
+                assert_dump_equivalent(&original, &restored);
+
+                for tail in [&report[split..], "q", "\x1b8Z", "\x1b[?1047l\x1b8W"] {
+                    original.feed(tail);
+                    restored.feed(tail);
+                    assert_dump_equivalent(&original, &restored);
+                }
+            }
+        }
+    }
+
+    #[test]
     fn dump_modified() {
         let mut original = Terminal::new(10, 4).unwrap();
         let mut restored = Terminal::new(10, 4).unwrap();
@@ -538,198 +812,307 @@ mod tests {
         assert_dump_equivalent(&original, &restored);
     }
 
-    // Keep the original generators so the historical regression seeds are replayed.
-    fn gen_input(max_len: usize) -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(
-            prop_oneof![gen_ctl_seq(), gen_esc_seq(), gen_csi_seq(), gen_text()],
-            1..=max_len,
+    pub(crate) fn gen_functions(max_len: usize) -> impl Strategy<Value = Vec<Function<'static>>> {
+        prop::collection::vec(gen_function(), 0..=max_len)
+    }
+
+    fn gen_size() -> impl Strategy<Value = (usize, usize)> {
+        (1..20usize, 1..8usize)
+    }
+
+    fn gen_param() -> impl Strategy<Value = u16> {
+        prop_oneof![9 => 0..=20u16, 1 => any::<u16>()]
+    }
+
+    fn gen_function() -> impl Strategy<Value = Function<'static>> {
+        use Function::*;
+        use ansi::{
+            AnsiMode, AnsiModes, CtcOp, DecMode, DecModes, ElScope, OscOp, ShellMarker, TbcScope,
+            XtwinopsOp,
+        };
+
+        let counted = (
+            prop::sample::select(vec![
+                Cbt as fn(u16) -> Function<'static>,
+                Cha,
+                Cht,
+                Cnl,
+                Cpl,
+                Cub,
+                Cud,
+                Cuf,
+                Cuu,
+                Dch,
+                Dl,
+                Ech,
+                Ich,
+                Il,
+                Sd,
+                Su,
+                Vpa,
+                Vpr,
+            ]),
+            gen_param(),
         )
-        .prop_map(flatten)
-    }
+            .prop_map(|(function, count)| function(count));
 
-    fn gen_ctl_seq() -> impl Strategy<Value = Vec<char>> {
-        let ctl_chars = vec![0x00..0x18, 0x19..0x1a, 0x1c..0x20];
-
-        prop::sample::select(flatten(ctl_chars)).prop_map(|v: u8| vec![v as char])
-    }
-
-    fn gen_esc_seq() -> impl Strategy<Value = Vec<char>> {
-        (
-            prop::collection::vec(gen_esc_intermediate(), 0..=2),
-            gen_esc_finalizer(),
+        let ansi_modes = prop::collection::vec(
+            prop::sample::select(vec![AnsiMode::Insert, AnsiMode::NewLine]),
+            0..=6,
         )
-            .prop_map(|(inters, fin)| flatten(vec![vec!['\x1b'], inters, vec![fin]]))
-    }
+        .prop_map(AnsiModes::from);
 
-    fn gen_csi_seq() -> impl Strategy<Value = Vec<char>> {
+        let dec_modes = prop::collection::vec(
+            prop::sample::select(vec![
+                DecMode::CursorKeys,
+                DecMode::Origin,
+                DecMode::AutoWrap,
+                DecMode::TextCursorEnable,
+                DecMode::AltScreenBuffer,
+                DecMode::SaveCursor,
+                DecMode::SaveCursorAltScreenBuffer,
+            ]),
+            0..=6,
+        )
+        .prop_map(DecModes::from);
+
+        // Favor printing so independently selected edits and modes encounter
+        // populated rows. REP stays bounded because it performs every repeat.
         prop_oneof![
-            gen_csi_sgr_seq(),
-            gen_csi_sm_seq(),
-            gen_csi_rm_seq(),
-            gen_csi_any_seq(),
+            20 => prop::collection::vec(gen_char(), 1..=16)
+                .prop_map(|chars| Print(chars.into_iter().collect::<String>().into())),
+            10 => counted,
+            1 => (0..=20u16).prop_map(Rep),
+            4 => prop::sample::select(vec![
+                Bs, Cr, Ctc(CtcOp::Set), Ctc(CtcOp::ClearCurrentColumn),
+                Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decstr,
+                Ed(EdScope::Below), Ed(EdScope::Above), Ed(EdScope::All),
+                Ed(EdScope::SavedLines), El(ElScope::ToRight), El(ElScope::ToLeft),
+                El(ElScope::All), Ht, Hts, Lf, Nel, Ri, Ris, Scorc, Scosc, Si, So,
+                Tbc(TbcScope::CurrentColumn), Tbc(TbcScope::All),
+            ]),
+            2 => (gen_param(), gen_param()).prop_map(|(row, col)| Cup(row, col)),
+            2 => gen_cursor_presentation().prop_map(Decrsps),
+            1 => (gen_param(), gen_param()).prop_map(|(top, bottom)| Decstbm(top, bottom)),
+            2 => (any::<bool>(), ansi_modes).prop_map(|(set, modes)| {
+                if set { Sm(modes) } else { Rm(modes) }
+            }),
+            2 => (any::<bool>(), dec_modes).prop_map(|(set, modes)| {
+                if set { Decset(modes) } else { Decrst(modes) }
+            }),
+            2 => prop::collection::vec(gen_sgr_op(), 0..=6)
+                .prop_map(|ops| Sgr(SgrOps::from(ops))),
+            1 => (
+                any::<bool>(),
+                prop::sample::select(vec![crate::Charset::Ascii, crate::Charset::Drawing]),
+            ).prop_map(|(g1, charset)| {
+                if g1 { G1d4(charset) } else { Gzd4(charset) }
+            }),
+            1 => prop_oneof![
+                prop::sample::select(vec![
+                    ShellMarker::PromptStart,
+                    ShellMarker::CommandStart,
+                    ShellMarker::CommandExecuted,
+                ]),
+                prop::option::of(any::<u8>()).prop_map(|exit_status| {
+                    ShellMarker::CommandFinished { exit_status }
+                }),
+            ].prop_map(|kind| Function::Osc(OscOp::ShellIntegration(kind))),
+            1 => (gen_param(), gen_param())
+                .prop_map(|(cols, rows)| Xtwinops(XtwinopsOp::Resize(cols, rows))),
         ]
     }
 
-    fn gen_text() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(gen_char(), 1..10)
-    }
-
-    fn gen_esc_intermediate() -> impl Strategy<Value = char> {
-        (0x20..0x30u8).prop_map(|v| v as char)
-    }
-
-    fn gen_esc_finalizer() -> impl Strategy<Value = char> {
-        let finalizers = vec![
-            0x30..0x50,
-            0x51..0x58,
-            0x59..0x5a,
-            0x5a..0x5b,
-            0x5c..0x5d,
-            0x60..0x7f,
-        ];
-
-        prop::sample::select(flatten(finalizers)).prop_map(|v: u8| v as char)
-    }
-
-    fn gen_csi_sgr_seq() -> impl Strategy<Value = Vec<char>> {
-        gen_csi_params().prop_map(|params| flatten(vec![vec!['\x1b', '['], params, vec!['m']]))
-    }
-
-    fn gen_csi_sm_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_csi_intermediate(), gen_csi_sm_rm_param()).prop_map(|(inters, params)| {
-            flatten(vec![vec!['\x1b', '['], inters, params, vec!['h']])
-        })
-    }
-
-    fn gen_csi_rm_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_csi_intermediate(), gen_csi_sm_rm_param()).prop_map(|(inters, params)| {
-            flatten(vec![vec!['\x1b', '['], inters, params, vec!['l']])
-        })
-    }
-
-    fn gen_csi_any_seq() -> impl Strategy<Value = Vec<char>> {
-        (gen_csi_params(), gen_csi_finalizer())
-            .prop_map(|(params, fin)| flatten(vec![vec!['\x1b', '['], params, vec![fin]]))
-    }
-
-    fn gen_csi_intermediate() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(prop::sample::select(vec!['?', '!']), 0..=1)
-    }
-
-    fn gen_csi_params() -> impl Strategy<Value = Vec<char>> {
-        prop::collection::vec(
-            prop_oneof![
-                gen_csi_param(),
-                gen_csi_param(),
-                prop::sample::select(vec![';'])
-            ],
-            0..=5,
+    pub(crate) fn gen_cursor_presentation() -> impl Strategy<Value = CursorPresentation> {
+        (gen_param(), gen_param(), any::<bool>(), any::<bool>()).prop_map(
+            |(row, col, origin_mode, pending_wrap)| CursorPresentation {
+                row,
+                col,
+                origin_mode,
+                pending_wrap,
+            },
         )
-    }
-
-    fn gen_csi_param() -> impl Strategy<Value = char> {
-        (0x30..0x3au8).prop_map(|v| v as char)
-    }
-
-    fn gen_csi_sm_rm_param() -> impl Strategy<Value = Vec<char>> {
-        let modes = vec![1, 4, 6, 7, 20, 25, 47, 1047, 1048, 1049];
-
-        prop_oneof![
-            prop::sample::select(modes).prop_map(|n| n.to_string().chars().collect()),
-            prop::collection::vec(gen_csi_param(), 1..=4)
-        ]
-    }
-
-    fn gen_csi_finalizer() -> impl Strategy<Value = char> {
-        (0x40..0x7fu8).prop_map(|v| v as char)
     }
 
     fn gen_char() -> impl Strategy<Value = char> {
+        // Weight wide characters to exercise cell-pair edge cases.
         prop_oneof![
-            gen_ascii_char(),
-            gen_ascii_char(),
-            gen_ascii_char(),
-            gen_ascii_char(),
-            gen_ascii_char(),
-            (0x80..=0xd7ffu32).prop_map(|v| char::from_u32(v).unwrap()),
-            (0xf900..=0xffffu32).prop_map(|v| char::from_u32(v).unwrap())
+            4 => (0x20..=0x7eu8).prop_map(char::from),
+            2 => prop::sample::select(vec!['界', '日', '🦀']),
+            1 => (0xa0..=0xd7ffu32).prop_map(|v| char::from_u32(v).unwrap()),
+            1 => (0xe000..=0x10ffffu32).prop_map(|v| char::from_u32(v).unwrap()),
         ]
     }
 
-    fn gen_ascii_char() -> impl Strategy<Value = char> {
-        (0x20..=0x7fu8).prop_map(|v| v as char)
+    fn gen_sgr_op() -> impl Strategy<Value = SgrOp> {
+        use SgrOp::*;
+
+        prop_oneof![
+            prop::sample::select(vec![
+                Reset,
+                SetBoldIntensity,
+                SetFaintIntensity,
+                SetItalic,
+                SetUnderline,
+                SetBlink,
+                SetInverse,
+                SetStrikethrough,
+                ResetIntensity,
+                ResetItalic,
+                ResetUnderline,
+                ResetBlink,
+                ResetInverse,
+                ResetStrikethrough,
+                ResetForegroundColor,
+                ResetBackgroundColor,
+            ]),
+            gen_color().prop_map(SetForegroundColor),
+            gen_color().prop_map(SetBackgroundColor),
+        ]
     }
 
-    fn flatten<T, I: IntoIterator<Item = T>>(seqs: Vec<I>) -> Vec<T> {
-        seqs.into_iter().flatten().collect()
+    fn gen_color() -> impl Strategy<Value = crate::Color> {
+        prop_oneof![
+            any::<u8>().prop_map(crate::Color::Indexed),
+            (any::<u8>(), any::<u8>(), any::<u8>())
+                .prop_map(|(r, g, b)| crate::Color::rgb(r, g, b)),
+        ]
+    }
+
+    fn execute_and_verify(terminal: &mut Terminal, functions: &[Function<'_>]) {
+        for function in functions {
+            terminal.execute(function.clone());
+            terminal.engine.verify();
+        }
     }
 
     proptest! {
         #[test]
+        fn prop_save_restore_identity(
+            cols in 2..15usize,
+            chars in prop::collection::vec(prop::sample::select(vec!['a', 'b', '界']), 1..60),
+        ) {
+            let mut original = Terminal::new(cols, 128).unwrap();
+            let mut restored = Terminal::new(cols, 128).unwrap();
+            original.feed(chars.clone());
+            restored.feed(chars);
+            restored.feed("\x1b7\x1b[H\x1b8");
+            prop_assert_eq!(original.cursor(), restored.cursor());
+            original.feed("X");
+            restored.feed("X");
+            prop_assert_eq!(original.screen().text(), restored.screen().text());
+        }
+
+        #[test]
+        fn prop_resize_preserves_printing_continuity(
+            old_cols in 2..15usize,
+            cols in 1..15usize,
+            input in "[a-z]{1,60}",
+        ) {
+            let mut terminal = Terminal::new(old_cols, 128).unwrap();
+            terminal.feed(&input);
+            terminal.resize(cols, 256);
+            terminal.feed("X");
+            prop_assert_eq!(terminal.screen().text().join(""), format!("{input}X"));
+        }
+
+        #[test]
+        fn prop_saved_and_live_cursors_reflow_equally(
+            old_cols in 2..15usize,
+            cols in 1..15usize,
+            chars in prop::collection::vec(prop::sample::select(vec!['a', 'b', '界']), 1..60),
+        ) {
+            let mut live = Terminal::new(old_cols, 128).unwrap();
+            let mut saved = Terminal::new(old_cols, 128).unwrap();
+            live.feed(chars.clone());
+            saved.feed(chars);
+            saved.feed("\x1b7\x1b[H");
+            live.resize(cols, 256);
+            saved.resize(cols, 256);
+            saved.feed("\x1b8");
+            prop_assert_eq!(live.cursor(), saved.cursor());
+            live.feed("X");
+            saved.feed("X");
+            prop_assert_eq!(live.screen().text(), saved.screen().text());
+        }
+
+        #[test]
         fn prop_lossy_utf8_input_does_not_panic(
+            (cols, rows) in gen_size(),
             bytes in prop::collection::vec(any::<u8>(), 0..4096),
         ) {
-            let mut terminal = Terminal::new(10, 4).unwrap();
+            let mut terminal = Terminal::new(cols, rows).unwrap();
             let text = String::from_utf8_lossy(&bytes);
             terminal.feed(text.as_ref());
             terminal.engine.verify();
         }
 
         #[test]
-        fn prop_sanity_checks_across_retention_policies(input in gen_input(25)) {
+        fn prop_sanity_checks_across_retention_policies(
+            (cols, rows) in gen_size(),
+            input in gen_functions(100),
+        ) {
             for limit in [Some(0), Some(3), None] {
-                let mut terminal = Terminal::with_scrollback(10, 5, limit).unwrap();
-                terminal.feed(&input);
-                terminal.engine.verify();
-                let (_, rows) = terminal.size();
-                let retained = terminal.primary_screen().all_lines().count();
+                let mut terminal = Terminal::with_scrollback(cols, rows, limit).unwrap();
 
-                match limit {
-                    Some(limit) => assert!((rows..=rows + limit).contains(&retained)),
+                for function in &input {
+                    terminal.execute(function.clone());
+                    terminal.engine.verify();
+                    let (_, rows) = terminal.size();
+                    let retained = terminal.primary_screen().all_lines().count();
 
-                    None => assert!(retained >= rows),
-                }
+                    match limit {
+                        Some(limit) => assert!((rows..=rows + limit).contains(&retained)),
 
-                if terminal.active_screen_kind() == ScreenKind::Alternate {
-                    assert_eq!(terminal.screen().all_lines().count(), rows);
+                        None => assert!(retained >= rows),
+                    }
+
+                    if terminal.active_screen_kind() == ScreenKind::Alternate {
+                        assert_eq!(terminal.screen().all_lines().count(), rows);
+                    }
                 }
             }
         }
 
         #[test]
         fn prop_resizing(
-            new_cols in 1..15usize,
-            new_rows in 1..8usize,
-            input1 in gen_input(25),
-            input2 in gen_input(25)
+            (cols, rows) in gen_size(),
+            (new_cols, new_rows) in gen_size(),
+            input1 in gen_functions(100),
+            input2 in gen_functions(100)
         ) {
-            let mut terminal = Terminal::with_scrollback(10, 5, None).unwrap();
-            terminal.feed(input1);
+            let mut terminal = Terminal::with_scrollback(cols, rows, None).unwrap();
+            execute_and_verify(&mut terminal, &input1);
             terminal.resize(new_cols, new_rows);
-            terminal.feed(input2);
             terminal.engine.verify();
+            execute_and_verify(&mut terminal, &input2);
             assert!(terminal.primary_screen().all_lines().count() >= terminal.size().1);
         }
 
         #[test]
-        fn prop_dump(input in gen_input(25)) {
-            let mut original = Terminal::new(10, 5).unwrap();
-            let mut restored = Terminal::new(10, 5).unwrap();
-            original.feed(input);
+        fn prop_dump(
+            (cols, rows) in gen_size(),
+            input in gen_functions(100),
+        ) {
+            let mut original = Terminal::new(cols, rows).unwrap();
+            let mut restored = Terminal::new(cols, rows).unwrap();
+            execute_and_verify(&mut original, &input);
             restored.feed(original.dump());
+            restored.engine.verify();
             assert_dump_equivalent(&original, &restored);
         }
 
         #[test]
         fn prop_dump_with_resizes(
-            steps in prop::collection::vec((gen_input(8), 1..15usize, 1..8usize), 1..8)
+            (cols, rows) in gen_size(),
+            steps in prop::collection::vec((gen_functions(100), gen_size()), 1..8),
         ) {
-            let mut original = Terminal::new(10, 5).unwrap();
-            let mut restored = Terminal::new(10, 5).unwrap();
+            let mut original = Terminal::new(cols, rows).unwrap();
+            let mut restored = Terminal::new(cols, rows).unwrap();
 
-            for (input, cols, rows) in steps {
-                original.feed(&input);
-                restored.feed(&input);
+            for (input, (cols, rows)) in steps {
+                execute_and_verify(&mut original, &input);
+                execute_and_verify(&mut restored, &input);
                 original.resize(cols, rows);
                 restored.resize(cols, rows);
                 original.engine.verify();
@@ -739,6 +1122,39 @@ mod tests {
                 restored.feed(original.dump());
                 assert_dump_equivalent(&original, &restored);
             }
+        }
+
+        #[test]
+        fn prop_soft_reset_preserves_content_and_restores_modes(
+            (cols, rows) in gen_size(),
+            input in gen_functions(100),
+            limit in prop::option::of(0..32usize),
+        ) {
+            let mut terminal = Terminal::with_scrollback(cols, rows, limit).unwrap();
+            execute_and_verify(&mut terminal, &input);
+            let active = terminal.active_screen_kind();
+            let cursor = terminal.cursor();
+            let visible: Vec<_> = terminal.screen().all_lines().cloned().collect();
+            let primary: Vec<_> = terminal.primary_screen().all_lines().cloned().collect();
+            terminal.execute(Function::Decstr);
+            terminal.engine.verify();
+            prop_assert_eq!(terminal.size(), (cols, rows));
+            prop_assert_eq!(terminal.active_screen_kind(), active);
+            prop_assert_eq!(terminal.cursor().position(), Some((cursor.col, cursor.row)));
+            prop_assert!(!terminal.cursor_key_app_mode());
+            prop_assert!(terminal.screen().all_lines().eq(visible.iter()));
+            prop_assert!(terminal.primary_screen().all_lines().eq(primary.iter()));
+
+            // Absolute positioning, default rendition/charset, and pending
+            // wrap check the reset modes through their observable behavior.
+            terminal.execute(Function::Cup(1, cols as u16));
+            prop_assert_eq!(terminal.cursor().position(), Some((cols - 1, 0)));
+            terminal.execute(print('q'));
+            prop_assert_eq!(terminal.cursor().position(), Some((cols, 0)));
+            let line = terminal.screen().line(0).unwrap();
+            prop_assert_eq!(line.cells()[cols - 1].char(), 'q');
+            prop_assert!(line.cells()[cols - 1].pen().is_default());
+            terminal.engine.verify();
         }
     }
 
@@ -873,9 +1289,21 @@ mod tests {
         after: Vec<crate::Line>,
         size_before: (usize, usize),
         size_after: (usize, usize),
-        operations: Vec<Operation>,
+        operations: Vec<Operation<'static>>,
         hooks: Vec<&'static str>,
         notifications: Vec<Notification>,
+    }
+
+    impl CallReport {
+        fn dirty_rows(&self) -> std::collections::BTreeSet<usize> {
+            self.notifications
+                .iter()
+                .flat_map(|notification| match notification {
+                    Notification::Dirty(rows) => rows.clone(),
+                    _ => 0..0,
+                })
+                .collect()
+        }
     }
 
     #[derive(Default)]
@@ -884,7 +1312,7 @@ mod tests {
         number: usize,
         before: Vec<crate::Line>,
         size_before: (usize, usize),
-        operations: Vec<Operation>,
+        operations: Vec<Operation<'static>>,
         hooks: Vec<&'static str>,
         active: bool,
         in_action: bool,
@@ -920,12 +1348,12 @@ mod tests {
             self.hooks.push("begin");
         }
 
-        fn before(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+        fn before(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
             self.check_order();
             assert!(self.active);
             assert!(!self.in_action);
             self.in_action = true;
-            self.operations.push(operation.clone());
+            self.operations.push(operation.clone().into_owned());
             self.hooks.push("before");
         }
 
@@ -941,7 +1369,7 @@ mod tests {
             self.notifications.push(Notification::Dirty(rows));
         }
 
-        fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+        fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
             self.check_order();
             assert!(self.active);
             assert!(self.in_action);
@@ -996,10 +1424,36 @@ mod tests {
         {
             let mut expected = Terminal::new(16, 3).unwrap();
             let mut actual = Terminal::new(16, 3).unwrap();
-            let expected_report = expected.feed_with(text, Calls::default());
-            let report = actual.feed_with(input, Calls::default());
-            assert_eq!(report, expected_report);
+            let mut expected_report = expected.feed_with(text, Calls::default());
+            let mut report = actual.feed_with(input, Calls::default());
+            assert_eq!(report.before, expected_report.before);
+            assert_eq!(report.after, expected_report.after);
+            assert_eq!(report.size_before, expected_report.size_before);
+            assert_eq!(report.size_after, expected_report.size_after);
+
+            // Fragmentation changes print-run boundaries, not repaint coverage.
+            assert_eq!(report.dirty_rows(), expected_report.dirty_rows());
+
+            for report in [&mut report, &mut expected_report] {
+                report
+                    .notifications
+                    .retain(|notification| !matches!(notification, Notification::Dirty(_)));
+            }
+
+            assert_eq!(report.notifications, expected_report.notifications);
             assert_eq!(report.number, 1);
+
+            let hooks: Vec<_> = core::iter::once("begin")
+                .chain(report.operations.iter().flat_map(|_| ["before", "after"]))
+                .chain(["end"])
+                .collect();
+
+            assert_eq!(report.hooks, hooks);
+            actual.engine.assert_execution_equivalent(&expected.engine);
+
+            let mut replay = Terminal::new(16, 3).unwrap();
+            replay.execute(report.operations);
+            replay.engine.assert_execution_equivalent(&actual.engine);
 
             actual
                 .parser
@@ -1044,6 +1498,107 @@ mod tests {
     }
 
     #[test]
+    fn observers_surround_print_runs_at_fragment_boundaries() {
+        let mut terminal = Terminal::new(16, 2).unwrap();
+        let report = terminal.feed_with(["abc", "dé界"], Calls::default());
+
+        assert_eq!(
+            report.operations,
+            [
+                Function::Print("abc".into()).into(),
+                Function::Print("dé界".into()).into()
+            ]
+        );
+
+        assert_eq!(
+            report.hooks,
+            ["begin", "before", "after", "before", "after", "end"]
+        );
+    }
+
+    #[test]
+    fn observers_receive_print_runs_without_del() {
+        let mut terminal = Terminal::new(16, 2).unwrap();
+        let report = terminal.feed_with(["a\x7fb", "\x7f"], Calls::default());
+
+        assert_eq!(
+            report.operations,
+            [
+                Function::Print("a".into()).into(),
+                Function::Print("b".into()).into()
+            ]
+        );
+
+        assert_eq!(terminal.screen().text(), ["ab", ""]);
+        assert_eq!(terminal.cursor().position(), Some((2, 0)));
+
+        let mut replay = Terminal::new(16, 2).unwrap();
+        replay.execute(report.operations);
+        replay.engine.assert_execution_equivalent(&terminal.engine);
+    }
+
+    #[test]
+    fn long_print_runs_evict_at_call_end_and_preserve_text() {
+        struct Retention {
+            runs: usize,
+            printed: usize,
+            expected: usize,
+            evicted: usize,
+        }
+
+        impl Observer for Retention {
+            type Output = (usize, usize);
+
+            fn before(&mut self, _: &mut Observation<'_>, _: &Operation<'_>) {
+                assert_eq!(self.evicted, 0);
+            }
+
+            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+                let Operation::Function(Function::Print(text)) = operation else {
+                    panic!("expected print run");
+                };
+
+                assert!(!text.is_empty());
+                assert!(context.terminal().primary_screen().all_lines().count() > 2);
+                self.printed += text.chars().count();
+                self.runs += 1;
+            }
+
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+                assert_eq!(self.printed, self.expected);
+                self.evicted += 1;
+            }
+
+            fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
+                assert_eq!(context.terminal().primary_screen().all_lines().count(), 2);
+
+                (self.runs, self.evicted)
+            }
+        }
+
+        let text = "ab界🦀".repeat(2048);
+        let mut terminal = Terminal::new(8, 2).unwrap();
+        let mut transcript = Transcript::new();
+
+        let retention = Retention {
+            runs: 0,
+            printed: 0,
+            expected: text.chars().count(),
+            evicted: 0,
+        };
+
+        let ((runs, evicted), mut lines) = terminal.feed_with(&text, (retention, &mut transcript));
+
+        assert_eq!(runs, 1);
+        assert!(evicted > 0);
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, [text.as_str()]);
+        let mut split = Terminal::new(8, 2).unwrap();
+        split.feed(text.chars());
+        terminal.engine.assert_execution_equivalent(&split.engine);
+    }
+
+    #[test]
     fn feed_processes_owned_chunks_before_advancing_iterator() {
         use std::cell::Cell;
 
@@ -1059,7 +1614,7 @@ mod tests {
                 assert_eq!(self.produced.get(), 0);
             }
 
-            fn after(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+            fn after(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
                 assert!(matches!(operation, Operation::Function(Function::Print(_))));
                 self.printed += 1;
                 assert_eq!(self.produced.get(), self.printed);
@@ -1345,7 +1900,7 @@ mod tests {
 
     #[test]
     fn only_host_resize_changes_geometry() {
-        use crate::parser::XtwinopsOp;
+        use ansi::XtwinopsOp;
 
         let mut terminal = Terminal::new(4, 3).unwrap();
         let mut calls = Calls::default();
@@ -1373,7 +1928,7 @@ mod tests {
     fn observed_functions_and_host_resizes_form_one_replayable_stream() {
         enum Event {
             Output(&'static str),
-            Action(Operation),
+            Action(Operation<'static>),
         }
 
         let mut terminal = Terminal::new(12, 5).unwrap();
@@ -1415,7 +1970,7 @@ mod tests {
         impl Observer for Evictions {
             type Output = Vec<String>;
 
-            fn after(&mut self, context: &mut Observation<'_>, _: &Operation) {
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
                 for anchor in &self.anchors {
                     assert!(context.resolve(anchor).is_some());
                 }
@@ -1525,56 +2080,33 @@ mod tests {
         }
     }
 
-    fn input() -> impl Strategy<Value = String> {
-        prop::collection::vec(
-            prop::sample::select(vec![
-                "abc",
-                "界",
-                "\r\n",
-                "\x1b[H",
-                "\x1b[2J",
-                "\x1b[31m",
-                "\x1b[0m",
-                "\x1b7",
-                "\x1b8",
-                "\x1b[?1049h",
-                "\x1b[?1049l",
-                "\x1b[2;4r",
-                "\x1b[?25l",
-                "\x1b[?25h",
-                "\x1b[2L",
-                "\x1b[2M",
-                "\x1bc",
-                PROMPT,
-                SUBMIT,
-                "\x1b]133;D;42\x07",
-                "\x1b[3",
-            ]),
-            0..40,
-        )
-        .prop_map(|parts| parts.concat())
-    }
-
     proptest! {
         #[test]
         fn prop_observed_execution_preserves_engine_state(
-            first in input(),
-            second in input(),
-            cols in 1..20usize,
-            rows in 1..8usize
+            (initial_cols, initial_rows) in gen_size(),
+            first in gen_functions(100),
+            second in gen_functions(100),
+            (cols, rows) in gen_size(),
         ) {
-            let mut plain = Terminal::new(12, 5).unwrap();
-            let mut observed = Terminal::new(12, 5).unwrap();
+            let mut plain = Terminal::new(initial_cols, initial_rows).unwrap();
+            let mut observed = Terminal::new(initial_cols, initial_rows).unwrap();
             let mut shell = ShellTracker::new();
             let mut transcript = Transcript::new();
-            plain.feed(&first);
-            let (mut events, mut lines) = observed.feed_with(&first, (&mut shell, &mut transcript));
+            execute_and_verify(&mut plain, &first);
+
+            let (mut events, mut lines) =
+                observed.execute_with(first.iter().cloned(), (&mut shell, &mut transcript));
+
             plain.resize(cols, rows);
+            plain.engine.verify();
             let (batch, text) = observed.resize_with(cols, rows, (&mut shell, &mut transcript));
             events.extend(batch);
             lines.extend(text);
-            plain.feed(&second);
-            let (batch, text) = observed.feed_with(&second, (&mut shell, &mut transcript));
+            execute_and_verify(&mut plain, &second);
+
+            let (batch, text) =
+                observed.execute_with(second.iter().cloned(), (&mut shell, &mut transcript));
+
             events.extend(batch);
             lines.extend(text);
             lines.extend(transcript.finish(&observed));
@@ -1582,7 +2114,7 @@ mod tests {
             plain.engine.assert_execution_equivalent(&observed.engine);
             plain.parser.assert_continuation_equivalent(&observed.parser);
 
-            let mut chunked = Terminal::new(12, 5).unwrap();
+            let mut chunked = Terminal::new(initial_cols, initial_rows).unwrap();
             let mut chunked_shell = ShellTracker::new();
             let mut chunked_transcript = Transcript::new();
             let mut chunked_events = Vec::new();
@@ -1597,12 +2129,15 @@ mod tests {
                     chunked_lines.extend(text);
                 }
 
-                for ch in input.chars() {
+                // Serialized functions also exercise the feed path, including
+                // parser continuation across individual-character calls.
+                for ch in ansi::encode(input).chars() {
                     let (batch, text) =
                         chunked.feed_with(ch, (&mut chunked_shell, &mut chunked_transcript));
 
                     chunked_events.extend(batch);
                     chunked_lines.extend(text);
+                    chunked.engine.verify();
                 }
             }
 
@@ -1618,19 +2153,17 @@ mod tests {
             plain.engine.assert_execution_equivalent(&chunked.engine);
             plain.parser.assert_continuation_equivalent(&chunked.parser);
 
-            // Standalone parsing and explicit execution preserve the same state.
-            let mut parsed = Terminal::new(12, 5).unwrap();
-            let mut parser = crate::Parser::new();
-            parsed.execute(first.chars().filter_map(|ch| parser.feed(ch)));
-            parsed.resize(cols, rows);
-            parsed.execute(second.chars().filter_map(|ch| parser.feed(ch)));
-            plain.engine.assert_execution_equivalent(&parsed.engine);
-            plain.parser.assert_continuation_equivalent(&parser);
+            let mut fed = Terminal::new(initial_cols, initial_rows).unwrap();
+            fed.feed(ansi::encode(&first));
+            fed.resize(cols, rows);
+            fed.feed(ansi::encode(&second));
+            plain.engine.assert_execution_equivalent(&fed.engine);
+            plain.parser.assert_continuation_equivalent(&fed.parser);
         }
     }
 
     #[test]
-    fn eviction_before_buffer_switch_is_independent_of_feed_boundaries() {
+    fn buffer_switch_preserves_retention_across_feed_boundaries() {
         let mut batched = Terminal::new(12, 5).unwrap();
         let mut split = Terminal::new(12, 5).unwrap();
         batched.feed("\x1b[2M\x1b[?1049h");
@@ -1645,6 +2178,190 @@ mod tests {
         batched.engine.assert_execution_equivalent(&split.engine);
         batched.parser.assert_continuation_equivalent(&split.parser);
         assert_eq!(batched.cursor().position(), Some((0, 0)));
+    }
+
+    #[test]
+    fn batched_resizes_can_restore_excess_history_and_anchors() {
+        for alternate in [false, true] {
+            let mut batched = Terminal::new(4, 3).unwrap();
+            let mut separate = Terminal::new(4, 3).unwrap();
+            let anchor = batched.anchor_at_cursor();
+
+            for terminal in [&mut batched, &mut separate] {
+                terminal.feed("aa\r\nbb\r\ncc");
+
+                if alternate {
+                    terminal.feed("\x1b[?1049h");
+                }
+            }
+
+            let actions = [
+                Operation::Resize { cols: 4, rows: 1 },
+                Operation::Resize { cols: 4, rows: 3 },
+            ];
+
+            let mut transcript = Transcript::new();
+            let lines = batched.execute_with(actions.clone(), &mut transcript);
+            assert!(lines.is_empty());
+            assert_eq!(batched.primary_screen().text(), ["aa", "bb", "cc"]);
+            assert_eq!(batched.resolve(&anchor).unwrap().row, 0);
+            assert_eq!(transcript.finish(&batched), ["aa", "bb", "cc"]);
+
+            for action in actions {
+                separate.execute(action);
+            }
+
+            assert_eq!(separate.primary_screen().text(), ["cc", "", ""]);
+        }
+    }
+
+    #[test]
+    fn eviction_observes_final_reflow_and_active_screen() {
+        struct Evictions(Vec<String>);
+
+        impl Observer for Evictions {
+            type Output = Vec<String>;
+
+            fn before(&mut self, _: &mut Observation<'_>, _: &Operation<'_>) {
+                assert!(self.0.is_empty());
+            }
+
+            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+                assert_eq!(context.terminal().size(), (2, 1));
+
+                assert_eq!(
+                    context.terminal().active_screen_kind(),
+                    ScreenKind::Alternate
+                );
+
+                self.0.push(line.text());
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+                core::mem::take(&mut self.0)
+            }
+        }
+
+        let mut terminal = Terminal::new(4, 1).unwrap();
+        let anchor = terminal.anchor_at_cursor();
+        let mut parser = crate::Parser::new();
+        let switch = parser.feed("\x1b[?1049h").next().unwrap();
+
+        let actions = [
+            Function::Print("abcdefgh".into()).into(),
+            Operation::Resize { cols: 2, rows: 1 },
+            switch.into(),
+        ];
+
+        let mut transcript = Transcript::new();
+
+        let (evicted, mut lines) =
+            terminal.execute_with(actions, (Evictions(Vec::new()), &mut transcript));
+
+        assert_eq!(evicted, ["ab", "cd", "ef"]);
+        assert!(terminal.resolve(&anchor).is_none());
+        assert_eq!(terminal.primary_screen().text(), ["gh"]);
+        lines.extend(transcript.finish(&terminal));
+        assert_eq!(lines, ["abcdefgh"]);
+    }
+
+    #[test]
+    fn feed_evicts_after_all_fragments_and_cleans_inactive_alternate() {
+        struct Pending {
+            anchor: crate::Anchor,
+            evicted: usize,
+        }
+
+        impl Observer for Pending {
+            type Output = usize;
+
+            fn before(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                assert!(context.resolve(&self.anchor).is_some());
+                assert_eq!(self.evicted, 0);
+            }
+
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+                self.evicted += 1;
+            }
+
+            fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
+                assert!(context.resolve(&self.anchor).is_none());
+                assert!(!self.anchor.is_registered());
+
+                self.evicted
+            }
+        }
+
+        for alternate in [false, true] {
+            let mut terminal = Terminal::new(4, 1).unwrap();
+
+            if alternate {
+                terminal.feed("\x1b[?1049h");
+            }
+
+            let anchor = terminal.anchor_at_cursor();
+
+            let switch = if alternate {
+                "\x1b[?1049l"
+            } else {
+                "\x1b[?1049h"
+            };
+
+            let pending = Pending { anchor, evicted: 0 };
+            let evicted = terminal.feed_with(["aa\r\n", "bb\r\n", switch], pending);
+            assert_eq!(evicted, if alternate { 0 } else { 2 });
+        }
+    }
+
+    #[test]
+    fn alternate_history_is_removed_before_primary_eviction() {
+        #[derive(Default)]
+        struct Evictions {
+            alternate: Option<crate::Anchor>,
+            lines: Vec<String>,
+        }
+
+        impl Observer for Evictions {
+            type Output = Vec<String>;
+
+            fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+                if matches!(operation, Operation::Function(Function::Print(text)) if text == "alt")
+                {
+                    self.alternate = Some(context.anchor_at_cursor());
+                }
+            }
+
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                assert!(self.lines.is_empty());
+
+                if let Some(anchor) = &self.alternate {
+                    assert!(context.resolve(anchor).is_some());
+                    assert!(anchor.is_registered());
+                }
+            }
+
+            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+                let anchor = self.alternate.as_ref().unwrap();
+                assert!(context.resolve(anchor).is_none());
+                assert!(!anchor.is_registered());
+                self.lines.push(line.text());
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
+                core::mem::take(&mut self.lines)
+            }
+        }
+
+        for switch in ["", "\x1b[?1047l"] {
+            let mut terminal = Terminal::new(4, 1).unwrap();
+
+            let lines = terminal.feed_with(
+                ["one\r\ntwo\r\n", "\x1b[?1047h", "alt", "\r\n", switch],
+                Evictions::default(),
+            );
+
+            assert_eq!(lines, ["one ", "two "]);
+        }
     }
 
     #[test]
@@ -1819,9 +2536,9 @@ mod tests {
 
     #[test]
     fn all_operation_forms_share_one_execution_lifecycle() {
-        fn check<I, Kind>(actions: I, text: &str)
+        fn check<'a, I, Kind>(actions: I, text: &str)
         where
-            I: crate::IntoOperations<Kind>,
+            I: crate::IntoOperations<'a, Kind>,
         {
             let mut expected = Terminal::new(16, 3).unwrap();
             let mut actual = Terminal::new(16, 3).unwrap();
@@ -1830,9 +2547,9 @@ mod tests {
             assert_eq!(report, reference);
         }
 
-        check(Function::Print('x'), "x");
-        check(Operation::Function(Function::Print('x')), "x");
-        let functions = [Function::Print('x'), Function::Cr, Function::Lf];
+        check(print('x'), "x");
+        check(Operation::Function(print('x')), "x");
+        let functions = [print('x'), Function::Cr, Function::Lf];
         check(functions.clone(), "x\r\n");
         check(functions.to_vec(), "x\r\n");
         check(functions.iter().cloned(), "x\r\n");
@@ -1850,17 +2567,14 @@ mod tests {
 
         let mut parser = crate::Parser::new();
 
-        check(
-            "\x1b[31mhello".chars().filter_map(|ch| parser.feed(ch)),
-            "\x1b[31mhello",
-        );
+        check(parser.feed("\x1b[31mhello"), "\x1b[31mhello");
     }
 
     #[test]
     fn explicit_execution_preserves_unfinished_text_parsing() {
         let mut terminal = Terminal::new(8, 2).unwrap();
         terminal.feed("\x1b[31");
-        terminal.execute(Function::Print('x'));
+        terminal.execute(print('x'));
         terminal.feed("mY");
         let cells = terminal.screen().line(0).unwrap().cells();
         assert_eq!(cells[0].char(), 'x');
@@ -1870,38 +2584,56 @@ mod tests {
     }
 
     #[test]
-    fn execute_finishes_eviction_before_advancing_iterator() {
+    fn execute_evicts_after_exhausting_iterator() {
         // A local-only observer also verifies that observers need no Send bound.
-        struct Evictions(std::rc::Rc<std::cell::Cell<usize>>);
+        struct Evictions {
+            count: std::rc::Rc<std::cell::Cell<usize>>,
+            exhausted: std::rc::Rc<std::cell::Cell<bool>>,
+        }
 
         impl Observer for Evictions {
             type Output = usize;
 
             fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
-                self.0.set(self.0.get() + 1);
+                assert!(self.exhausted.get());
+                self.count.set(self.count.get() + 1);
             }
 
             fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
-                self.0.get()
+                self.count.get()
             }
         }
 
         let count = std::rc::Rc::new(std::cell::Cell::new(0));
+        let exhausted = std::rc::Rc::new(std::cell::Cell::new(false));
+        let mut remaining = 3;
 
-        let actions = (0..3).map(|index| {
-            assert_eq!(count.get(), index);
+        let actions = std::iter::from_fn(|| {
+            assert_eq!(count.get(), 0);
 
-            Function::Lf
+            if remaining == 0 {
+                exhausted.set(true);
+
+                return None;
+            }
+
+            remaining -= 1;
+
+            Some(Function::Lf)
         });
 
         let mut terminal = Terminal::new(4, 1).unwrap();
-        assert_eq!(terminal.execute_with(actions, Evictions(count.clone())), 3);
+
+        let evictions = Evictions {
+            count: count.clone(),
+            exhausted: exhausted.clone(),
+        };
+
+        assert_eq!(terminal.execute_with(actions, evictions), 3);
     }
 
     #[test]
     fn execution_hooks_borrow_original_sgr_parameters() {
-        use crate::parser::SgrOp;
-
         struct Parameters {
             address: *const SgrOp,
             seen: usize,
@@ -1910,7 +2642,7 @@ mod tests {
         impl Observer for Parameters {
             type Output = usize;
 
-            fn before(&mut self, _: &mut Observation<'_>, operation: &Operation) {
+            fn before(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
                 let Operation::Function(Function::Sgr(ops)) = operation else {
                     panic!("expected SGR")
                 };
@@ -1919,7 +2651,7 @@ mod tests {
                 self.seen += 1;
             }
 
-            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
                 self.before(context, operation);
             }
 
@@ -1928,7 +2660,7 @@ mod tests {
             }
         }
 
-        let ops = crate::parser::SgrOps::from(vec![SgrOp::SetBoldIntensity; 8]);
+        let ops = SgrOps::from(vec![SgrOp::SetBoldIntensity; 8]);
 
         let observer = Parameters {
             address: ops.as_slice().as_ptr(),
@@ -1939,18 +2671,145 @@ mod tests {
         assert_eq!(terminal.execute_with([Function::Sgr(ops)], observer), 2);
     }
 
+    #[test]
+    fn feed_hooks_borrow_print_text_and_record_owned_operations() {
+        use alloc::borrow::Cow;
+
+        #[derive(Default)]
+        struct BorrowedPrints(Vec<Operation<'static>>);
+
+        impl Observer for BorrowedPrints {
+            type Output = ();
+
+            fn before(&mut self, _: &mut Observation<'_>, operation: &Operation<'_>) {
+                assert!(matches!(
+                    operation,
+                    Operation::Function(Function::Print(Cow::Borrowed(_)))
+                ));
+
+                self.0.push(operation.clone().into_owned());
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) {}
+        }
+
+        let mut terminal = Terminal::new(16, 2).unwrap();
+        let mut observer = BorrowedPrints::default();
+        terminal.feed_with(String::from("hé"), &mut observer);
+        terminal.feed_with('界', &mut observer);
+        terminal.feed_with([String::from("🦀"), String::from("!")], &mut observer);
+        assert_eq!(terminal.screen().text()[0], "hé界🦀!");
+
+        for operation in &observer.0 {
+            assert!(matches!(
+                operation,
+                Operation::Function(Function::Print(Cow::Owned(_)))
+            ));
+        }
+
+        let mut replay = Terminal::new(16, 2).unwrap();
+        replay.execute(observer.0);
+        terminal.engine.assert_execution_equivalent(&replay.engine);
+    }
+
+    #[test]
+    fn insert_wrap_reports_both_rows_dirty() {
+        let mut terminal = Terminal::new(2, 2).unwrap();
+        let mut dirty = DirtyRows::new();
+        terminal.feed_with("\x1b[4h界\x1b[C", &mut dirty);
+        let rows = terminal.execute_with(print('界'), &mut dirty);
+        assert_eq!(rows, [0, 1]);
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "界");
+        assert_eq!(terminal.screen().line(1).unwrap().text(), "界");
+        terminal.engine.verify();
+    }
+
+    #[test]
+    fn print_and_repeat_report_one_range_during_the_action() {
+        use Function::{Print, Rep};
+
+        for (size, setup, function, range) in [
+            ((4, 5), "", Print("".into()), None),
+            ((4, 5), "", Print("abc".into()), Some(0..1)),
+            ((4, 5), "\x1b[2;1H", Print("abcdefghij".into()), Some(1..4)),
+            // Include the starting row even when the run wraps immediately.
+            ((4, 5), "abcd", Print("界".into()), Some(0..2)),
+            ((4, 5), "abc", Print("界".into()), Some(0..2)),
+            (
+                (4, 5),
+                "\x1b[4hxx界\x1b[1;4H",
+                Print("界ab".into()),
+                Some(0..2),
+            ),
+            (
+                (4, 5),
+                "\x1b[5;1H",
+                Print("abcdefghijklmnop".into()),
+                Some(0..5),
+            ),
+            (
+                (4, 5),
+                "\x1b[2;4r\x1b[4;1H",
+                Print("abcdefghijklmnop".into()),
+                Some(1..4),
+            ),
+            (
+                (4, 5),
+                "\x1b[2;4r\x1b[1;1H",
+                Print("abcdefghijklmnopqrst".into()),
+                Some(0..4),
+            ),
+            (
+                (4, 5),
+                "\x1b[2;4r\x1b[5;1H",
+                Print("abcdefgh".into()),
+                Some(4..5),
+            ),
+            ((1, 3), "", Print("界界界".into()), Some(0..3)),
+            ((4, 1), "", Print("abcdefgh".into()), Some(0..1)),
+            ((4, 5), "\x1b[?7labcd", Print("界xy".into()), Some(0..1)),
+            ((4, 5), "", Rep(10), None),
+            ((4, 5), "a", Rep(0), Some(0..1)),
+            ((4, 5), "a", Rep(10), Some(0..3)),
+            ((4, 5), "\x1b[2;4r\x1b[4;1H界", Rep(10), Some(1..4)),
+        ] {
+            let mut terminal = Terminal::with_scrollback(size.0, size.1, None).unwrap();
+            terminal.feed(setup);
+            // Calls asserts that every dirty callback is between before/after.
+            let report = terminal.execute_with(function.clone(), Calls::default());
+
+            assert_eq!(
+                report.notifications,
+                range
+                    .map(Notification::Dirty)
+                    .into_iter()
+                    .collect::<Vec<_>>(),
+                "size {size:?}, setup {setup:?}, function {function:?}"
+            );
+
+            let dirty = report.dirty_rows();
+
+            for (row, (before, after)) in report.before.iter().zip(&report.after).enumerate() {
+                assert!(before.cells() == after.cells() || dirty.contains(&row));
+            }
+
+            terminal.engine.verify();
+        }
+    }
+
     proptest! {
         #[test]
         fn prop_dirty_observer_is_batching_independent(
-            first in input(),
-            second in input(),
-            cols in 1..20usize,
-            rows in 1..8usize,
+            (initial_cols, initial_rows) in gen_size(),
+            first in gen_functions(100),
+            second in gen_functions(100),
+            first_size in gen_size(),
+            second_size in gen_size(),
             limit in prop::option::of(0..32usize),
         ) {
-            let mut terminal = Terminal::with_scrollback(12, 5, limit).unwrap();
+            let mut terminal = Terminal::with_scrollback(initial_cols, initial_rows, limit).unwrap();
             let mut dirty = DirtyRows::new();
-            let mut split = Terminal::with_scrollback(12, 5, limit).unwrap();
+            let mut split = Terminal::with_scrollback(initial_cols, initial_rows, limit).unwrap();
             let mut split_dirty = DirtyRows::new();
 
             prop_assert_eq!(
@@ -1958,18 +2817,26 @@ mod tests {
                 split.feed_with("", &mut split_dirty)
             );
 
-            for text in [first, second] {
-                // Compare a batched report with the union of per-character reports.
+            for (functions, (cols, rows)) in [(first, first_size), (second, second_size)] {
+                // Split print runs into characters as well as splitting actions.
                 let mut expected = std::collections::BTreeSet::new();
 
-                for ch in text.chars() {
+                for function in &functions {
                     let before: Vec<_> = split
                         .screen()
                         .visible_lines()
                         .map(|line| line.cells().to_vec())
                         .collect();
 
-                    let dirty_rows = split.feed_with(ch, &mut split_dirty);
+                    let dirty_rows = match function {
+                        Function::Print(text) => {
+                            split.execute_with(text.chars().map(print), &mut split_dirty)
+                        }
+
+                        _ => split.execute_with(function.clone(), &mut split_dirty),
+                    };
+
+                    split.engine.verify();
 
                     for (row, (before, after)) in before
                         .iter()
@@ -1978,7 +2845,7 @@ mod tests {
                     {
                         prop_assert!(
                             before == after.cells() || dirty_rows.contains(&row),
-                            "missing repaint: row {}, character {:?}", row, ch
+                            "missing repaint: row {}, function {:?}", row, function
                         );
                     }
 
@@ -1986,15 +2853,42 @@ mod tests {
                 }
 
                 prop_assert_eq!(
-                    terminal.feed_with(text, &mut dirty),
+                    terminal.execute_with(functions, &mut dirty),
                     expected.into_iter().collect::<Vec<_>>()
                 );
 
+                let before_size = split.size();
+
+                let before: Vec<_> = split
+                    .screen()
+                    .visible_lines()
+                    .map(|line| line.cells().to_vec())
+                    .collect();
+
+                let dirty_rows = split.resize_with(cols, rows, &mut split_dirty);
+
                 prop_assert_eq!(
-                    terminal.resize_with(cols, rows, &mut dirty),
-                    split.resize_with(cols, rows, &mut split_dirty)
+                    &terminal.resize_with(cols, rows, &mut dirty),
+                    &dirty_rows
                 );
 
+                for (row, line) in split.screen().visible_lines().enumerate() {
+                    prop_assert!(
+                        before.get(row).is_some_and(|cells| cells == line.cells())
+                            || dirty_rows.contains(&row),
+                        "missing repaint: row {}, resize {:?} -> {:?}",
+                        row, before_size, (cols, rows)
+                    );
+                }
+
+                prop_assert!(dirty_rows.iter().all(|&row| row < rows));
+
+                if before_size == (cols, rows) {
+                    prop_assert!(dirty_rows.is_empty());
+                }
+
+                terminal.engine.verify();
+                split.engine.verify();
                 terminal.engine.assert_execution_equivalent(&split.engine);
                 terminal.parser.assert_continuation_equivalent(&split.parser);
             }
@@ -2042,9 +2936,9 @@ mod tests {
         let sizes = terminal.execute_with(
             [
                 Function::Cup(6, 1).into(),
-                Function::Print('x').into(),
+                print('x').into(),
                 Operation::Resize { cols: 8, rows: 2 },
-                Function::Print('y').into(),
+                print('y').into(),
                 Operation::Resize { cols: 8, rows: 2 },
             ],
             Geometry::default(),
@@ -2057,7 +2951,7 @@ mod tests {
                 Operation::Resize { cols: 8, rows: 5 },
                 Operation::Resize { cols: 4, rows: 5 },
                 Function::Cup(5, 1).into(),
-                Function::Print('z').into(),
+                print('z').into(),
             ],
             Geometry::default(),
         );

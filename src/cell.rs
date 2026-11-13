@@ -127,6 +127,8 @@ impl Cell {
         self.1.width()
     }
 
+    /// The cell's style. Both cells of a wide character share the same pen,
+    /// including the zero-width tail.
     pub fn pen(&self) -> &Pen {
         &self.2
     }

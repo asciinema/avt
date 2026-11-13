@@ -36,7 +36,7 @@ Requires Rust 1.86 or later:
 
 ```toml
 [dependencies]
-avt = "0.19"
+avt = "0.20"
 ```
 
 The library is unconditionally `no_std` with `alloc`, requiring an allocator and

@@ -54,7 +54,12 @@ impl Observer for DirtyRows {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Operation, Terminal, parser::Function};
+    use crate::{Operation, Terminal, ansi::Function};
+    use alloc::string::String;
+
+    fn print(ch: char) -> Function<'static> {
+        Function::Print(String::from(ch).into())
+    }
 
     #[test]
     fn reports_are_per_call_and_owned() {
@@ -98,9 +103,9 @@ mod tests {
         let rows = terminal.execute_with(
             [
                 Function::Cup(6, 1).into(),
-                Function::Print('x').into(),
+                print('x').into(),
                 Operation::Resize { cols: 8, rows: 2 },
-                Function::Print('y').into(),
+                print('y').into(),
             ],
             &mut dirty,
         );
@@ -112,7 +117,7 @@ mod tests {
             [
                 Operation::Resize { cols: 8, rows: 5 },
                 Function::Cup(5, 1).into(),
-                Function::Print('z').into(),
+                print('z').into(),
             ],
             &mut dirty,
         );

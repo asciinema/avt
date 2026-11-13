@@ -6,10 +6,61 @@ Each section describes changes from the preceding version. If you skip versions,
 read the relevant sections oldest-first. Examples use the API of their section.
 This guide includes Git-tagged versions as well as crates.io releases.
 
-[0.19](#019) · [0.18](#018) · [0.17](#017) · [0.16](#016) ·
+[Unreleased](#unreleased) · [0.20](#020) · [0.19](#019) · [0.18](#018) ·
+[0.17](#017) · [0.16](#016) ·
 [0.15](#015) · [0.14](#014) · [0.13](#013) · [0.12](#012) ·
 [0.11](#011) · [0.10](#010) · [0.9](#09) · [0.8](#08) ·
 [0.7](#07) · [0.6](#06) · [0.5](#05) · [0.1–0.4](#0104-legacy-vt)
+
+## Unreleased
+
+- Rename `avt::parser::*` imports to `avt::ansi::*`. The root-level
+  `avt::Parser` re-export remains available.
+- Within `ansi`, rename `State` to `ParserState`, `Osc` to `OscOp`, and
+  `ShellIntegration` to `ShellMarker`. The variants `Function::Osc` and
+  `OscOp::ShellIntegration` keep their names.
+
+## 0.20
+
+Requires **Rust 1.86**, unchanged from 0.19. The library is now `no_std` with
+`alloc`, requiring an allocator and pointer-width atomics. Standard-library
+applications can continue using it normally.
+
+### Parser and operation changes
+
+- Replace `text.chars().filter_map(|ch| parser.feed(ch))` with `parser.feed(text)`.
+  Exhaust the returned iterator to consume the entire fragment.
+- `Function<'a>::Print` holds `Cow<'a, str>` instead of `char`.
+  Construct it with `Function::Print(text.into())` for `&str` or `String`.
+  Parsed runs borrow the input and stop at controls or fragment boundaries.
+  Observer `before`/`after` hooks surround whole runs.
+- `Operation<'a>` and `IntoOperations<'a, Kind>` carry the text lifetime.
+  Recording observers should store `Operation<'static>` using
+  `operation.clone().into_owned()`. Parser consumers can collect owned functions
+  with `parser.feed(text).map(Function::into_owned)`.
+- Handle the new `Function::Decrsps(CursorPresentation)` variant in exhaustive
+  matches. Dumps now use DECRSPS for cursor restoration; custom dump readers
+  must support it.
+
+### Batch retention
+
+- Scrollback eviction now runs at the end of each `feed`, `execute`, or `resize`
+  call, before `Observer::end`. Excess history remains available within the call
+  and can temporarily exceed the retention limit.
+- Preserve call boundaries for exact replay, especially when batching resizes.
+  Split calls when finer eviction granularity is needed.
+- `Observer::evicted` sees call-final state, not the state when each line entered
+  history. Prune anchor metadata in `end`.
+  RIS discards content without eviction callbacks; inspect it in `before`.
+
+### Behavior changes
+
+- DEL (`U+007F`) is ignored in the parser's Ground state instead of printed.
+- `Observer::dirty` notifications are coalesced per `Print`/`Rep` action; do not
+  assume one callback per character.
+- Any size change, including width-only resizing, resets scrolling margins to
+  the full screen while preserving origin mode.
+- DECSTR enables autowrap and resets cursor-key mode to normal.
 
 ## 0.19
 

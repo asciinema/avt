@@ -83,6 +83,36 @@ mod tests {
     }
 
     #[test]
+    fn wide_insertion_preserves_boundary_and_shifts_later_anchors() {
+        let mut terminal = Terminal::new(6, 2).unwrap();
+        terminal.feed("abcdef");
+        let boundary = at(&mut terminal, 1, 0);
+        let later = at(&mut terminal, 2, 0);
+        let clipped = at(&mut terminal, 4, 0);
+        terminal.feed("\x1b[1;2H\x1b[4h界");
+        assert_eq!(terminal.screen().line(0).unwrap().text(), "a界bcd");
+        assert_eq!(pos(&terminal, &boundary), Some((1, 0)));
+        assert_eq!(pos(&terminal, &later), Some((4, 0)));
+        assert_eq!(pos(&terminal, &clipped), None);
+        terminal.engine.verify();
+    }
+
+    #[test]
+    fn wrapped_insertion_moves_destination_anchors() {
+        let mut terminal = Terminal::new(4, 3).unwrap();
+        terminal.feed("\x1b[2;1Habcd");
+        let boundary = at(&mut terminal, 0, 1);
+        let later = at(&mut terminal, 1, 1);
+        let clipped = at(&mut terminal, 3, 1);
+        terminal.feed("\x1b[HWXYZ\x1b[4hQ");
+        assert_eq!(pos(&terminal, &boundary), Some((0, 1)));
+        assert_eq!(pos(&terminal, &later), Some((2, 1)));
+        assert_eq!(pos(&terminal, &clipped), None);
+        assert_eq!(terminal.screen().line(1).unwrap().text(), "Qabc");
+        terminal.engine.verify();
+    }
+
+    #[test]
     fn line_insertion_deletion_and_scroll_regions_move_anchors() {
         let mut terminal = Terminal::new(8, 5).unwrap();
         terminal.feed("a\r\nb\r\nc\r\nd\r\ne");
@@ -252,7 +282,7 @@ mod tests {
         impl Observer for WrapObserver {
             type Output = ();
 
-            fn after(&mut self, context: &mut Observation<'_>, _: &Operation) {
+            fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
                 let terminal = context.terminal();
                 assert_eq!(pos(terminal, &self.source), Some((0, -1)));
                 assert_eq!(pos(terminal, &self.boundary), Some((0, 0)));
@@ -348,7 +378,7 @@ mod tests {
         let mut terminal = Terminal::new(8, 3).unwrap();
         let anchor = terminal.anchor_at_cursor();
         let copy = terminal.screen().line(0).unwrap().clone();
-        assert!(copy.marks.is_empty());
+        assert!(copy.anchor_column(&anchor).is_none());
         assert!(copy == *terminal.screen().line(0).unwrap());
         let mut other = Terminal::new(8, 3).unwrap();
         other.feed(terminal.dump());
@@ -358,7 +388,7 @@ mod tests {
         assert!(terminal.resolve(&clone).is_some());
         drop(clone);
         let live = terminal.anchor_at_cursor();
-        assert_eq!(terminal.screen().line(0).unwrap().marks.len(), 1);
+        assert!(terminal.screen().line(0).unwrap().has_anchor_at(0));
         assert!(terminal.resolve(&live).is_some());
 
         assert!(

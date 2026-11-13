@@ -40,7 +40,7 @@ impl Observer for TextIndex {
     type Output = Vec<String>;
 
     // Delegate primary-line reconstruction to Transcript, including evictions.
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         self.transcript.before(context, operation);
     }
 

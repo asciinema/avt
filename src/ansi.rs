@@ -1,9 +1,16 @@
+//! ANSI-compatible terminal functions and parsing, including DEC and xterm extensions.
+//!
+//! [`Parser`] turns text and control sequences into [`Function`] values, which
+//! can also be constructed directly for [`crate::Terminal::execute`].
+
 // Based on Paul Williams' parser for ANSI-compatible video terminals:
 // https://www.vt100.net/emu/dec_ansi_parser
 
+mod dcs;
+
 use crate::charset::Charset;
 use crate::color::Color;
-use alloc::borrow::ToOwned as _;
+use alloc::borrow::{Cow, ToOwned as _};
 use alloc::format;
 use alloc::string::String;
 use alloc::string::ToString as _;
@@ -13,17 +20,21 @@ use core::fmt::Display;
 const PARAMS_LEN: usize = 32;
 const OSC_BUFFER_LIMIT: usize = 1024;
 
+/// Incremental parser for text and ANSI-compatible terminal control sequences.
+/// Incomplete sequences continue across calls to [`Parser::feed`].
 #[derive(Debug, Default)]
 pub struct Parser {
-    pub state: State,
+    pub state: ParserState,
     params: [Param; PARAMS_LEN],
     cur_param: usize,
     intermediate: Option<char>,
     osc_buffer: String,
+    dcs: dcs::Handler,
 }
 
+/// A state-machine phase of [`Parser`], excluding buffered sequence data.
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum State {
+pub enum ParserState {
     #[default]
     Ground,
     Escape,
@@ -41,68 +52,222 @@ pub enum State {
     SosPmApcString,
 }
 
+/// A terminal function. Print text may borrow the input.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Function {
+pub enum Function<'a> {
+    /// Backspace.
     Bs,
+    /// Cursor Backward Tabulation: tab-stop count.
     Cbt(u16),
+    /// Cursor Character Absolute: column.
     Cha(u16),
+    /// Cursor Forward Tabulation: tab-stop count.
     Cht(u16),
+    /// Cursor Next Line: row count; moves to the first column.
     Cnl(u16),
+    /// Cursor Preceding Line: row count; moves to the first column.
     Cpl(u16),
+    /// Carriage Return.
     Cr,
+    /// Cursor Tabulation Control.
     Ctc(CtcOp),
+    /// Cursor Backward: column count.
     Cub(u16),
+    /// Cursor Down: row count.
     Cud(u16),
+    /// Cursor Forward: column count.
     Cuf(u16),
+    /// Cursor Position: `(row, column)`.
     Cup(u16, u16),
+    /// Cursor Up: row count.
     Cuu(u16),
+    /// Delete Character: column count.
     Dch(u16),
+    /// DEC Screen Alignment Test: fill the visible screen with `E` characters.
     Decaln,
+    /// DEC Restore Cursor.
     Decrc,
+    /// DEC Restore Presentation State; see [`CursorPresentation`].
+    Decrsps(CursorPresentation),
+    /// DEC Reset Mode.
     Decrst(DecModes),
+    /// DEC Save Cursor.
     Decsc,
+    /// DEC Set Mode.
     Decset(DecModes),
+    /// DEC Set Top and Bottom Margins: `(top, bottom)`, inclusive.
+    /// Zero selects the first row for `top` and the last for `bottom`.
     Decstbm(u16, u16),
+    /// DEC Soft Terminal Reset.
     Decstr,
+    /// Delete Line: row count.
     Dl(u16),
+    /// Erase Character: column count.
     Ech(u16),
+    /// Erase in Display.
     Ed(EdScope),
+    /// Erase in Line.
     El(ElScope),
+    /// G1 Designate 94-Set: assign the character set selected by [`Function::So`].
     G1d4(Charset),
+    /// G0 Designate 94-Set: assign the character set selected by [`Function::Si`].
     Gzd4(Charset),
+    /// Horizontal Tabulation: next tab stop.
     Ht,
+    /// Horizontal Tabulation Set: current column.
     Hts,
+    /// Insert Character: blank-column count.
     Ich(u16),
+    /// Insert Line: blank-row count.
     Il(u16),
+    /// Line Feed; also moves to the first column in new-line mode.
     Lf,
+    /// Next Line: advance one row to the first column, scrolling if needed.
     Nel,
-    Osc(Osc),
-    Print(char),
+    /// Operating System Command.
+    Osc(OscOp),
+    Print(Cow<'a, str>),
+    /// Repeat: count of copies of the character preceding the cursor.
     Rep(u16),
+    /// Reverse Index: move up one row, scrolling down at the top margin.
     Ri,
+    /// Reset to Initial State (hard reset).
     Ris,
+    /// Reset Mode.
     Rm(AnsiModes),
+    /// SCO Restore Cursor.
     Scorc,
+    /// SCO Save Cursor.
     Scosc,
+    /// Scroll Down: row count within the scrolling region.
     Sd(u16),
+    /// Select Graphic Rendition.
     Sgr(SgrOps),
+    /// Shift In: select the G0 character set.
     Si,
+    /// Set Mode.
     Sm(AnsiModes),
+    /// Shift Out: select the G1 character set.
     So,
+    /// Scroll Up: row count within the scrolling region.
     Su(u16),
+    /// Tabulation Clear.
     Tbc(TbcScope),
+    /// Vertical Position Absolute: row.
     Vpa(u16),
+    /// Vertical Position Relative: row count downward.
     Vpr(u16),
+    /// Xterm Window Operations.
     Xtwinops(XtwinopsOp),
 }
 
-#[derive(Debug, PartialEq, Clone)]
-pub enum Osc {
-    ShellIntegration(ShellIntegration),
+impl Function<'_> {
+    /// Makes the function independent of its input, copying borrowed print text
+    /// and moving already-owned data without cloning it.
+    pub fn into_owned(self) -> Function<'static> {
+        match self {
+            Self::Bs => Function::Bs,
+            Self::Cbt(n) => Function::Cbt(n),
+            Self::Cha(n) => Function::Cha(n),
+            Self::Cht(n) => Function::Cht(n),
+            Self::Cnl(n) => Function::Cnl(n),
+            Self::Cpl(n) => Function::Cpl(n),
+            Self::Cr => Function::Cr,
+            Self::Ctc(op) => Function::Ctc(op),
+            Self::Cub(n) => Function::Cub(n),
+            Self::Cud(n) => Function::Cud(n),
+            Self::Cuf(n) => Function::Cuf(n),
+            Self::Cup(row, col) => Function::Cup(row, col),
+            Self::Cuu(n) => Function::Cuu(n),
+            Self::Dch(n) => Function::Dch(n),
+            Self::Decaln => Function::Decaln,
+            Self::Decrc => Function::Decrc,
+            Self::Decrsps(presentation) => Function::Decrsps(presentation),
+            Self::Decrst(modes) => Function::Decrst(modes),
+            Self::Decsc => Function::Decsc,
+            Self::Decset(modes) => Function::Decset(modes),
+            Self::Decstbm(top, bottom) => Function::Decstbm(top, bottom),
+            Self::Decstr => Function::Decstr,
+            Self::Dl(n) => Function::Dl(n),
+            Self::Ech(n) => Function::Ech(n),
+            Self::Ed(scope) => Function::Ed(scope),
+            Self::El(scope) => Function::El(scope),
+            Self::G1d4(charset) => Function::G1d4(charset),
+            Self::Gzd4(charset) => Function::Gzd4(charset),
+            Self::Ht => Function::Ht,
+            Self::Hts => Function::Hts,
+            Self::Ich(n) => Function::Ich(n),
+            Self::Il(n) => Function::Il(n),
+            Self::Lf => Function::Lf,
+            Self::Nel => Function::Nel,
+            Self::Osc(osc) => Function::Osc(osc),
+            Self::Print(text) => Function::Print(Cow::Owned(text.into_owned())),
+            Self::Rep(n) => Function::Rep(n),
+            Self::Ri => Function::Ri,
+            Self::Ris => Function::Ris,
+            Self::Rm(modes) => Function::Rm(modes),
+            Self::Scorc => Function::Scorc,
+            Self::Scosc => Function::Scosc,
+            Self::Sd(n) => Function::Sd(n),
+            Self::Sgr(ops) => Function::Sgr(ops),
+            Self::Si => Function::Si,
+            Self::Sm(modes) => Function::Sm(modes),
+            Self::So => Function::So,
+            Self::Su(n) => Function::Su(n),
+            Self::Tbc(scope) => Function::Tbc(scope),
+            Self::Vpa(n) => Function::Vpa(n),
+            Self::Vpr(n) => Function::Vpr(n),
+            Self::Xtwinops(op) => Function::Xtwinops(op),
+        }
+    }
 }
 
+/// The dump-specific cursor-information form of DECRSPS.
+///
+/// Coordinates are one-based physical screen positions, independent of origin
+/// mode and margins. Execution ignores the entire operation if either coordinate
+/// is zero or outside the screen. Pending wrap is honored only at the last column,
+/// independently of autowrap mode; it does not change cells or line-wrap markers.
+///
+/// Only `Pr;Pc;1;@;@;Sflag;0;2;@;BBBB` is accepted, with `Sflag` one of
+/// `@`, `A`, `H`, or `I`. The fixed fields restore normal intensity, no underline,
+/// blink, or inverse, and ASCII in G0/G1 with G0 selected. Colors, italic, and
+/// strikethrough are preserved, as are saved cursors, margins, cursor visibility,
+/// and other modes. Dumps restore full attributes separately through SGR and SCS.
+///
+/// Malformed or unsupported reports, including payloads exceeding 128 bytes,
+/// are ignored as a whole. A valid report is applied on ESC or C1 ST; the
+/// backslash in `ESC \` completes normal escape parsing. CAN, SUB, and other
+/// C1 controls cancel an unfinished report.
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct CursorPresentation {
+    pub row: u16,
+    pub col: u16,
+    pub origin_mode: bool,
+    pub pending_wrap: bool,
+}
+
+impl Default for CursorPresentation {
+    fn default() -> Self {
+        Self {
+            row: 1,
+            col: 1,
+            origin_mode: false,
+            pending_wrap: false,
+        }
+    }
+}
+
+/// A decoded Operating System Command (OSC) operation.
+#[derive(Debug, PartialEq, Clone)]
+pub enum OscOp {
+    ShellIntegration(ShellMarker),
+}
+
+/// An OSC 133 marker delimiting shell prompt, command-input, and output phases.
+/// [`crate::observer::ShellTracker`] interprets these markers into shell events.
 #[derive(Debug, PartialEq, Clone, Copy)]
-pub enum ShellIntegration {
+pub enum ShellMarker {
     /// A (FTCS_PROMPT): prompt rendering begins.
     PromptStart,
     /// B (FTCS_COMMAND_START): editable command input begins.
@@ -113,6 +278,7 @@ pub enum ShellIntegration {
     CommandFinished { exit_status: Option<u8> },
 }
 
+/// A standard ANSI mode selected by [`Function::Sm`] or [`Function::Rm`].
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum AnsiMode {
@@ -120,6 +286,7 @@ pub enum AnsiMode {
     NewLine = 20, // LNM
 }
 
+/// A Cursor Tabulation Control operation for horizontal tab stops.
 #[derive(Debug, Clone, PartialEq)]
 pub enum CtcOp {
     Set,
@@ -127,6 +294,8 @@ pub enum CtcOp {
     ClearAll,
 }
 
+/// A DEC-private mode, including xterm extensions, selected by
+/// [`Function::Decset`] or [`Function::Decrst`].
 #[derive(Debug, Copy, Clone, PartialEq)]
 #[repr(u16)]
 pub enum DecMode {
@@ -139,21 +308,30 @@ pub enum DecMode {
     SaveCursorAltScreenBuffer = 1049, // xterm
 }
 
+/// The region selected by Erase in Display ([`Function::Ed`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum EdScope {
+    /// From the cursor through the end of the visible display, inclusive.
     Below,
+    /// From the start of the visible display through the cursor, inclusive.
     Above,
+    /// The entire visible display.
     All,
+    /// Retained scrollback lines.
     SavedLines,
 }
 
+/// The region selected by Erase in Line ([`Function::El`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum ElScope {
+    /// From the cursor through the end of the row, inclusive.
     ToRight,
+    /// From the start of the row through the cursor, inclusive.
     ToLeft,
     All,
 }
 
+/// A decoded Select Graphic Rendition operation affecting subsequent text.
 #[derive(Debug, PartialEq, Clone, Copy)]
 pub enum SgrOp {
     Reset,                     // 0
@@ -176,21 +354,25 @@ pub enum SgrOp {
     ResetBackgroundColor,      // 49
 }
 
+/// The horizontal tab stops selected by Tabulation Clear ([`Function::Tbc`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TbcScope {
     CurrentColumn,
     All,
 }
 
+/// A decoded Xterm Window Operations request.
 #[derive(Debug, Clone, PartialEq)]
 pub enum XtwinopsOp {
+    /// Request a text-area size of `(columns, rows)` in character cells.
+    /// The tuple order differs from the wire format, which puts rows first.
+    /// [`crate::Terminal`] exposes this to observers but does not resize itself.
     Resize(u16, u16),
 }
 
-/// Number of SgrOp values that fit inline without heap allocation.
-pub const SGR_OPS_INLINE_CAP: usize = 4;
+const SGR_OPS_INLINE_CAP: usize = 4;
 
-/// Small-buffer-optimized collection of SgrOp values.
+/// An ordered collection of [`SgrOp`] values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SgrOps(SgrOpsStorage);
 
@@ -274,10 +456,9 @@ impl From<&[SgrOp]> for SgrOps {
     }
 }
 
-/// Number of mode values that fit inline without heap allocation.
-pub const MODES_INLINE_CAP: usize = 4;
+const MODES_INLINE_CAP: usize = 4;
 
-/// Small-buffer-optimized collection of mode values.
+/// An ordered collection of [`AnsiMode`] values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct AnsiModes(AnsiModesStorage);
 
@@ -356,7 +537,7 @@ impl From<&[AnsiMode]> for AnsiModes {
     }
 }
 
-/// Small-buffer-optimized collection of DEC mode values.
+/// An ordered collection of [`DecMode`] values.
 #[derive(Debug, Clone, PartialEq)]
 pub struct DecModes(DecModesStorage);
 
@@ -440,14 +621,200 @@ impl Parser {
         Default::default()
     }
 
-    pub fn feed(&mut self, input: char) -> Option<Function> {
-        use State::*;
+    /// Lazily parses a fragment into terminal functions, borrowing print text
+    /// directly from the input without allocation or copying. Emitted functions
+    /// borrow only the input, so the parser can be reused or dropped while they
+    /// remain alive. Use [`Function::into_owned`] to outlive the input as well.
+    ///
+    /// Printable text is emitted in nonempty runs ending at C0/C1 controls, DEL,
+    /// or the fragment boundary, with no fixed size limit. DEL (U+007F) is ignored
+    /// in Ground and excluded from print runs. Unfinished control sequences
+    /// continue in the next fragment; printable text is never buffered across
+    /// fragments. Run boundaries may change in future versions.
+    ///
+    /// Exhaust the iterator to consume the whole fragment. Dropping it early
+    /// leaves the unconsumed suffix unprocessed, including any trailing controls.
+    ///
+    /// ```
+    /// use avt::{Parser, Terminal};
+    ///
+    /// let mut parser = Parser::new();
+    /// let mut terminal = Terminal::new(80, 24)?;
+    /// terminal.execute(parser.feed("hello\x1b[31m world"));
+    /// # Ok::<(), avt::InvalidSize>(())
+    /// ```
+    pub fn feed<'a>(&mut self, mut input: &'a str) -> impl Iterator<Item = Function<'a>> {
+        core::iter::from_fn(move || self.next_function(&mut input))
+    }
+
+    // Each call releases the parser borrow before Terminal invokes observers.
+    #[inline(always)]
+    pub(crate) fn next_function<'a>(&mut self, input: &mut &'a str) -> Option<Function<'a>> {
+        if input.is_empty() {
+            return None;
+        }
+
+        if self.state == ParserState::Ground {
+            if let Some(text) = Self::take_print_run(input) {
+                return Some(Function::Print(Cow::Borrowed(text)));
+            }
+        }
+
+        self.next_control_function(input)
+    }
+
+    // Find the first control using u64 arithmetic to test eight bytes at once.
+    // In valid UTF-8, stops are C0 bytes, DEL and C2 80..9F pairs (C1 controls).
+    // Each byte's high bit marks a candidate. Loads may split characters,
+    // but all stops begin a character, so returned offsets are UTF-8 boundaries.
+    #[inline(always)]
+    fn print_run_end(input: &str) -> usize {
+        const ONES: u64 = 0x0101010101010101;
+        const HIGHS: u64 = 0x8080808080808080;
+
+        if input.len() < 8 {
+            return input
+                .find(|ch| ch < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&ch))
+                .unwrap_or(input.len());
+        }
+
+        let bytes = input.as_bytes();
+
+        // Short print runs are common even when the input fragment is large.
+        // Probe bytes without decoding or changing the word-loop alignment.
+        for offset in 0..2 {
+            let byte = bytes[offset];
+
+            if byte < 0x20 || byte == 0x7f || (byte == 0xc2 && bytes[offset + 1] < 0xa0) {
+                return offset;
+            }
+        }
+
+        let mut rest = bytes;
+
+        while let Some(chunk) = rest.first_chunk::<8>() {
+            let word = u64::from_le_bytes(*chunk);
+
+            // Subtracting 0x20 flags C0; adding 1 flags DEL. !word excludes non-ASCII.
+            let ascii = (word.wrapping_sub(ONES * 0x20) | word.wrapping_add(ONES)) & !word;
+
+            // XOR makes C2 zero; subtracting 1 flags that lane. &word excludes ASCII.
+            let c2 = (word ^ (ONES * 0xc2)).wrapping_sub(ONES) & word;
+
+            // After C2, bit 5 distinguishes printable A0..BF from C1 80..9F.
+            // Shift that bit onto C2's marker to clear printable pairs.
+            // A final-byte C2 has no lookahead here and remains a candidate.
+            let mask = (ascii | (c2 & !(word >> 6))) & HIGHS;
+
+            if mask == 0 {
+                rest = &rest[8..];
+                continue;
+            }
+
+            // Little-endian puts the first candidate lowest; borrow-induced marks follow it.
+            let offset = mask.trailing_zeros() as usize / 8;
+
+            // A boundary C2 needs lookahead. Valid UTF-8 guarantees a following
+            // continuation byte; below A0 means a C1 control.
+            if rest[offset] != 0xc2 || rest[offset + 1] < 0xa0 {
+                return input.len() - rest.len() + offset;
+            }
+
+            // Skip the printable C2 pair.
+            rest = &rest[offset + 2..];
+        }
+
+        // Fewer than eight bytes remain, possibly starting inside a character.
+        for (offset, &byte) in rest.iter().enumerate() {
+            if byte < 0x20 || byte == 0x7f || (byte == 0xc2 && rest[offset + 1] < 0xa0) {
+                return input.len() - rest.len() + offset;
+            }
+        }
+
+        input.len()
+    }
+
+    #[inline(always)]
+    fn take_print_run<'a>(input: &mut &'a str) -> Option<&'a str> {
+        let end = Self::print_run_end(input);
+
+        if end == 0 {
+            return None;
+        }
+
+        let (text, rest) = input.split_at(end);
+        *input = rest;
+
+        Some(text)
+    }
+
+    // Parse controls until a function is emitted, including text following an
+    // ignored sequence. State transitions stay inlined within this loop.
+    #[inline(never)]
+    fn next_control_function<'a>(&mut self, input: &mut &'a str) -> Option<Function<'a>> {
+        let mut chars = input.chars();
+
+        while let Some(ch) = chars.next() {
+            if let Some(function) = self.advance(ch) {
+                *input = chars.as_str();
+
+                return Some(function);
+            }
+
+            if self.state == ParserState::Ground {
+                *input = chars.as_str();
+
+                if let Some(text) = Self::take_print_run(input) {
+                    return Some(Function::Print(Cow::Borrowed(text)));
+                }
+            }
+        }
+
+        *input = chars.as_str();
+
+        None
+    }
+
+    #[inline(always)]
+    fn advance(&mut self, input: char) -> Option<Function<'static>> {
+        use ParserState::*;
+
+        // DCS framing is independent of the selected command's payload syntax.
+        if self.state == DcsPassthrough {
+            match input {
+                '\u{1b}' => {
+                    self.state = Escape;
+                    self.clear();
+
+                    return self.dcs.end(dcs::End::Escape);
+                }
+
+                '\u{9c}' => {
+                    self.state = Ground;
+
+                    return self.dcs.end(dcs::End::St);
+                }
+
+                '\u{18}' | '\u{1a}' | '\u{80}'..='\u{9f}' => {
+                    self.dcs.end(dcs::End::Cancel);
+                    // Process the cancelling control through the normal transitions below.
+                }
+
+                '\u{7f}' => return None,
+
+                _ => {
+                    self.dcs.put(input);
+
+                    return None;
+                }
+            }
+        }
 
         let input2 = if input >= '\u{a0}' { '\u{41}' } else { input };
 
         match (&self.state, input2) {
-            (Ground, '\u{20}'..='\u{7f}') => {
-                return Some(Function::Print(input));
+            (Ground, '\u{20}'..='\u{7e}') => {
+                unreachable!("ground-state printing is handled in next_function");
             }
 
             (CsiParam, '\u{30}'..='\u{3b}') => {
@@ -506,12 +873,6 @@ impl Parser {
                 self.collect(input);
             }
 
-            (DcsPassthrough, '\u{00}'..='\u{17}')
-            | (DcsPassthrough, '\u{19}')
-            | (DcsPassthrough, '\u{1c}'..='\u{7e}') => {
-                self.put(input);
-            }
-
             (CsiIgnore, '\u{40}'..='\u{7e}') => {
                 self.state = Ground;
             }
@@ -547,6 +908,7 @@ impl Parser {
             | (_, '\u{99}')
             | (_, '\u{9a}') => {
                 self.state = Ground;
+
                 return self.execute(input);
             }
 
@@ -560,8 +922,9 @@ impl Parser {
                 self.collect(input);
             }
 
-            (DcsParam, '\u{30}'..='\u{39}') | (DcsParam, '\u{3b}') => {
-                self.param(input);
+            (DcsEntry | DcsParam, '\u{30}'..='\u{39}' | '\u{3b}') => {
+                self.state = DcsParam;
+                self.dcs_param(input);
             }
 
             (DcsEntry, '\u{3c}'..='\u{3f}') => {
@@ -571,27 +934,32 @@ impl Parser {
 
             (DcsEntry | DcsParam | DcsIntermediate, '\u{40}'..='\u{7e}') => {
                 self.state = DcsPassthrough;
+
+                self.dcs.hook(
+                    &self.params[..=self.cur_param],
+                    self.intermediate,
+                    input,
+                );
             }
 
             (DcsEntry | DcsParam, '\u{20}'..='\u{2f}') => {
-                self.state = DcsIntermediate;
-                self.collect(input);
+                if self.intermediate.is_some() {
+                    self.state = DcsIgnore;
+                } else {
+                    self.state = DcsIntermediate;
+                    self.collect(input);
+                }
             }
 
-            (CsiIntermediate | EscapeIntermediate | DcsIntermediate, '\u{20}'..='\u{2f}') => {
+            (CsiIntermediate | EscapeIntermediate, '\u{20}'..='\u{2f}') => {
                 self.collect(input);
             }
 
             (DcsEntry, '\u{3a}')
-            | (DcsIntermediate, '\u{30}'..='\u{3f}')
+            | (DcsIntermediate, '\u{20}'..='\u{3f}')
             | (DcsParam, '\u{3a}')
             | (DcsParam, '\u{3c}'..='\u{3f}') => {
                 self.state = DcsIgnore;
-            }
-
-            (DcsEntry, '\u{30}'..='\u{39}') | (DcsEntry, '\u{3b}') => {
-                self.state = DcsParam;
-                self.param(input);
             }
 
             (Escape | EscapeIntermediate
@@ -636,10 +1004,10 @@ impl Parser {
                 self.clear();
             }
 
-            // DEL (0x7F) is ignored in all states except Ground and OscString
-            (Escape | EscapeIntermediate
+            // DEL is ignored in all states except OscString.
+            (Ground | Escape | EscapeIntermediate
             | CsiEntry | CsiParam | CsiIntermediate | CsiIgnore
-            | DcsEntry | DcsParam | DcsIntermediate | DcsPassthrough | DcsIgnore
+            | DcsEntry | DcsParam | DcsIntermediate | DcsIgnore
             | SosPmApcString, '\u{7f}')
 
             // CsiIgnore: params and intermediates range ignored
@@ -650,7 +1018,7 @@ impl Parser {
             | (DcsEntry | DcsParam | DcsIntermediate, '\u{19}')
             | (DcsEntry | DcsParam | DcsIntermediate, '\u{1c}'..='\u{1f}')
 
-            // C0 controls and printable range ignored in DcsIgnore and SosPmApcString
+            // Unrecognized control strings are ignored.
             | (DcsIgnore | SosPmApcString, '\u{00}'..='\u{17}')
             | (DcsIgnore | SosPmApcString, '\u{19}')
             | (DcsIgnore | SosPmApcString, '\u{1c}'..='\u{7e}')
@@ -668,12 +1036,15 @@ impl Parser {
             | OscString | SosPmApcString, '\u{a0}'..='\u{10ffff}') => {
                 unreachable!()
             }
+
+            // DCS payload is handled above.
+            (DcsPassthrough, _) => unreachable!(),
         }
 
         None
     }
 
-    fn execute(&mut self, input: char) -> Option<Function> {
+    fn execute(&mut self, input: char) -> Option<Function<'static>> {
         use Function::*;
 
         match input {
@@ -720,7 +1091,7 @@ impl Parser {
         }
     }
 
-    fn esc_dispatch(&mut self, input: char) -> Option<Function> {
+    fn esc_dispatch(&mut self, input: char) -> Option<Function<'static>> {
         use Function::*;
 
         match (self.intermediate, input) {
@@ -731,7 +1102,7 @@ impl Parser {
             (None, '8') => Some(Decrc),
 
             (None, 'c') => {
-                self.state = State::Ground;
+                self.state = ParserState::Ground;
                 Some(Ris)
             }
 
@@ -749,7 +1120,7 @@ impl Parser {
         }
     }
 
-    fn csi_dispatch(&mut self, input: char) -> Option<Function> {
+    fn csi_dispatch(&mut self, input: char) -> Option<Function<'static>> {
         use Function::*;
 
         let ps = &self.params;
@@ -872,7 +1243,16 @@ impl Parser {
         }
     }
 
-    fn put(&mut self, _input: char) {}
+    fn dcs_param(&mut self, input: char) {
+        if input.is_ascii_digit()
+            && u32::from(self.params[self.cur_param].as_u16()) * 10 + input as u32 - '0' as u32
+                > u32::from(u16::MAX)
+        {
+            self.state = ParserState::DcsIgnore;
+        } else {
+            self.param(input);
+        }
+    }
 
     fn osc_put(&mut self, input: char) {
         if self.osc_buffer.len() + input.len_utf8() <= OSC_BUFFER_LIMIT {
@@ -880,14 +1260,14 @@ impl Parser {
         }
     }
 
-    fn exit_state(&mut self) -> Option<Function> {
+    fn exit_state(&mut self) -> Option<Function<'static>> {
         match self.state {
-            State::OscString => self.osc_dispatch(),
+            ParserState::OscString => self.osc_dispatch(),
             _ => None,
         }
     }
 
-    fn osc_dispatch(&mut self) -> Option<Function> {
+    fn osc_dispatch(&mut self) -> Option<Function<'static>> {
         let operation = parse_osc(&self.osc_buffer);
         self.osc_buffer.clear();
 
@@ -895,7 +1275,7 @@ impl Parser {
     }
 
     pub(crate) fn dump(&self) -> String {
-        use State::*;
+        use ParserState::*;
 
         let mut seq = String::new();
 
@@ -945,7 +1325,14 @@ impl Parser {
 
             DcsIntermediate => {
                 let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{90}{intermediates}");
+
+                let params = self.params[..=self.cur_param]
+                    .iter()
+                    .map(|param| param.to_string())
+                    .collect::<Vec<_>>()
+                    .join(";");
+
+                let s = &format!("\u{90}{params}{intermediates}");
                 seq.push_str(s);
             }
 
@@ -962,11 +1349,7 @@ impl Parser {
                 seq.push_str(s);
             }
 
-            DcsPassthrough => {
-                let intermediates = self.intermediate.iter().collect::<String>();
-                let s = &format!("\u{90}{intermediates}\u{40}");
-                seq.push_str(s);
-            }
+            DcsPassthrough => self.dcs.dump(&mut seq),
 
             DcsIgnore => {
                 seq.push_str("\u{90}\u{3a}");
@@ -987,12 +1370,13 @@ impl Parser {
 
     #[cfg(test)]
     pub(crate) fn assert_continuation_equivalent(&self, other: &Parser) {
-        use State::*;
+        use ParserState::*;
 
         assert_eq!(self.state, other.state);
+        assert_eq!(self.dcs, other.dcs);
 
-        // Supported intermediate sequences do not use collected parameters.
-        if matches!(self.state, CsiParam | DcsParam) {
+        // Supported CSI intermediate sequences do not use collected parameters.
+        if matches!(self.state, CsiParam | DcsParam | DcsIntermediate) {
             assert_eq!(self.cur_param, other.cur_param);
 
             assert_eq!(
@@ -1016,17 +1400,18 @@ impl Parser {
     }
 }
 
-pub(crate) fn dump(funs: &[Function]) -> String {
+pub(crate) fn encode(funs: &[Function<'_>]) -> String {
     let mut seq = String::new();
 
     for fun in funs {
-        dump_function(&mut seq, fun);
+        encode_function(&mut seq, fun);
     }
 
     seq
 }
 
-pub(crate) fn dump_sgr_color(color: Color, base: u8) -> String {
+// `base` is 30 for foreground or 40 for background.
+fn encode_sgr_color_params(color: Color, base: u8) -> String {
     match color {
         Color::Indexed(c) if c < 8 => (base + c).to_string(),
         Color::Indexed(c) if c < 16 => (base + 52 + c).to_string(),
@@ -1035,7 +1420,7 @@ pub(crate) fn dump_sgr_color(color: Color, base: u8) -> String {
     }
 }
 
-fn dump_function(seq: &mut String, fun: &Function) {
+fn encode_function(seq: &mut String, fun: &Function<'_>) {
     use AnsiMode::*;
     use CtcOp::*;
     use DecMode::*;
@@ -1073,6 +1458,18 @@ fn dump_function(seq: &mut String, fun: &Function) {
         Dch(n) => push_csi(seq, None, &[n.to_string()], 'P'),
         Decaln => push_esc(seq, Some('#'), '8'),
         Decrc => push_esc(seq, None, '8'),
+
+        Decrsps(presentation) => {
+            let flags = char::from(
+                0x40 | u8::from(presentation.origin_mode)
+                    | (u8::from(presentation.pending_wrap) << 3),
+            );
+
+            seq.push_str(&format!(
+                "\u{90}1$t{};{};1;@;@;{flags};0;2;@;BBBB\u{9c}",
+                presentation.row, presentation.col,
+            ));
+        }
 
         Decrst(modes) => {
             let params = modes
@@ -1169,18 +1566,18 @@ fn dump_function(seq: &mut String, fun: &Function) {
         Nel => push_esc(seq, None, 'E'),
 
         Osc(osc) => match osc {
-            self::Osc::ShellIntegration(kind) => {
+            OscOp::ShellIntegration(kind) => {
                 let payload = match kind {
-                    ShellIntegration::PromptStart => "133;A",
-                    ShellIntegration::CommandStart => "133;B",
-                    ShellIntegration::CommandExecuted => "133;C",
-                    ShellIntegration::CommandFinished { .. } => "133;D",
+                    ShellMarker::PromptStart => "133;A",
+                    ShellMarker::CommandStart => "133;B",
+                    ShellMarker::CommandExecuted => "133;C",
+                    ShellMarker::CommandFinished { .. } => "133;D",
                 };
 
                 seq.push('\u{9d}');
                 seq.push_str(payload);
 
-                if let ShellIntegration::CommandFinished {
+                if let ShellMarker::CommandFinished {
                     exit_status: Some(status),
                 } = kind
                 {
@@ -1192,7 +1589,7 @@ fn dump_function(seq: &mut String, fun: &Function) {
             }
         },
 
-        Print(ch) => seq.push(*ch),
+        Print(text) => seq.push_str(text),
         Rep(n) => push_csi(seq, None, &[n.to_string()], 'b'),
         Ri => push_esc(seq, None, 'M'),
         Ris => push_esc(seq, None, 'c'),
@@ -1239,9 +1636,9 @@ fn dump_function(seq: &mut String, fun: &Function) {
                         ResetBlink => "25".to_owned(),
                         ResetInverse => "27".to_owned(),
                         ResetStrikethrough => "29".to_owned(),
-                        SetForegroundColor(color) => dump_sgr_color(*color, 30),
+                        SetForegroundColor(color) => encode_sgr_color_params(*color, 30),
                         ResetForegroundColor => "39".to_owned(),
-                        SetBackgroundColor(color) => dump_sgr_color(*color, 40),
+                        SetBackgroundColor(color) => encode_sgr_color_params(*color, 40),
                         ResetBackgroundColor => "49".to_owned(),
                     })
                     .collect::<Vec<_>>();
@@ -1322,7 +1719,7 @@ fn push_csi(seq: &mut String, intermediate: Option<char>, params: &[String], fin
     seq.push(final_char);
 }
 
-fn parse_osc(payload: &str) -> Option<Function> {
+fn parse_osc(payload: &str) -> Option<Function<'static>> {
     let mut parts = payload.splitn(2, ';');
     let num = parts.next()?;
 
@@ -1333,11 +1730,11 @@ fn parse_osc(payload: &str) -> Option<Function> {
             let subtype = params.next()?;
 
             let kind = match subtype {
-                "A" => ShellIntegration::PromptStart,
-                "B" => ShellIntegration::CommandStart,
-                "C" => ShellIntegration::CommandExecuted,
+                "A" => ShellMarker::PromptStart,
+                "B" => ShellMarker::CommandStart,
+                "C" => ShellMarker::CommandExecuted,
 
-                "D" => ShellIntegration::CommandFinished {
+                "D" => ShellMarker::CommandFinished {
                     // Missing, malformed, and out-of-range statuses are unknown.
                     exit_status: params
                         .next()
@@ -1348,7 +1745,7 @@ fn parse_osc(payload: &str) -> Option<Function> {
                 _ => return None,
             };
 
-            Some(Function::Osc(Osc::ShellIntegration(kind)))
+            Some(Function::Osc(OscOp::ShellIntegration(kind)))
         }
 
         _ => None,
@@ -1728,6 +2125,7 @@ mod tests {
     use super::AnsiMode;
     use super::AnsiModes;
     use super::CtcOp;
+    use super::CursorPresentation;
     use super::DecMode;
     use super::DecModes;
     use super::EdScope;
@@ -1735,32 +2133,204 @@ mod tests {
     use super::Function;
     use super::Function::*;
     use super::Parser;
+    use super::ParserState;
     use super::SgrOp::*;
     use super::SgrOps;
-    use super::State;
     use super::TbcScope;
     use super::XtwinopsOp;
     use crate::charset::Charset;
     use crate::color::Color;
+    use alloc::borrow::Cow;
     use alloc::format;
+    use alloc::string::String;
     use alloc::vec;
     use alloc::vec::Vec;
     use proptest::prelude::*;
 
-    fn parse(s: &str) -> Vec<Function> {
+    fn parse(s: &str) -> Vec<Function<'_>> {
         let mut parser = Parser::new();
 
-        s.chars().filter_map(|ch| parser.feed(ch)).collect()
+        parser.feed(s).collect()
     }
 
-    fn emit(parser: &mut Parser, input: &[char]) -> Vec<Function> {
-        input.iter().filter_map(|ch| parser.feed(*ch)).collect()
+    fn print(ch: char) -> Function<'static> {
+        Print(String::from(ch).into())
+    }
+
+    fn emit(parser: &mut Parser, input: &[char]) -> Vec<Function<'static>> {
+        parser
+            .feed(&input.iter().collect::<String>())
+            .map(Function::into_owned)
+            .collect()
     }
 
     fn feed(parser: &mut Parser, s: &str) {
-        for ch in s.chars() {
-            assert_eq!(parser.feed(ch), None);
+        assert!(parser.feed(s).next().is_none());
+    }
+
+    fn coalesce<'a>(functions: impl IntoIterator<Item = Function<'a>>) -> Vec<Function<'a>> {
+        let mut result = Vec::new();
+
+        for function in functions {
+            if let (Some(Print(previous)), Print(text)) = (result.last_mut(), &function) {
+                previous.to_mut().push_str(text);
+            } else {
+                result.push(function);
+            }
         }
+
+        result
+    }
+
+    #[test]
+    fn print_runs_borrow_input_independently_of_the_parser() {
+        let first = String::from("hé\x1b[3");
+        let second = String::from("1m界");
+
+        let (first_functions, second_functions) = {
+            let mut parser = Parser::new();
+            let first_functions: Vec<_> = parser.feed(&first).collect();
+            let second_functions: Vec<_> = parser.feed(&second).collect();
+
+            (first_functions, second_functions)
+        };
+
+        let [Print(Cow::Borrowed(text))] = first_functions.as_slice() else {
+            panic!("expected borrowed print run");
+        };
+
+        assert_eq!(*text, "hé");
+        assert_eq!(text.as_ptr(), first.as_ptr());
+
+        let [Sgr(ops), Print(Cow::Borrowed(text))] = second_functions.as_slice() else {
+            panic!("expected completed SGR and borrowed print run");
+        };
+
+        assert_eq!(ops.as_slice(), [SetForegroundColor(Color::Indexed(1))]);
+        assert_eq!(*text, "界");
+        assert_eq!(text.as_ptr(), second[2..].as_ptr());
+    }
+
+    #[test]
+    fn into_owned_moves_existing_allocations() {
+        let text = String::from("owned print run");
+        let address = text.as_ptr();
+
+        let Print(Cow::Owned(text)) = Print(text.into()).into_owned() else {
+            panic!("expected owned print run");
+        };
+
+        assert_eq!(text, "owned print run");
+        assert_eq!(text.as_ptr(), address);
+
+        let ops = SgrOps::from(vec![SetBoldIntensity; super::SGR_OPS_INLINE_CAP + 1]);
+        let address = ops.as_slice().as_ptr();
+
+        let Sgr(ops) = Sgr(ops).into_owned() else {
+            panic!("expected SGR");
+        };
+
+        assert_eq!(ops.as_slice().as_ptr(), address);
+        assert!(ops.as_slice().iter().all(|op| *op == SetBoldIntensity));
+    }
+
+    #[test]
+    fn print_runs_stop_at_controls_and_preserve_unicode() {
+        assert_eq!(
+            parse("hé界\x7f🦀\r\nabc\0def\u{85}ghi\u{9b}31m\u{a0}日"),
+            [
+                Print("hé界".into()),
+                Print("🦀".into()),
+                Cr,
+                Lf,
+                Print("abc".into()),
+                Print("def".into()),
+                Nel,
+                Print("ghi".into()),
+                Sgr(sgr_ops([SetForegroundColor(Color::Indexed(1))])),
+                Print("\u{a0}日".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn long_print_runs_borrow_whole_printable_spans() {
+        let text = "xé界🦀".repeat(8192);
+        // Exercise resuming printing after an ignored control as well as C1.
+        let input = format!("\0{text}\u{85}{text}");
+        let functions = parse(&input);
+
+        let [
+            Print(Cow::Borrowed(first)),
+            Nel,
+            Print(Cow::Borrowed(second)),
+        ] = functions.as_slice()
+        else {
+            panic!("expected two borrowed print runs separated by NEL");
+        };
+
+        assert_eq!(*first, text);
+        assert_eq!(*second, text);
+        assert_eq!(first.as_ptr(), input[1..].as_ptr());
+
+        assert_eq!(
+            second.as_ptr(),
+            input[1 + text.len() + '\u{85}'.len_utf8()..].as_ptr()
+        );
+    }
+
+    fn assert_print_run_matches_reference(input: &str) {
+        let end = input
+            .find(|ch| ch < '\u{20}' || ('\u{7f}'..='\u{9f}').contains(&ch))
+            .unwrap_or(input.len());
+
+        let mut rest = input;
+        let text = Parser::take_print_run(&mut rest);
+        assert_eq!(text, (end > 0).then_some(&input[..end]));
+        assert_eq!(rest, &input[end..]);
+    }
+
+    #[test]
+    fn print_runs_handle_word_boundaries_and_tails() {
+        for offset in 0..16 {
+            let prefix = "x".repeat(offset);
+
+            for ch in ('\0'..='\u{ff}').chain(['界', '🦀']) {
+                for suffix in ["", "é界🦀", "\u{a0}£©±µ¿", "abcdefghi"] {
+                    let input = format!("{prefix}{ch}{suffix}");
+                    assert_print_run_matches_reference(&input);
+                    assert_print_run_matches_reference(&format!("{input}\u{85}tail"));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn dropping_feed_does_not_consume_the_remaining_input() {
+        let mut parser = Parser::new();
+        let _ = parser.feed("\x1b[31");
+        assert_eq!(parser.state, ParserState::Ground);
+        assert_eq!(parser.feed("ab\x1b[31").next(), Some(Print("ab".into())));
+        assert_eq!(parser.state, ParserState::Ground);
+        assert!(parser.feed("\x1b[31").next().is_none());
+        assert_eq!(parser.state, ParserState::CsiParam);
+    }
+
+    #[test]
+    fn yields_embedded_controls_before_finishing_csi() {
+        let mut parser = Parser::new();
+        assert_eq!(parser.feed("\x1b[3\n1mxy").next(), Some(Lf));
+        assert_eq!(parser.state, ParserState::CsiParam);
+
+        assert_eq!(
+            parser.feed("1mxy").collect::<Vec<_>>(),
+            [
+                Sgr(sgr_ops([SetForegroundColor(Color::Indexed(1))])),
+                Print("xy".into()),
+            ]
+        );
+
+        assert_eq!(parser.state, ParserState::Ground);
     }
 
     fn sgr_ops<const N: usize>(ops: [super::SgrOp; N]) -> SgrOps {
@@ -1775,7 +2345,12 @@ mod tests {
         DecModes::from(&modes[..])
     }
 
-    fn assert_dump_continuation(input: &str, state: State, suffix: &str, expected: &[Function]) {
+    fn assert_dump_continuation(
+        input: &str,
+        state: ParserState,
+        suffix: &str,
+        expected: &[Function<'_>],
+    ) {
         let mut original = Parser::new();
         feed(&mut original, input);
         assert_eq!(original.state, state);
@@ -1784,7 +2359,7 @@ mod tests {
         original.assert_continuation_equivalent(&restored);
 
         for parser in [&mut original, &mut restored] {
-            let output: Vec<_> = suffix.chars().filter_map(|ch| parser.feed(ch)).collect();
+            let output: Vec<_> = parser.feed(suffix).collect();
             assert_eq!(output, expected);
         }
 
@@ -1834,6 +2409,9 @@ mod tests {
             Just("\x1b]title".chars().collect()),
             Just("\x1bP".chars().collect()),
             Just("\x1bP1;2".chars().collect()),
+            Just("\x1bP1$".chars().collect()),
+            Just("\x1bP1$t1;4;1;@;@;I;0;2;@;BBBB".chars().collect()),
+            Just("\x1bP1$t1;4;\x1b".chars().collect()),
             Just("\x1bP:".chars().collect()),
             Just("\x1bX".chars().collect()),
             Just("\x1bXabc".chars().collect()),
@@ -1845,6 +2423,268 @@ mod tests {
             Just("\u{98}".chars().collect()),
             Just("\u{98}abc".chars().collect()),
         ]
+    }
+
+    #[test]
+    fn parse_cursor_information_reports() {
+        for start in ["\x1bP", "\u{90}"] {
+            for end in ["\x1b", "\x1b\\", "\u{9c}"] {
+                for (flags, origin_mode, pending_wrap) in [
+                    ('@', false, false),
+                    ('A', true, false),
+                    ('H', false, true),
+                    ('I', true, true),
+                ] {
+                    assert_eq!(
+                        parse(&format!("{start}1$t3;65535;1;@;@;{flags};0;2;@;BBBB{end}")),
+                        [Decrsps(CursorPresentation {
+                            row: 3,
+                            col: u16::MAX,
+                            origin_mode,
+                            pending_wrap,
+                        })]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cursor_reports_reject_malformed_and_unsupported_fields() {
+        for (index, invalid) in [
+            (0, ""),
+            (0, "+1"),
+            (0, "-1"),
+            (0, "65536"),
+            (1, ""),
+            (1, "65536"),
+            (2, "0"),
+            (2, "2"),
+            (3, ""),
+            (3, "A"),
+            (3, "O"),
+            (3, "P"),
+            (3, "`@"),
+            (3, "AA"),
+            (4, "A"),
+            (5, "B"),
+            (5, "D"),
+            (5, "P"),
+            (5, "`@"),
+            (6, "1"),
+            (6, "2"),
+            (7, "0"),
+            (7, "4"),
+            (8, "A"),
+            (8, "B"),
+            (8, "L"),
+            (8, "P"),
+            (9, "B"),
+            (9, "BBBBB"),
+            (9, "ABBB"),
+            (9, "0BBB"),
+            (9, "B0BB"),
+            (9, "BB%5%5"),
+            (9, "B%5BB"),
+            (9, "BBB%"),
+            (9, "BBBB;"),
+            (9, "BBB日"),
+            (9, "BB\x07B"),
+        ] {
+            let mut fields = ["1", "4", "1", "@", "@", "I", "0", "2", "@", "BBBB"];
+            fields[index] = invalid;
+            let input = format!("\x1bP1$t{}\x1b\\X", fields.join(";"));
+            assert_eq!(parse(&input), [print('X')], "{input:?}");
+        }
+
+        for header in [
+            "0$t", "2$t", "$t", "1;1$t", "?1$t", "1!$t", "1$$t", "65537$t", "1$u",
+        ] {
+            let input = format!("\x1bP{header}1;4;1;@;@;I;0;2;@;BBBB\x1b\\X");
+            assert_eq!(parse(&input), [print('X')], "{input:?}");
+        }
+
+        assert!(parse("\x1bP1$t1;4;1;@;@;I;0;2;@\x1b\\").is_empty());
+    }
+
+    #[test]
+    fn cursor_reports_finish_on_esc_before_escape_dispatch() {
+        let report = "\x1bP1$t1;1;1;@;@;@;0;2;@;BBBB";
+        let function = Decrsps(CursorPresentation::default());
+        let mut parser = Parser::new();
+        feed(&mut parser, report);
+        assert_eq!(parser.state, ParserState::DcsPassthrough);
+        assert_eq!(parser.feed("\x1b").next(), Some(function.clone()));
+        assert_eq!(parser.state, ParserState::Escape);
+        assert_eq!(parser.dcs, super::dcs::Handler::default());
+        assert_eq!(parser.dump(), "\x1b");
+        assert_eq!(parser.feed("\\").next(), None);
+        assert_eq!(parser.state, ParserState::Ground);
+
+        for suffix in [
+            "\x1b\\",
+            "\x1b\x18",
+            "\x1b\x1a",
+            "\x1b\x1b\\",
+            "\x1b\u{9c}",
+            "\x1b\x7f\\",
+            "\x1b#\\",
+        ] {
+            assert_eq!(
+                parse(&format!("{report}{suffix}X")),
+                [function.clone(), print('X')]
+            );
+        }
+
+        for (suffix, expected) in [
+            ("\x1b[2;3H", Cup(2, 3)),
+            ("\x1bM", Ri),
+            ("\x1b\n\\", Lf),
+            ("\x1b(0", Gzd4(Charset::Drawing)),
+            ("\x1bc", Ris),
+        ] {
+            assert_eq!(
+                parse(&format!("{report}{suffix}X")),
+                [function.clone(), expected, print('X')]
+            );
+        }
+
+        assert_eq!(
+            parse(&format!("{report}\x1bP1$t2;3;1;@;@;@;0;2;@;BBBB\u{9c}")),
+            [
+                function,
+                Decrsps(CursorPresentation {
+                    row: 2,
+                    col: 3,
+                    ..CursorPresentation::default()
+                }),
+            ]
+        );
+    }
+
+    #[test]
+    fn cursor_reports_cancel_on_can_sub_and_other_c1_controls() {
+        let report = "\x1bP1$t1;1;1;@;@;@;0;2;@;BBBB";
+
+        for cancel in [0x18, 0x1a].into_iter().chain(0x80..=0x9f) {
+            if cancel == 0x9c {
+                continue;
+            }
+
+            let mut parser = Parser::new();
+            feed(&mut parser, report);
+            let mut expected = Parser::new();
+
+            assert_eq!(
+                parser
+                    .feed(char::from(cancel).encode_utf8(&mut [0; 4]))
+                    .next(),
+                expected
+                    .feed(char::from(cancel).encode_utf8(&mut [0; 4]))
+                    .next()
+            );
+
+            parser.assert_continuation_equivalent(&expected);
+            assert_eq!(parser.dcs, super::dcs::Handler::default());
+
+            // The next recognized report starts with fresh handler state.
+            let suffix = format!("{report}\u{9c}X");
+            let output: Vec<_> = parser.feed(&suffix).collect();
+
+            assert_eq!(output, [Decrsps(CursorPresentation::default()), print('X')]);
+        }
+
+        for suffix in [
+            "\u{90}0xignored",
+            "\u{90}1$",
+            "\u{9d}ignored",
+            "\u{98}ignored",
+            "\u{9e}ignored",
+            "\u{9f}ignored",
+        ] {
+            let mut parser = Parser::new();
+            feed(&mut parser, &format!("{report}{suffix}"));
+            assert_eq!(parser.dcs, super::dcs::Handler::default());
+            assert_eq!(parser.feed("\u{9c}").next(), None);
+        }
+
+        for (suffix, expected) in [("\u{9b}2;3H", Cup(2, 3)), ("\u{84}", Lf)] {
+            assert_eq!(parse(&format!("{report}{suffix}X")), [expected, print('X')]);
+        }
+    }
+
+    #[test]
+    fn cursor_report_capture_is_bounded_without_truncation() {
+        let payload = "1;1;1;@;@;@;0;2;@;BBBB";
+
+        for extra in [0, 1, 1024] {
+            let zeros = "0".repeat(128 - payload.len() + extra);
+            let mut parser = Parser::new();
+            feed(&mut parser, &format!("\x1bP1$t{zeros}{payload}"));
+            let dumped = parser.dump();
+            assert!(dumped.len() <= "\u{90}1$t".len() + 128);
+            let mut restored = Parser::new();
+            feed(&mut restored, &dumped);
+            parser.assert_continuation_equivalent(&restored);
+
+            let expected = (extra == 0).then_some(Decrsps(CursorPresentation::default()));
+
+            assert_eq!(parser.feed("\u{9c}").next(), expected);
+            assert_eq!(restored.feed("\u{9c}").next(), expected);
+            assert_eq!(parser.feed("X").next(), Some(print('X')));
+        }
+    }
+
+    #[test]
+    fn dcs_payload_controls_and_rejections_preserve_framing() {
+        let report = "\x1bP1$t1;1;1;@;@;@;0;2;@;BBBB";
+
+        for extra in ["\x07", "\n", "日", "extra"] {
+            for end in ["\x1b\\", "\u{9c}"] {
+                let mut parser = Parser::new();
+                feed(&mut parser, &format!("{report}{extra}"));
+                assert_eq!(parser.state, ParserState::DcsPassthrough);
+                let mut restored = Parser::new();
+                feed(&mut restored, &parser.dump());
+                parser.assert_continuation_equivalent(&restored);
+
+                for parser in [&mut parser, &mut restored] {
+                    let suffix = format!("{end}X{report}{end}Y");
+                    let output: Vec<_> = parser.feed(&suffix).collect();
+
+                    assert_eq!(
+                        output,
+                        [
+                            print('X'),
+                            Decrsps(CursorPresentation::default()),
+                            print('Y')
+                        ]
+                    );
+                }
+            }
+        }
+
+        // DEL is ignored by DCS framing rather than delivered to the command.
+        assert_eq!(
+            parse("\x1bP1$t1;1;1;@;@;@;0;2;@;BB\x7fBB\u{9c}"),
+            [Decrsps(CursorPresentation::default())]
+        );
+    }
+
+    #[test]
+    fn unknown_dcs_commands_ignore_payload_and_resume() {
+        let payload = "1;1;1;@;@;@;0;2;@;BBBB\x07\n日".repeat(128);
+
+        for header in ["0;0;0q", "0p", "$q", "+q", "2$t", "1$u", "tmux;"] {
+            for suffix in ["\x1b\\X", "\u{9c}X", "\x1b[2;3HX"] {
+                assert_dump_continuation(
+                    &format!("\x1bP{header}{payload}"),
+                    ParserState::DcsPassthrough,
+                    suffix,
+                    &parse(suffix),
+                );
+            }
+        }
     }
 
     #[test]
@@ -1996,42 +2836,42 @@ mod tests {
     fn parse_partial_and_interrupted_seq() {
         let mut parser = Parser::new();
 
-        assert_eq!(parser.feed('\x1b'), None);
-        assert_eq!(parser.feed('['), None);
-        assert_eq!(parser.feed('3'), None);
-        assert_eq!(parser.feed(';'), None);
-        assert_eq!(parser.feed('4'), None);
-        assert_eq!(parser.feed('H'), Some(Cup(3, 4)));
+        assert_eq!(parser.feed("\x1b").next(), None);
+        assert_eq!(parser.feed("[").next(), None);
+        assert_eq!(parser.feed("3").next(), None);
+        assert_eq!(parser.feed(";").next(), None);
+        assert_eq!(parser.feed("4").next(), None);
+        assert_eq!(parser.feed("H").next(), Some(Cup(3, 4)));
 
-        assert_eq!(parser.feed('\x1b'), None);
-        assert_eq!(parser.feed('['), None);
-        assert_eq!(parser.feed('3'), None);
-        assert_eq!(parser.feed('\x1b'), None);
-        assert_eq!(parser.feed('M'), Some(Ri));
+        assert_eq!(parser.feed("\x1b").next(), None);
+        assert_eq!(parser.feed("[").next(), None);
+        assert_eq!(parser.feed("3").next(), None);
+        assert_eq!(parser.feed("\x1b").next(), None);
+        assert_eq!(parser.feed("M").next(), Some(Ri));
 
         feed(&mut parser, "\x1b");
-        assert_eq!(parser.state, State::Escape);
-        assert_eq!(parser.feed('\u{18}'), None);
-        assert_eq!(parser.state, State::Ground);
-        assert_eq!(parser.feed('A'), Some(Print('A')));
+        assert_eq!(parser.state, ParserState::Escape);
+        assert_eq!(parser.feed("\u{18}").next(), None);
+        assert_eq!(parser.state, ParserState::Ground);
+        assert_eq!(parser.feed("A").next(), Some(print('A')));
 
         feed(&mut parser, "\x1b[12");
-        assert_eq!(parser.state, State::CsiParam);
-        assert_eq!(parser.feed('\u{1a}'), None);
-        assert_eq!(parser.state, State::Ground);
-        assert_eq!(parser.feed('B'), Some(Print('B')));
+        assert_eq!(parser.state, ParserState::CsiParam);
+        assert_eq!(parser.feed("\u{1a}").next(), None);
+        assert_eq!(parser.state, ParserState::Ground);
+        assert_eq!(parser.feed("B").next(), Some(print('B')));
 
         feed(&mut parser, "\x1b]title");
-        assert_eq!(parser.state, State::OscString);
-        assert_eq!(parser.feed('\u{18}'), None);
-        assert_eq!(parser.state, State::Ground);
-        assert_eq!(parser.feed('C'), Some(Print('C')));
+        assert_eq!(parser.state, ParserState::OscString);
+        assert_eq!(parser.feed("\u{18}").next(), None);
+        assert_eq!(parser.state, ParserState::Ground);
+        assert_eq!(parser.feed("C").next(), Some(print('C')));
 
         feed(&mut parser, "\x1bP1;2");
-        assert_eq!(parser.state, State::DcsParam);
-        assert_eq!(parser.feed('\u{1a}'), None);
-        assert_eq!(parser.state, State::Ground);
-        assert_eq!(parser.feed('D'), Some(Print('D')));
+        assert_eq!(parser.state, ParserState::DcsParam);
+        assert_eq!(parser.feed("\u{1a}").next(), None);
+        assert_eq!(parser.state, ParserState::Ground);
+        assert_eq!(parser.feed("D").next(), Some(print('D')));
     }
 
     #[test]
@@ -2149,32 +2989,32 @@ mod tests {
 
     #[test]
     fn parse_string_seq() {
-        assert_eq!(parse("\x1b]title\x07A"), [Print('A')]);
-        assert_eq!(parse("\x1b]title\x1b\\A"), [Print('A')]);
-        assert_eq!(parse("\u{9d}title\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\x1bPabc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\x1bPabc\x1b\\A"), [Print('A')]);
-        assert_eq!(parse("\u{90}abc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\x1bXabc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\x1bXabc\x1b\\A"), [Print('A')]);
-        assert_eq!(parse("\x1b^abc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\x1b^abc\x1b\\A"), [Print('A')]);
-        assert_eq!(parse("\x1b_abc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\x1b_abc\x1b\\A"), [Print('A')]);
-        assert_eq!(parse("\u{98}abc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\u{9e}abc\u{9c}A"), [Print('A')]);
-        assert_eq!(parse("\u{9f}abc\u{9c}A"), [Print('A')]);
+        assert_eq!(parse("\x1b]title\x07A"), [print('A')]);
+        assert_eq!(parse("\x1b]title\x1b\\A"), [print('A')]);
+        assert_eq!(parse("\u{9d}title\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\x1bPabc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\x1bPabc\x1b\\A"), [print('A')]);
+        assert_eq!(parse("\u{90}abc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\x1bXabc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\x1bXabc\x1b\\A"), [print('A')]);
+        assert_eq!(parse("\x1b^abc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\x1b^abc\x1b\\A"), [print('A')]);
+        assert_eq!(parse("\x1b_abc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\x1b_abc\x1b\\A"), [print('A')]);
+        assert_eq!(parse("\u{98}abc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\u{9e}abc\u{9c}A"), [print('A')]);
+        assert_eq!(parse("\u{9f}abc\u{9c}A"), [print('A')]);
     }
 
     #[test]
     fn parse_osc_parameters_and_unsupported_commands() {
-        use super::Osc;
-        use super::ShellIntegration::*;
+        use super::OscOp;
+        use super::ShellMarker::*;
 
         // Extra parameters tail is ignored
         assert_eq!(
             parse("\x1b]133;A;aid=12345;cl=m\x07"),
-            [Osc(Osc::ShellIntegration(PromptStart))]
+            [Osc(OscOp::ShellIntegration(PromptStart))]
         );
 
         for (status, expected) in [
@@ -2188,7 +3028,7 @@ mod tests {
         ] {
             assert_eq!(
                 parse(&format!("\x1b]133;D;{status}\x07")),
-                [Osc(Osc::ShellIntegration(CommandFinished {
+                [Osc(OscOp::ShellIntegration(CommandFinished {
                     exit_status: expected
                 }))]
             );
@@ -2205,7 +3045,7 @@ mod tests {
 
     #[test]
     fn all_shell_markers_accept_bel_and_st() {
-        use super::ShellIntegration::*;
+        use super::ShellMarker::*;
 
         for (payload, marker) in [
             ("A", PromptStart),
@@ -2223,7 +3063,7 @@ mod tests {
                 for end in ["\x07", "\x1b\\", "\u{9c}"] {
                     assert_eq!(
                         parse(&format!("{intro}133;{payload}{end}")),
-                        [Osc(super::Osc::ShellIntegration(marker))]
+                        [Osc(super::OscOp::ShellIntegration(marker))]
                     );
                 }
             }
@@ -2235,23 +3075,23 @@ mod tests {
         let mut parser = Parser::new();
 
         feed(&mut parser, "\x1b]133;A");
-        assert_eq!(parser.state, State::OscString);
+        assert_eq!(parser.state, ParserState::OscString);
 
         // ESC should dispatch the OSC and then enter Escape
-        let out = parser.feed('\x1b');
+        let out = parser.feed("\x1b").next();
 
         assert_eq!(
             out,
-            Some(Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::PromptStart
+            Some(Osc(super::OscOp::ShellIntegration(
+                super::ShellMarker::PromptStart
             )))
         );
 
-        assert_eq!(parser.state, State::Escape);
+        assert_eq!(parser.state, ParserState::Escape);
 
         // Following \ ends the ST sequence with no further function emitted
-        assert_eq!(parser.feed('\\'), None);
-        assert_eq!(parser.state, State::Ground);
+        assert_eq!(parser.feed("\\").next(), None);
+        assert_eq!(parser.state, ParserState::Ground);
     }
 
     #[test]
@@ -2259,15 +3099,15 @@ mod tests {
         for cancel in ['\u{18}', '\u{1a}'] {
             let mut parser = Parser::new();
             feed(&mut parser, "\x1b]133;D;42");
-            assert_eq!(parser.feed(cancel), None);
-            assert_eq!(parser.state, State::Ground);
+            assert_eq!(parser.feed(cancel.encode_utf8(&mut [0; 4])).next(), None);
+            assert_eq!(parser.state, ParserState::Ground);
             // The parser remains usable after cancellation.
             feed(&mut parser, "\x1b]133;B");
 
             assert_eq!(
-                parser.feed('\x07'),
-                Some(Osc(super::Osc::ShellIntegration(
-                    super::ShellIntegration::CommandStart
+                parser.feed("\x07").next(),
+                Some(Osc(super::OscOp::ShellIntegration(
+                    super::ShellMarker::CommandStart
                 )))
             );
         }
@@ -2275,74 +3115,79 @@ mod tests {
 
     #[test]
     fn parse_unicode() {
-        assert_eq!(parse("日"), [Print('日')]);
-        assert_eq!(parse("\x1b[日A"), [Print('A')]);
+        assert_eq!(parse("日"), [print('日')]);
+        assert_eq!(parse("\x1b[日A"), [print('A')]);
     }
 
     #[test]
     fn dump_restores_non_ground_state_continuations() {
         for (input, state, suffix, expected) in [
-            ("\x1b", State::Escape, "7X", vec![Decsc, Print('X')]),
+            ("\x1b", ParserState::Escape, "7X", vec![Decsc, print('X')]),
             (
                 "\x1b(",
-                State::EscapeIntermediate,
+                ParserState::EscapeIntermediate,
                 "0X",
-                vec![Gzd4(Charset::Drawing), Print('X')],
+                vec![Gzd4(Charset::Drawing), print('X')],
             ),
             (
                 "\x1b[",
-                State::CsiEntry,
+                ParserState::CsiEntry,
                 "3;4HX",
-                vec![Cup(3, 4), Print('X')],
+                vec![Cup(3, 4), print('X')],
             ),
-            ("\x1b[ ", State::CsiIntermediate, "qX", vec![Print('X')]),
-            ("\x1b[:", State::CsiIgnore, "mX", vec![Print('X')]),
+            (
+                "\x1b[ ",
+                ParserState::CsiIntermediate,
+                "qX",
+                vec![print('X')],
+            ),
+            ("\x1b[:", ParserState::CsiIgnore, "mX", vec![print('X')]),
             (
                 "\x1bP",
-                State::DcsEntry,
+                ParserState::DcsEntry,
                 "qignored\x1b\\X",
-                vec![Print('X')],
+                vec![print('X')],
             ),
             (
                 "\x1bP ",
-                State::DcsIntermediate,
+                ParserState::DcsIntermediate,
                 "qignored\x1b\\X",
-                vec![Print('X')],
+                vec![print('X')],
             ),
             (
                 "\x1bP1;2",
-                State::DcsParam,
+                ParserState::DcsParam,
                 "qignored\x1b\\X",
-                vec![Print('X')],
+                vec![print('X')],
             ),
             (
                 "\x1bPz",
-                State::DcsPassthrough,
+                ParserState::DcsPassthrough,
                 "ignored\x1b\\X",
-                vec![Print('X')],
+                vec![print('X')],
             ),
             (
                 "\x1bP:",
-                State::DcsIgnore,
+                ParserState::DcsIgnore,
                 "ignored\x1b\\X",
-                vec![Print('X')],
+                vec![print('X')],
             ),
             (
                 "\x1b]",
-                State::OscString,
+                ParserState::OscString,
                 "133;A\x07X",
                 vec![
-                    Osc(super::Osc::ShellIntegration(
-                        super::ShellIntegration::PromptStart,
+                    Osc(super::OscOp::ShellIntegration(
+                        super::ShellMarker::PromptStart,
                     )),
-                    Print('X'),
+                    print('X'),
                 ],
             ),
             (
                 "\x1bX",
-                State::SosPmApcString,
+                ParserState::SosPmApcString,
                 "ignored\x1b\\X",
-                vec![Print('X')],
+                vec![print('X')],
             ),
         ] {
             assert_dump_continuation(input, state, suffix, &expected);
@@ -2353,7 +3198,7 @@ mod tests {
     fn dump_restores_empty_and_colon_separated_parameters() {
         assert_dump_continuation(
             "\x1b[;1;;38:2:1:2:3;",
-            State::CsiParam,
+            ParserState::CsiParam,
             "mX",
             &[
                 Sgr(sgr_ops([
@@ -2363,7 +3208,7 @@ mod tests {
                     SetForegroundColor(Color::rgb(1, 2, 3)),
                     Reset,
                 ])),
-                Print('X'),
+                print('X'),
             ],
         );
     }
@@ -2371,8 +3216,8 @@ mod tests {
     #[test]
     fn dump_resumes_intermediates_with_prior_parameters() {
         for (prefix, suffix, expected) in [
-            ("\x1b[1;2!", "pX", vec![Decstr, Print('X')]),
-            ("\x1bP1;2 ", "qignored\x1b\\X", vec![Print('X')]),
+            ("\x1b[1;2!", "pX", vec![Decstr, print('X')]),
+            ("\x1bP1;2 ", "qignored\x1b\\X", vec![print('X')]),
         ] {
             let mut original = Parser::new();
             feed(&mut original, prefix);
@@ -2381,7 +3226,7 @@ mod tests {
             original.assert_continuation_equivalent(&restored);
 
             for parser in [&mut original, &mut restored] {
-                let output: Vec<_> = suffix.chars().filter_map(|ch| parser.feed(ch)).collect();
+                let output: Vec<_> = parser.feed(suffix).collect();
                 assert_eq!(output, expected);
             }
 
@@ -2390,7 +3235,7 @@ mod tests {
     }
 
     #[test]
-    fn dump_functions_roundtrip() {
+    fn encode_functions_roundtrip() {
         let functions = vec![
             Bs,
             Cbt(2),
@@ -2452,25 +3297,24 @@ mod tests {
             Il(16),
             Lf,
             Nel,
-            Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::PromptStart,
+            Osc(super::OscOp::ShellIntegration(
+                super::ShellMarker::PromptStart,
             )),
-            Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::CommandStart,
+            Osc(super::OscOp::ShellIntegration(
+                super::ShellMarker::CommandStart,
             )),
-            Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::CommandExecuted,
+            Osc(super::OscOp::ShellIntegration(
+                super::ShellMarker::CommandExecuted,
             )),
-            Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::CommandFinished { exit_status: None },
+            Osc(super::OscOp::ShellIntegration(
+                super::ShellMarker::CommandFinished { exit_status: None },
             )),
-            Osc(super::Osc::ShellIntegration(
-                super::ShellIntegration::CommandFinished {
+            Osc(super::OscOp::ShellIntegration(
+                super::ShellMarker::CommandFinished {
                     exit_status: Some(255),
                 },
             )),
-            Print('A'),
-            Print('日'),
+            Print("A日".into()),
             Rep(11),
             Ri,
             Ris,
@@ -2512,10 +3356,54 @@ mod tests {
             Xtwinops(XtwinopsOp::Resize(80, 24)),
         ];
 
-        assert_eq!(parse(&super::dump(&functions)), functions);
+        let owned: Vec<_> = {
+            let input = super::encode(&functions);
+            let mut parser = Parser::new();
+
+            parser.feed(&input).map(Function::into_owned).collect()
+        };
+
+        assert_eq!(owned, functions);
     }
 
     proptest! {
+        #[test]
+        fn prop_print_runs_match_character_scanning(
+            prefix in prop::collection::vec(
+                prop_oneof![
+                    prop::char::range('\u{20}', '\u{7e}'),
+                    prop::char::range('\u{a0}', '\u{bf}'),
+                    prop::char::range('\u{a0}', char::MAX),
+                ],
+                0..=128,
+            ),
+            suffix in prop::collection::vec(any::<char>(), 0..=128),
+        ) {
+            let input: String = prefix.into_iter().chain(suffix).collect();
+            assert_print_run_matches_reference(&input);
+        }
+
+        #[test]
+        fn prop_feed_is_independent_of_fragment_boundaries(
+            input in prop::collection::vec(
+                prop_oneof![3 => gen_parser_char(), 1 => any::<char>()],
+                0..=256,
+            ),
+            chunk_len in 1..=32usize,
+        ) {
+            let mut whole = Parser::new();
+            let expected = coalesce(emit(&mut whole, &input));
+            let mut chunked = Parser::new();
+            let mut functions = Vec::new();
+
+            for chunk in input.chunks(chunk_len) {
+                functions.extend(emit(&mut chunked, chunk));
+            }
+
+            prop_assert_eq!(coalesce(functions), expected);
+            whole.assert_continuation_equivalent(&chunked);
+        }
+
         #[test]
         fn prop_dump_resume_equivalence(
             input in gen_parser_input(64),
@@ -2529,10 +3417,7 @@ mod tests {
 
             let mut parser2 = Parser::new();
             let dumped = parser1.dump();
-            let dump_output = dumped
-                .chars()
-                .filter_map(|ch| parser2.feed(ch))
-                .collect::<Vec<_>>();
+            let dump_output = parser2.feed(&dumped).collect::<Vec<_>>();
 
             prop_assert!(dump_output.is_empty());
             parser1.assert_continuation_equivalent(&parser2);
@@ -2542,6 +3427,36 @@ mod tests {
 
             prop_assert_eq!(suffix_output1, suffix_output2);
             parser1.assert_continuation_equivalent(&parser2);
+        }
+
+        #[test]
+        fn prop_cursor_report_roundtrip_and_resume(
+            presentation in crate::tests::gen_cursor_presentation(),
+            split in any::<usize>(),
+            start in prop::sample::select(vec!["\x1bP", "\u{90}"]),
+            end in prop::sample::select(vec!["\x1b", "\x1b\\", "\u{9c}"]),
+        ) {
+            let function = Decrsps(presentation);
+
+            let input: Vec<_> = super::encode(core::slice::from_ref(&function))
+                .replace('\u{90}', start)
+                .replace('\u{9c}', end)
+                .chars()
+                .collect();
+
+            let split = split % (input.len() + 1);
+            let mut original = Parser::new();
+            let prefix_output = emit(&mut original, &input[..split]);
+            let mut restored = Parser::new();
+            feed(&mut restored, &original.dump());
+            original.assert_continuation_equivalent(&restored);
+
+            let suffix_output = emit(&mut original, &input[split..]);
+            prop_assert_eq!(emit(&mut restored, &input[split..]), &suffix_output[..]);
+            original.assert_continuation_equivalent(&restored);
+
+            let output: Vec<_> = prefix_output.into_iter().chain(suffix_output).collect();
+            prop_assert_eq!(output, [function]);
         }
 
         #[test]
@@ -2555,18 +3470,24 @@ mod tests {
             let prefix_output = emit(&mut parser, &prefix);
 
             prop_assert!(prefix_output.is_empty());
-            prop_assert_ne!(parser.state, State::Ground);
+            prop_assert_ne!(parser.state, ParserState::Ground);
 
-            let cancel_output = parser.feed(cancel);
+            let mut encoded = [0; 4];
+            let cancel_output = parser.feed(cancel.encode_utf8(&mut encoded)).next();
 
             prop_assert_eq!(cancel_output, None);
-            prop_assert_eq!(parser.state, State::Ground);
+            prop_assert_eq!(parser.state, ParserState::Ground);
+            prop_assert_eq!(&parser.dcs, &super::dcs::Handler::default());
 
             let suffix_output = emit(&mut parser, &suffix);
-            let expected = suffix.iter().copied().map(Function::Print).collect::<Vec<_>>();
+
+            let expected: Vec<_> = (!suffix.is_empty())
+                .then(|| Print(suffix.iter().collect::<String>().into()))
+                .into_iter()
+                .collect();
 
             prop_assert_eq!(suffix_output, expected);
-            prop_assert_eq!(parser.state, State::Ground);
+            prop_assert_eq!(parser.state, ParserState::Ground);
         }
     }
 }

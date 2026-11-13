@@ -1,5 +1,5 @@
 use super::{Observation, Observer};
-use crate::parser::Function;
+use crate::ansi::Function;
 use crate::{Line, Operation, Terminal};
 use alloc::borrow::ToOwned as _;
 use alloc::string::String;
@@ -26,13 +26,21 @@ impl Transcript {
     }
 
     fn finish_primary(&mut self, terminal: &Terminal) {
-        let start = self.ready.len();
+        let screen = terminal.primary_screen();
+        let history = screen.all_lines().count() - terminal.size().1;
+        let mut lines = screen.all_lines();
 
-        for line in terminal.primary_screen().all_lines() {
+        for line in lines.by_ref().take(history) {
             self.push(line);
         }
 
-        // Trim screen padding without removing output from earlier in this call.
+        let start = self.ready.len();
+
+        for line in lines {
+            self.push(line);
+        }
+
+        // Trim screen padding, preserving historical blanks even before eviction.
         while self.ready.len() > start && self.ready.last().is_some_and(String::is_empty) {
             self.ready.pop();
         }
@@ -51,7 +59,7 @@ impl Transcript {
 impl Observer for Transcript {
     type Output = Vec<String>;
 
-    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation) {
+    fn before(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
         if matches!(operation, Operation::Function(Function::Ris)) {
             self.finish_primary(context.terminal());
         }
@@ -213,20 +221,33 @@ mod tests {
     }
 
     #[test]
-    fn hard_reset_preserves_already_queued_blank_lines_in_the_same_feed() {
+    fn hard_reset_preserves_historical_blanks_across_call_boundaries() {
         let input = "old\r\n\r\n\x1bcnew";
 
-        for split in 0..=input.len() {
-            let mut terminal = Terminal::new(4, 1).unwrap();
-            let mut transcript = Transcript::new();
-            let mut lines = Vec::new();
+        for limit in [Some(0), Some(1), None] {
+            for split in 0..=input.len() {
+                let mut terminal = Terminal::with_scrollback(4, 1, limit).unwrap();
+                let mut transcript = Transcript::new();
+                let mut lines = Vec::new();
 
-            for chunk in [&input[..split], &input[split..]] {
-                lines.extend(terminal.feed_with(chunk, &mut transcript));
+                for chunk in [&input[..split], &input[split..]] {
+                    lines.extend(terminal.feed_with(chunk, &mut transcript));
+                }
+
+                lines.extend(transcript.finish(&terminal));
+                assert_eq!(lines, ["old", "", "new"], "{limit:?}, split at {split}");
             }
+        }
+    }
 
+    #[test]
+    fn finish_preserves_historical_blanks_and_trims_screen_padding() {
+        for limit in [Some(0), Some(1), None] {
+            let mut terminal = Terminal::with_scrollback(4, 2, limit).unwrap();
+            let mut transcript = Transcript::new();
+            let mut lines = terminal.feed_with("old\r\n\r\n\r\n", &mut transcript);
             lines.extend(transcript.finish(&terminal));
-            assert_eq!(lines, ["old", "", "new"], "split at {split}");
+            assert_eq!(lines, ["old", ""]);
         }
     }
 
