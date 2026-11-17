@@ -1,6 +1,7 @@
 name: Test
 
 on:
+  workflow_call:
   push:
     branches:
       - main
@@ -36,6 +37,8 @@ jobs:
           --target thumbv7em-none-eabi
     - name: Run examples
       run: |
+        # Variables are expanded by the inner Bash process.
+        # shellcheck disable=SC2016
         nix develop .#${{ matrix.shell }} --command bash -ec '
           for source in examples/*.rs; do
             cargo run --quiet --example "$(basename "$source" .rs)" </dev/null
