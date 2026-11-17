@@ -6,13 +6,15 @@ Each section describes changes from the preceding version. If you skip versions,
 read the relevant sections oldest-first. Examples use the API of their section.
 This guide includes Git-tagged versions as well as crates.io releases.
 
-[Unreleased](#unreleased) · [0.20](#020) · [0.19](#019) · [0.18](#018) ·
+[0.21](#021) · [0.20](#020) · [0.19](#019) · [0.18](#018) ·
 [0.17](#017) · [0.16](#016) ·
 [0.15](#015) · [0.14](#014) · [0.13](#013) · [0.12](#012) ·
 [0.11](#011) · [0.10](#010) · [0.9](#09) · [0.8](#08) ·
 [0.7](#07) · [0.6](#06) · [0.5](#05) · [0.1–0.4](#0104-legacy-vt)
 
-## Unreleased
+## 0.21
+
+Requires **Rust 1.86**, unchanged from 0.20.
 
 - Physical terminal rows now use `Row` instead of `Line`. Rename
   `Screen::visible_lines()` to `visible_rows()`, `all_lines()` to `all_rows()`,
@@ -20,11 +22,20 @@ This guide includes Git-tagged versions as well as crates.io releases.
 - Rename `Line::is_wrapped()` to `Row::wraps_to_next()`: the flag indicates
   continuation into the following row. `Screen::text()` returns logical text
   lines formed by joining soft-wrapped rows.
+- `Line<'a>` now represents a borrowed logical line, obtained with
+  `Screen::line_at(row)`. Use `rows()` to access its physical rows and
+  `row_range()` for their coordinates; negative rows refer to scrollback.
+  If the beginning has been evicted, only the retained portion is returned.
 - Rename `avt::parser::*` imports to `avt::ansi::*`. The root-level
   `avt::Parser` re-export remains available.
 - Within `ansi`, rename `State` to `ParserState`, `Osc` to `OscOp`, and
   `ShellIntegration` to `ShellMarker`. The variants `Function::Osc` and
   `OscOp::ShellIntegration` keep their names.
+- `SGR_OPS_INLINE_CAP` and `MODES_INLINE_CAP` are now private implementation
+  details. Remove dependencies on these constants.
+- Update exhaustive matches for `Function::Decst8c` (reset tab stops),
+  `EdScope::ScrollAll` (`CSI 22 J`), and `DecMode::BracketedPaste` (mode 2004).
+  `Terminal::bracketed_paste_mode()` exposes the tracked paste mode.
 
 ## 0.20
 
