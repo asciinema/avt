@@ -9,6 +9,10 @@
 //! Plain mutations return `()`; `_with` variants return an
 //! [`Observer`]'s output.
 //!
+//! A [`Row`] is one physical terminal row. [`Screen::visible_rows`] and
+//! [`Screen::all_rows`] expose physical rows; [`Screen::text`] joins soft-wrapped
+//! rows into logical text lines. [`Screen::line_at`] returns a borrowed [`Line`].
+//!
 //! Stateful observers should be reused across calls when collecting
 //! dirty rows, transcripts, or shell integration events. Feed boundaries
 //! enforce scrollback retention, but do not finish parsing or logical lines.
@@ -19,9 +23,9 @@
 //!
 //! let mut terminal = Terminal::new(80, 24)?;
 //! let mut dirty = DirtyRows::new();
-//! let rows = terminal.feed_with(["hello", "\r\nworld"], &mut dirty);
-//! assert_eq!(rows.len(), 24); // First observation requests a full repaint.
-//! assert_eq!(terminal.screen().line(1).unwrap().text().trim_end(), "world");
+//! let row_indices = terminal.feed_with(["hello", "\r\nworld"], &mut dirty);
+//! assert_eq!(row_indices.len(), 24); // First observation requests a full repaint.
+//! assert_eq!(terminal.screen().row(1).unwrap().text().trim_end(), "world");
 //!
 //! # Ok::<(), avt::InvalidSize>(())
 //! ```
@@ -49,6 +53,7 @@ mod line;
 pub mod observer;
 pub mod operation;
 mod pen;
+mod row;
 mod tabs;
 
 pub use anchor::Anchor;
@@ -62,6 +67,7 @@ pub use line::Line;
 pub use observer::{Observation, Observer};
 pub use operation::{IntoOperations, Operation};
 pub use pen::Pen;
+pub use row::Row;
 
 use alloc::string::String;
 
@@ -235,8 +241,8 @@ impl Terminal {
     fn evict<O: Observer>(&mut self, observer: &mut O) {
         self.engine.evict_alternate();
 
-        while let Some(line) = self.engine.pop_evicted() {
-            observer.evicted(&mut Observation::new(self), &line);
+        while let Some(row) = self.engine.pop_evicted() {
+            observer.evicted(&mut Observation::new(self), &row);
         }
     }
 
@@ -306,11 +312,19 @@ impl Terminal {
     pub fn cursor_key_app_mode(&self) -> bool {
         self.engine.cursor_keys_app_mode()
     }
+
+    /// Whether bracketed paste mode (DEC private mode 2004) is enabled.
+    /// Disabled initially and by RIS; preserved by soft resets.
+    pub fn bracketed_paste_mode(&self) -> bool {
+        self.engine.bracketed_paste_mode()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ansi::{self, CursorPresentation, EdScope, Function, SgrOp, SgrOps};
+    use crate::ansi::{
+        self, CursorPresentation, DecMode, DecModes, EdScope, Function, SgrOp, SgrOps,
+    };
     use crate::observer::{DirtyRows, PromptId, ShellEvent, ShellTracker, Transcript};
     use crate::{Input, IntoInputs, Observation, Observer, Operation, ScreenKind, Terminal};
     use alloc::borrow::ToOwned as _;
@@ -325,6 +339,236 @@ mod tests {
 
     fn print(ch: char) -> Function<'static> {
         Function::Print(String::from(ch).into())
+    }
+
+    #[test]
+    fn bracketed_paste_tracks_settings_and_resets() {
+        use Function::*;
+
+        let mut terminal = Terminal::new(8, 3).unwrap();
+        assert!(!terminal.bracketed_paste_mode());
+
+        for (function, enabled) in [
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true),
+            (Decstr, true),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true),
+            (Ris, false),
+        ] {
+            terminal.execute(function.clone());
+            assert_eq!(terminal.bracketed_paste_mode(), enabled, "{function:?}");
+        }
+    }
+
+    #[test]
+    fn bracketed_paste_is_terminal_wide() {
+        use Function::*;
+
+        for enabled in [false, true] {
+            for screen_mode in [DecMode::AltScreenBuffer, DecMode::SaveCursorAltScreenBuffer] {
+                let mut terminal = Terminal::new(8, 3).unwrap();
+
+                if enabled {
+                    terminal.execute(Decset(DecModes::one(DecMode::BracketedPaste)));
+                }
+
+                terminal.resize(12, 4);
+                assert_eq!(terminal.bracketed_paste_mode(), enabled);
+                terminal.execute(Decset(DecModes::one(screen_mode)));
+                assert_eq!(terminal.bracketed_paste_mode(), enabled);
+                terminal.resize(6, 2);
+                assert_eq!(terminal.bracketed_paste_mode(), enabled);
+
+                // Changing the mode on the alternate screen affects the primary too.
+                terminal.execute(if enabled {
+                    Decrst(DecModes::one(DecMode::BracketedPaste))
+                } else {
+                    Decset(DecModes::one(DecMode::BracketedPaste))
+                });
+
+                terminal.execute(Decrst(DecModes::one(screen_mode)));
+                assert_eq!(terminal.bracketed_paste_mode(), !enabled);
+            }
+
+            for (save, restore) in [
+                (Decsc, Decrc),
+                (Scosc, Scorc),
+                (
+                    Decset(DecModes::one(DecMode::SaveCursor)),
+                    Decrst(DecModes::one(DecMode::SaveCursor)),
+                ),
+            ] {
+                let mut terminal = Terminal::new(8, 3).unwrap();
+
+                if enabled {
+                    terminal.execute(Decset(DecModes::one(DecMode::BracketedPaste)));
+                }
+
+                terminal.execute(save);
+
+                terminal.execute(if enabled {
+                    Decrst(DecModes::one(DecMode::BracketedPaste))
+                } else {
+                    Decset(DecModes::one(DecMode::BracketedPaste))
+                });
+
+                terminal.execute(restore);
+                assert_eq!(terminal.bracketed_paste_mode(), !enabled);
+            }
+        }
+    }
+
+    #[test]
+    fn observers_see_complete_grouped_paste_mode_changes() {
+        use Function::*;
+
+        #[derive(Default)]
+        struct Modes(Vec<(bool, ScreenKind, crate::Cursor)>);
+
+        impl Observer for Modes {
+            type Output = ();
+
+            fn before(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
+                let terminal = context.terminal();
+
+                self.0.push((
+                    terminal.bracketed_paste_mode(),
+                    terminal.active_screen_kind(),
+                    terminal.cursor(),
+                ));
+            }
+
+            fn after(&mut self, context: &mut Observation<'_>, operation: &Operation<'_>) {
+                self.before(context, operation);
+            }
+
+            fn end(&mut self, _: &mut Observation<'_>) {}
+        }
+
+        let mut terminal = Terminal::new(8, 3).unwrap();
+        let cursor = terminal.cursor();
+
+        for (function, before, after) in [
+            (Decset(DecModes::one(DecMode::BracketedPaste)), false, true),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), true, true),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), true, false),
+            (Decrst(DecModes::one(DecMode::BracketedPaste)), false, false),
+            (Decset(DecModes::one(DecMode::BracketedPaste)), false, true),
+            (Ris, true, false),
+        ] {
+            let mut modes = Modes::default();
+            terminal.execute_with(function, &mut modes);
+
+            assert_eq!(
+                modes.0,
+                [
+                    (before, ScreenKind::Primary, cursor),
+                    (after, ScreenKind::Primary, cursor),
+                ]
+            );
+        }
+
+        let mode_orders = [
+            [DecMode::SaveCursorAltScreenBuffer, DecMode::BracketedPaste],
+            [DecMode::BracketedPaste, DecMode::SaveCursorAltScreenBuffer],
+        ];
+
+        for set in mode_orders {
+            for reset in mode_orders {
+                let mut terminal = Terminal::new(8, 3).unwrap();
+                terminal.feed("ab");
+                let primary_cursor = terminal.cursor();
+                let mut modes = Modes::default();
+                terminal.execute_with(Decset(DecModes::collect(set)), &mut modes);
+
+                assert_eq!(
+                    modes.0,
+                    [
+                        (false, ScreenKind::Primary, primary_cursor),
+                        (true, ScreenKind::Alternate, primary_cursor),
+                    ]
+                );
+
+                terminal.execute(Cup(2, 4));
+                let alternate_cursor = terminal.cursor();
+                modes.0.clear();
+                terminal.execute_with(Decrst(DecModes::collect(reset)), &mut modes);
+
+                assert_eq!(
+                    modes.0,
+                    [
+                        (true, ScreenKind::Alternate, alternate_cursor),
+                        (false, ScreenKind::Primary, primary_cursor),
+                    ]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn dump_preserves_bracketed_paste_mode() {
+        use Function::*;
+
+        for alternate in [false, true] {
+            let mut original = Terminal::new(16, 3).unwrap();
+
+            original.execute([
+                Decset(DecModes::one(DecMode::BracketedPaste)),
+                Print("primary".into()),
+            ]);
+
+            if alternate {
+                original.execute([
+                    Decset(DecModes::one(DecMode::SaveCursorAltScreenBuffer)),
+                    Cup(1, 1),
+                    Print("alt".into()),
+                ]);
+            }
+
+            let mut restored = Terminal::new(16, 3).unwrap();
+            restored.feed(original.dump());
+            assert!(restored.bracketed_paste_mode());
+            assert_dump_equivalent(&original, &restored);
+        }
+    }
+
+    #[test]
+    fn dump_preserves_title_continuation_at_every_boundary() {
+        for end in ["\x1b\\", "\u{9c}"] {
+            let title = format!("\x1bkuser@host$ echo '日'; pwd\x07\r\nignored{end}");
+
+            for split in title.char_indices().map(|(i, _)| i).chain([title.len()]) {
+                let mut original = Terminal::new(16, 3).unwrap();
+                original.feed("before");
+                let before = original.dump();
+                let mut dirty = DirtyRows::new();
+                original.feed_with("", &mut dirty);
+                assert!(original.feed_with(&title[..split], &mut dirty).is_empty());
+                let mut restored = Terminal::new(16, 3).unwrap();
+                restored.feed(original.dump());
+                assert_dump_equivalent(&original, &restored);
+                assert!(original.feed_with(&title[split..], &mut dirty).is_empty());
+                restored.feed(&title[split..]);
+                assert_eq!(original.dump(), before);
+                assert_dump_equivalent(&original, &restored);
+                original.feed("OK");
+                restored.feed("OK");
+                assert_dump_equivalent(&original, &restored);
+                assert_eq!(original.screen().text()[0], "beforeOK");
+            }
+
+            let mut terminal = Terminal::new(16, 3).unwrap();
+
+            for ch in title.chars() {
+                terminal.feed(ch);
+            }
+
+            terminal.feed("OK");
+            assert_eq!(terminal.screen().text(), ["OK", "", ""]);
+        }
     }
 
     #[test]
@@ -343,10 +587,10 @@ mod tests {
         assert_eq!(terminal.size(), (2, 2));
         assert_eq!(terminal.cursor().position(), Some((2, 1)));
         assert_eq!(terminal.primary_screen().text(), ["aa", "bb", "cc"]);
-        assert_eq!(terminal.screen().visible_lines().len(), 2);
-        assert_eq!(terminal.screen().all_lines().count(), 3);
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "bb");
-        assert!(terminal.screen().line(2).is_none());
+        assert_eq!(terminal.screen().visible_rows().len(), 2);
+        assert_eq!(terminal.screen().all_rows().count(), 3);
+        assert_eq!(terminal.screen().row(0).unwrap().text(), "bb");
+        assert!(terminal.screen().row(2).is_none());
     }
 
     #[test]
@@ -362,19 +606,19 @@ mod tests {
             ("A\x1b_hidden\x1b\\B", "AB  ", 2),
         ] {
             let check = |terminal: &Terminal| {
-                let lines: Vec<_> = terminal
+                let row_texts: Vec<_> = terminal
                     .screen()
-                    .visible_lines()
-                    .map(crate::Line::text)
+                    .visible_rows()
+                    .map(crate::Row::text)
                     .collect();
 
-                assert_eq!(lines, [expected, "    "], "{input:?}");
+                assert_eq!(row_texts, [expected, "    "], "{input:?}");
                 assert_eq!(terminal.cursor().position(), Some((col, 0)), "{input:?}");
 
-                for line in terminal.screen().visible_lines() {
-                    assert!(!line.is_wrapped(), "{input:?}");
+                for row in terminal.screen().visible_rows() {
+                    assert!(!row.wraps_to_next(), "{input:?}");
 
-                    for cell in line.cells() {
+                    for cell in row.cells() {
                         assert!(cell.pen().is_default(), "{input:?}");
                     }
                 }
@@ -404,15 +648,15 @@ mod tests {
             terminal.feed([charset, "AB"]);
             terminal.feed("\x7f");
             assert_eq!(terminal.cursor().position(), Some((2, 0)));
-            assert_eq!(terminal.screen().line(0).unwrap().text(), "AB");
-            assert_eq!(terminal.screen().line(1).unwrap().text(), "  ");
-            assert!(!terminal.screen().line(0).unwrap().is_wrapped());
+            assert_eq!(terminal.screen().row(0).unwrap().text(), "AB");
+            assert_eq!(terminal.screen().row(1).unwrap().text(), "  ");
+            assert!(!terminal.screen().row(0).unwrap().wraps_to_next());
 
             terminal.feed("C");
             assert_eq!(terminal.cursor().position(), Some((1, 1)));
-            assert_eq!(terminal.screen().line(0).unwrap().text(), "AB");
-            assert_eq!(terminal.screen().line(1).unwrap().text(), "C ");
-            assert!(terminal.screen().line(0).unwrap().is_wrapped());
+            assert_eq!(terminal.screen().row(0).unwrap().text(), "AB");
+            assert_eq!(terminal.screen().row(1).unwrap().text(), "C ");
+            assert!(terminal.screen().row(0).unwrap().wraps_to_next());
         }
     }
 
@@ -420,7 +664,7 @@ mod tests {
     fn del_preserves_repeated_character() {
         let mut terminal = Terminal::new(8, 2).unwrap();
         terminal.feed("a\x7f\x1b[3b");
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "aaaa    ");
+        assert_eq!(terminal.screen().row(0).unwrap().text(), "aaaa    ");
         assert_eq!(terminal.cursor().position(), Some((4, 0)));
     }
 
@@ -442,15 +686,12 @@ mod tests {
         let mut terminal = Terminal::new(8, 2).unwrap();
         terminal.feed(["shell", "\x1b[?1047h", "\x1b[Hvim"]);
         assert_eq!(terminal.active_screen_kind(), ScreenKind::Alternate);
-        assert_eq!(terminal.screen().line(0).unwrap().text().trim_end(), "vim");
+        assert_eq!(terminal.screen().row(0).unwrap().text().trim_end(), "vim");
         assert_eq!(terminal.primary_screen().text()[0], "shell");
         terminal.feed("\x1b[?1047l");
         assert_eq!(terminal.active_screen_kind(), ScreenKind::Primary);
 
-        assert_eq!(
-            terminal.screen().line(0).unwrap().text().trim_end(),
-            "shell"
-        );
+        assert_eq!(terminal.screen().row(0).unwrap().text().trim_end(), "shell");
     }
 
     #[test]
@@ -596,7 +837,7 @@ mod tests {
 
                         terminal.feed("\x1b8X");
                         assert_eq!(terminal.cursor().position(), Some((1, 1)));
-                        assert_eq!(terminal.screen().line(1).unwrap().cells()[0].char(), 'X');
+                        assert_eq!(terminal.screen().row(1).unwrap().cells()[0].char(), 'X');
                     }
 
                     assert_dump_equivalent(&original, &restored);
@@ -630,8 +871,8 @@ mod tests {
                 for terminal in [&mut original, &mut restored] {
                     terminal.feed("\x1b[?7hX");
                     assert_eq!(terminal.cursor().position(), Some((1, 1)));
-                    assert_eq!(terminal.screen().line(0).unwrap().text(), "ABCD");
-                    assert_eq!(terminal.screen().line(1).unwrap().text(), "X   ");
+                    assert_eq!(terminal.screen().row(0).unwrap().text(), "ABCD");
+                    assert_eq!(terminal.screen().row(1).unwrap().text(), "X   ");
                 }
 
                 assert_dump_equivalent(&original, &restored);
@@ -651,11 +892,11 @@ mod tests {
     fn zwj_emoji_is_stored_in_one_two_column_cell() {
         let mut terminal = Terminal::new(8, 1).unwrap();
         terminal.feed("🐻‍❄️x");
-        let line = terminal.screen().line(0).unwrap();
-        assert_eq!(line.text().trim_end(), "🐻‍❄️x");
-        assert_eq!(line.cells()[0].contents(), "🐻‍❄️");
-        assert_eq!(line.cells()[0].width(), 2);
-        assert_eq!(line.cells()[1].width(), 0);
+        let row = terminal.screen().row(0).unwrap();
+        assert_eq!(row.text().trim_end(), "🐻‍❄️x");
+        assert_eq!(row.cells()[0].contents(), "🐻‍❄️");
+        assert_eq!(row.cells()[0].width(), 2);
+        assert_eq!(row.cells()[1].width(), 0);
         assert_eq!(terminal.cursor().position(), Some((3, 0)));
     }
 
@@ -669,7 +910,7 @@ mod tests {
             via_chars.feed(ch);
         }
         assert_eq!(
-            via_chars.screen().line(0).unwrap().cells()[0].contents(),
+            via_chars.screen().row(0).unwrap().cells()[0].contents(),
             cluster
         );
         via_str.engine.assert_dump_equivalent(&via_chars.engine);
@@ -680,8 +921,8 @@ mod tests {
         let mut terminal = Terminal::new(8, 1).unwrap();
         terminal.feed("e");
         terminal.feed("\u{0301}");
-        let line = terminal.screen().line(0).unwrap();
-        assert_eq!(line.cells()[0].contents(), "e\u{0301}");
+        let row = terminal.screen().row(0).unwrap();
+        assert_eq!(row.cells()[0].contents(), "e\u{0301}");
         assert_eq!(terminal.cursor().position(), Some((1, 0)));
     }
 
@@ -735,7 +976,7 @@ mod tests {
             terminal.feed("\x1b8");
             assert_eq!(terminal.cursor().position(), Some((4, 0)));
             terminal.feed("X");
-            assert_eq!(terminal.screen().line(0).unwrap().text(), "ABCX");
+            assert_eq!(terminal.screen().row(0).unwrap().text(), "ABCX");
         }
 
         assert_dump_equivalent(&original, &restored);
@@ -871,6 +1112,7 @@ mod tests {
                 DecMode::AltScreenBuffer,
                 DecMode::SaveCursor,
                 DecMode::SaveCursorAltScreenBuffer,
+                DecMode::BracketedPaste,
             ]),
             0..=6,
         )
@@ -885,13 +1127,14 @@ mod tests {
             1 => (0..=20u16).prop_map(Rep),
             4 => prop::sample::select(vec![
                 Bs, Cr, Ctc(CtcOp::Set), Ctc(CtcOp::ClearCurrentColumn),
-                Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decstr,
+                Ctc(CtcOp::ClearAll), Decaln, Decrc, Decsc, Decst8c, Decstr,
                 Ed(EdScope::Below), Ed(EdScope::Above), Ed(EdScope::All),
+                Ed(EdScope::ScrollAll),
                 Ed(EdScope::SavedLines), El(ElScope::ToRight), El(ElScope::ToLeft),
                 El(ElScope::All), Ht, Hts, Lf, Nel, Ri, Ris, Scorc, Scosc, Si, So,
                 Tbc(TbcScope::CurrentColumn), Tbc(TbcScope::All),
             ]),
-            2 => (gen_param(), gen_param()).prop_map(|(row, col)| Cup(row, col)),
+            2 => (gen_param(), gen_param()).prop_map(|(row_index, col)| Cup(row_index, col)),
             2 => gen_cursor_presentation().prop_map(Decrsps),
             1 => (gen_param(), gen_param()).prop_map(|(top, bottom)| Decstbm(top, bottom)),
             2 => (any::<bool>(), ansi_modes).prop_map(|(set, modes)| {
@@ -925,8 +1168,8 @@ mod tests {
 
     pub(crate) fn gen_cursor_presentation() -> impl Strategy<Value = CursorPresentation> {
         (gen_param(), gen_param(), any::<bool>(), any::<bool>()).prop_map(
-            |(row, col, origin_mode, pending_wrap)| CursorPresentation {
-                row,
+            |(row_index, col, origin_mode, pending_wrap)| CursorPresentation {
+                row: row_index,
                 col,
                 origin_mode,
                 pending_wrap,
@@ -1059,7 +1302,7 @@ mod tests {
                     terminal.execute(function.clone());
                     terminal.engine.verify();
                     let (_, rows) = terminal.size();
-                    let retained = terminal.primary_screen().all_lines().count();
+                    let retained = terminal.primary_screen().all_rows().count();
 
                     match limit {
                         Some(limit) => assert!((rows..=rows + limit).contains(&retained)),
@@ -1068,7 +1311,7 @@ mod tests {
                     }
 
                     if terminal.active_screen_kind() == ScreenKind::Alternate {
-                        assert_eq!(terminal.screen().all_lines().count(), rows);
+                        assert_eq!(terminal.screen().all_rows().count(), rows);
                     }
                 }
             }
@@ -1086,7 +1329,7 @@ mod tests {
             terminal.resize(new_cols, new_rows);
             terminal.engine.verify();
             execute_and_verify(&mut terminal, &input2);
-            assert!(terminal.primary_screen().all_lines().count() >= terminal.size().1);
+            assert!(terminal.primary_screen().all_rows().count() >= terminal.size().1);
         }
 
         #[test]
@@ -1134,16 +1377,18 @@ mod tests {
             execute_and_verify(&mut terminal, &input);
             let active = terminal.active_screen_kind();
             let cursor = terminal.cursor();
-            let visible: Vec<_> = terminal.screen().all_lines().cloned().collect();
-            let primary: Vec<_> = terminal.primary_screen().all_lines().cloned().collect();
+            let visible: Vec<_> = terminal.screen().all_rows().cloned().collect();
+            let primary: Vec<_> = terminal.primary_screen().all_rows().cloned().collect();
+            let bracketed_paste = terminal.bracketed_paste_mode();
             terminal.execute(Function::Decstr);
             terminal.engine.verify();
             prop_assert_eq!(terminal.size(), (cols, rows));
             prop_assert_eq!(terminal.active_screen_kind(), active);
             prop_assert_eq!(terminal.cursor().position(), Some((cursor.col, cursor.row)));
             prop_assert!(!terminal.cursor_key_app_mode());
-            prop_assert!(terminal.screen().all_lines().eq(visible.iter()));
-            prop_assert!(terminal.primary_screen().all_lines().eq(primary.iter()));
+            prop_assert_eq!(terminal.bracketed_paste_mode(), bracketed_paste);
+            prop_assert!(terminal.screen().all_rows().eq(visible.iter()));
+            prop_assert!(terminal.primary_screen().all_rows().eq(primary.iter()));
 
             // Absolute positioning, default rendition/charset, and pending
             // wrap check the reset modes through their observable behavior.
@@ -1151,9 +1396,9 @@ mod tests {
             prop_assert_eq!(terminal.cursor().position(), Some((cols - 1, 0)));
             terminal.execute(print('q'));
             prop_assert_eq!(terminal.cursor().position(), Some((cols, 0)));
-            let line = terminal.screen().line(0).unwrap();
-            prop_assert_eq!(line.cells()[cols - 1].char(), 'q');
-            prop_assert!(line.cells()[cols - 1].pen().is_default());
+            let row = terminal.screen().row(0).unwrap();
+            prop_assert_eq!(row.cells()[cols - 1].char(), 'q');
+            prop_assert!(row.cells()[cols - 1].pen().is_default());
             terminal.engine.verify();
         }
     }
@@ -1285,8 +1530,8 @@ mod tests {
     #[derive(Debug, PartialEq)]
     struct CallReport {
         number: usize,
-        before: Vec<crate::Line>,
-        after: Vec<crate::Line>,
+        before: Vec<crate::Row>,
+        after: Vec<crate::Row>,
         size_before: (usize, usize),
         size_after: (usize, usize),
         operations: Vec<Operation<'static>>,
@@ -1310,7 +1555,7 @@ mod tests {
     struct Calls {
         notifications: Vec<Notification>,
         number: usize,
-        before: Vec<crate::Line>,
+        before: Vec<crate::Row>,
         size_before: (usize, usize),
         operations: Vec<Operation<'static>>,
         hooks: Vec<&'static str>,
@@ -1340,7 +1585,7 @@ mod tests {
             self.before = context
                 .terminal()
                 .screen()
-                .visible_lines()
+                .visible_rows()
                 .cloned()
                 .collect();
 
@@ -1383,11 +1628,11 @@ mod tests {
             self.hooks.push("after");
         }
 
-        fn evicted(&mut self, _: &mut Observation<'_>, line: &crate::Line) {
+        fn evicted(&mut self, _: &mut Observation<'_>, row: &crate::Row) {
             self.check_order();
             assert!(self.active);
             assert!(!self.in_action);
-            self.notifications.push(Notification::Evicted(line.text()));
+            self.notifications.push(Notification::Evicted(row.text()));
         }
 
         fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
@@ -1403,7 +1648,7 @@ mod tests {
                 after: context
                     .terminal()
                     .screen()
-                    .visible_lines()
+                    .visible_rows()
                     .cloned()
                     .collect(),
                 size_before: self.size_before,
@@ -1559,18 +1804,18 @@ mod tests {
                 };
 
                 assert!(!text.is_empty());
-                assert!(context.terminal().primary_screen().all_lines().count() > 2);
+                assert!(context.terminal().primary_screen().all_rows().count() > 2);
                 self.printed += text.chars().count();
                 self.runs += 1;
             }
 
-            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Row) {
                 assert_eq!(self.printed, self.expected);
                 self.evicted += 1;
             }
 
             fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
-                assert_eq!(context.terminal().primary_screen().all_lines().count(), 2);
+                assert_eq!(context.terminal().primary_screen().all_rows().count(), 2);
 
                 (self.runs, self.evicted)
             }
@@ -1949,21 +2194,21 @@ mod tests {
                 Event::Action(operation) => terminal.execute_with(operation, &mut calls),
             };
 
-            assert!(replay.screen().visible_lines().eq(&report.before));
+            assert!(replay.screen().visible_rows().eq(&report.before));
             assert_eq!(replay.size(), report.size_before);
             replay.execute(report.operations);
-            assert!(replay.screen().visible_lines().eq(&report.after));
+            assert!(replay.screen().visible_rows().eq(&report.after));
             assert_eq!(replay.size(), report.size_after);
             replay.engine.assert_execution_equivalent(&terminal.engine);
         }
     }
 
     #[test]
-    fn evicted_lines_are_borrowed_and_released_one_at_a_time() {
+    fn evicted_rows_are_borrowed_and_released_one_at_a_time() {
         struct Evictions {
             anchors: Vec<crate::Anchor>,
             addresses: Vec<*const crate::Cell>,
-            lines: Vec<String>,
+            row_texts: Vec<String>,
             active: crate::ScreenKind,
         }
 
@@ -1976,14 +2221,14 @@ mod tests {
                 }
             }
 
-            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+            fn evicted(&mut self, context: &mut Observation<'_>, row: &crate::Row) {
                 assert_eq!(context.terminal().active_screen_kind(), self.active);
-                let index = self.lines.len();
-                assert_eq!(line.cells().as_ptr(), self.addresses[index]);
+                let index = self.row_texts.len();
+                assert_eq!(row.cells().as_ptr(), self.addresses[index]);
                 assert!(context.resolve(&self.anchors[index]).is_none());
 
                 for anchor in &self.anchors[..index] {
-                    // Retaining an original evicted line would keep its weak marks alive.
+                    // Retaining an original evicted row would keep its weak marks alive.
                     assert_eq!(std::sync::Arc::weak_count(&anchor.0), 0);
                 }
 
@@ -1991,21 +2236,21 @@ mod tests {
                     assert!(context.resolve(anchor).is_some());
                 }
 
-                self.lines.push(line.text().trim_end().to_owned());
+                self.row_texts.push(row.text().trim_end().to_owned());
             }
 
             fn end(&mut self, context: &mut Observation<'_>) -> Self::Output {
-                for anchor in &self.anchors[..self.lines.len()] {
+                for anchor in &self.anchors[..self.row_texts.len()] {
                     assert!(context.resolve(anchor).is_none());
                     assert_eq!(std::sync::Arc::weak_count(&anchor.0), 0);
                 }
 
                 assert_eq!(
-                    context.terminal().primary_screen().all_lines().count(),
+                    context.terminal().primary_screen().all_rows().count(),
                     context.terminal().size().1
                 );
 
-                std::mem::take(&mut self.lines)
+                std::mem::take(&mut self.row_texts)
             }
         }
 
@@ -2033,12 +2278,12 @@ mod tests {
             terminal.feed("first\r\nsecond\r\nthird\r\nlast");
 
             let anchors = (0..4)
-                .map(|row| {
+                .map(|row_index| {
                     terminal
                         .anchor_at(crate::Position {
                             screen: crate::ScreenKind::Primary,
                             col: 0,
-                            row,
+                            row: row_index,
                         })
                         .unwrap()
                 })
@@ -2048,10 +2293,10 @@ mod tests {
                 anchors,
                 addresses: terminal
                     .screen()
-                    .visible_lines()
-                    .map(|line| line.cells().as_ptr())
+                    .visible_rows()
+                    .map(|row| row.cells().as_ptr())
                     .collect(),
-                lines: Vec::new(),
+                row_texts: Vec::new(),
                 active: if alternate {
                     crate::ScreenKind::Alternate
                 } else {
@@ -2062,7 +2307,7 @@ mod tests {
             let mut other = Evictions {
                 anchors: evictions.anchors.clone(),
                 addresses: evictions.addresses.clone(),
-                lines: Vec::new(),
+                row_texts: Vec::new(),
                 active: evictions.active,
             };
 
@@ -2070,11 +2315,11 @@ mod tests {
                 terminal.feed("\x1b[?1047h");
             }
 
-            let (rows, (lines, other_lines)) =
+            let (rows, (row_texts, other_row_texts)) =
                 terminal.execute_with(operation, (DirtyRows::new(), (&mut evictions, &mut other)));
 
-            assert_eq!(lines, other_lines);
-            assert_eq!(lines, expected);
+            assert_eq!(row_texts, other_row_texts);
+            assert_eq!(row_texts, expected);
             assert_eq!(rows, (0..visible.len()).collect::<Vec<_>>());
             assert_eq!(terminal.primary_screen().text(), visible);
         }
@@ -2226,7 +2471,7 @@ mod tests {
                 assert!(self.0.is_empty());
             }
 
-            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+            fn evicted(&mut self, context: &mut Observation<'_>, row: &crate::Row) {
                 assert_eq!(context.terminal().size(), (2, 1));
 
                 assert_eq!(
@@ -2234,7 +2479,7 @@ mod tests {
                     ScreenKind::Alternate
                 );
 
-                self.0.push(line.text());
+                self.0.push(row.text());
             }
 
             fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
@@ -2280,7 +2525,7 @@ mod tests {
                 assert_eq!(self.evicted, 0);
             }
 
-            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Row) {
                 self.evicted += 1;
             }
 
@@ -2318,7 +2563,7 @@ mod tests {
         #[derive(Default)]
         struct Evictions {
             alternate: Option<crate::Anchor>,
-            lines: Vec<String>,
+            row_texts: Vec<String>,
         }
 
         impl Observer for Evictions {
@@ -2332,7 +2577,7 @@ mod tests {
             }
 
             fn after(&mut self, context: &mut Observation<'_>, _: &Operation<'_>) {
-                assert!(self.lines.is_empty());
+                assert!(self.row_texts.is_empty());
 
                 if let Some(anchor) = &self.alternate {
                     assert!(context.resolve(anchor).is_some());
@@ -2340,27 +2585,27 @@ mod tests {
                 }
             }
 
-            fn evicted(&mut self, context: &mut Observation<'_>, line: &crate::Line) {
+            fn evicted(&mut self, context: &mut Observation<'_>, row: &crate::Row) {
                 let anchor = self.alternate.as_ref().unwrap();
                 assert!(context.resolve(anchor).is_none());
                 assert!(!anchor.is_registered());
-                self.lines.push(line.text());
+                self.row_texts.push(row.text());
             }
 
             fn end(&mut self, _: &mut Observation<'_>) -> Self::Output {
-                core::mem::take(&mut self.lines)
+                core::mem::take(&mut self.row_texts)
             }
         }
 
         for switch in ["", "\x1b[?1047l"] {
             let mut terminal = Terminal::new(4, 1).unwrap();
 
-            let lines = terminal.feed_with(
+            let row_texts = terminal.feed_with(
                 ["one\r\ntwo\r\n", "\x1b[?1047h", "alt", "\r\n", switch],
                 Evictions::default(),
             );
 
-            assert_eq!(lines, ["one ", "two "]);
+            assert_eq!(row_texts, ["one ", "two "]);
         }
     }
 
@@ -2396,7 +2641,7 @@ mod tests {
             let mut transcript = Transcript::new();
             let mut text = terminal.feed_with("aa\r\nbb\r\ncc\r\ndd", &mut transcript);
             assert_eq!(text, evicted);
-            assert_eq!(terminal.primary_screen().all_lines().count(), retained);
+            assert_eq!(terminal.primary_screen().all_rows().count(), retained);
 
             if retained == 4 {
                 assert_eq!(terminal.resolve(&anchor).unwrap().row, -2);
@@ -2423,7 +2668,7 @@ mod tests {
             terminal.feed_with("aa\r\nbb\r\ncc\r\ndd\x1b[?1049h", &mut transcript);
             let mut text = terminal.resize_with(4, 1, &mut transcript);
             assert_eq!(text, evicted);
-            assert_eq!(terminal.primary_screen().all_lines().count(), retained);
+            assert_eq!(terminal.primary_screen().all_rows().count(), retained);
 
             if limit.is_none() {
                 assert_eq!(terminal.resolve(&anchor).unwrap().row, -3);
@@ -2477,27 +2722,46 @@ mod tests {
     }
 
     #[test]
-    fn alternate_screen_ed2_erases_without_archiving() {
-        let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
-        let mut transcript = Transcript::new();
-        terminal.feed_with("history\r\none\r\ntwo\x1b[?1049halt", &mut transcript);
-        let cursor = terminal.cursor();
-        let anchor = terminal.anchor_at_cursor();
-        assert!(terminal.feed_with("\x1b[2J", &mut transcript).is_empty());
-        assert_eq!(terminal.cursor(), cursor);
-        assert!(terminal.resolve(&anchor).is_none());
+    fn alternate_full_ed_erases_without_archiving() {
+        use crate::ansi::{DecMode, DecModes, Function::*};
 
-        assert!(
-            terminal
-                .screen()
-                .visible_lines()
-                .all(|line| line.is_blank())
-        );
+        for clear in [Ed(EdScope::All), Ed(EdScope::ScrollAll)] {
+            let mut terminal = Terminal::with_scrollback(8, 2, None).unwrap();
+            let mut transcript = Transcript::new();
 
-        assert_eq!(terminal.screen().all_lines().count(), 2);
-        assert_eq!(terminal.primary_screen().text(), ["history", "one", "two"]);
-        terminal.feed_with("\x1b[?1049l", &mut transcript);
-        assert_eq!(transcript.finish(&terminal), ["history", "one", "two"]);
+            terminal.execute_with(
+                [
+                    Print("history".into()),
+                    Cr,
+                    Lf,
+                    Print("one".into()),
+                    Cr,
+                    Lf,
+                    Print("two".into()),
+                    Decset(DecModes::one(DecMode::SaveCursorAltScreenBuffer)),
+                    Print("alt".into()),
+                ],
+                &mut transcript,
+            );
+
+            let cursor = terminal.cursor();
+            let anchor = terminal.anchor_at_cursor();
+            assert!(terminal.execute_with(clear, &mut transcript).is_empty());
+            assert_eq!(terminal.cursor(), cursor);
+            assert!(terminal.resolve(&anchor).is_none());
+
+            assert!(terminal.screen().visible_rows().all(|row| row.is_blank()));
+
+            assert_eq!(terminal.screen().all_rows().count(), 2);
+            assert_eq!(terminal.primary_screen().text(), ["history", "one", "two"]);
+
+            terminal.execute_with(
+                Decrst(DecModes::one(DecMode::SaveCursorAltScreenBuffer)),
+                &mut transcript,
+            );
+
+            assert_eq!(transcript.finish(&terminal), ["history", "one", "two"]);
+        }
     }
 
     #[test]
@@ -2507,8 +2771,8 @@ mod tests {
         let mut restored = Terminal::with_scrollback(8, 2, Some(2)).unwrap();
         restored.feed(original.dump());
         // Dump initializes visible buffers; retained history is not serialized.
-        assert_eq!(original.primary_screen().all_lines().count(), 4);
-        assert_eq!(restored.primary_screen().all_lines().count(), 2);
+        assert_eq!(original.primary_screen().all_rows().count(), 4);
+        assert_eq!(restored.primary_screen().all_rows().count(), 2);
 
         for tail in ["", "m!", "\r\nsix", "\x1b[?1049halt\x1b[?1049l"] {
             original.feed(tail);
@@ -2527,7 +2791,7 @@ mod tests {
 
         send_sync::<Terminal>();
         send_sync::<std::sync::RwLock<Terminal>>();
-        send_sync::<crate::Line>();
+        send_sync::<crate::Row>();
         send_sync::<crate::Anchor>();
         send_sync::<crate::Parser>();
         send_sync::<ShellTracker>();
@@ -2576,7 +2840,7 @@ mod tests {
         terminal.feed("\x1b[31");
         terminal.execute(print('x'));
         terminal.feed("mY");
-        let cells = terminal.screen().line(0).unwrap().cells();
+        let cells = terminal.screen().row(0).unwrap().cells();
         assert_eq!(cells[0].char(), 'x');
         assert_eq!(cells[0].pen().foreground(), None);
         assert_eq!(cells[1].char(), 'Y');
@@ -2594,7 +2858,7 @@ mod tests {
         impl Observer for Evictions {
             type Output = usize;
 
-            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Line) {
+            fn evicted(&mut self, _: &mut Observation<'_>, _: &crate::Row) {
                 assert!(self.exhausted.get());
                 self.count.set(self.count.get() + 1);
             }
@@ -2719,8 +2983,8 @@ mod tests {
         terminal.feed_with("\x1b[4h界\x1b[C", &mut dirty);
         let rows = terminal.execute_with(print('界'), &mut dirty);
         assert_eq!(rows, [0, 1]);
-        assert_eq!(terminal.screen().line(0).unwrap().text(), "界");
-        assert_eq!(terminal.screen().line(1).unwrap().text(), "界");
+        assert_eq!(terminal.screen().row(0).unwrap().text(), "界");
+        assert_eq!(terminal.screen().row(1).unwrap().text(), "界");
         terminal.engine.verify();
     }
 
@@ -2789,8 +3053,9 @@ mod tests {
 
             let dirty = report.dirty_rows();
 
-            for (row, (before, after)) in report.before.iter().zip(&report.after).enumerate() {
-                assert!(before.cells() == after.cells() || dirty.contains(&row));
+            for (row_index, (before, after)) in report.before.iter().zip(&report.after).enumerate()
+            {
+                assert!(before.cells() == after.cells() || dirty.contains(&row_index));
             }
 
             terminal.engine.verify();
@@ -2824,8 +3089,8 @@ mod tests {
                 for function in &functions {
                     let before: Vec<_> = split
                         .screen()
-                        .visible_lines()
-                        .map(|line| line.cells().to_vec())
+                        .visible_rows()
+                        .map(|row| row.cells().to_vec())
                         .collect();
 
                     let dirty_rows = match function {
@@ -2838,14 +3103,14 @@ mod tests {
 
                     split.engine.verify();
 
-                    for (row, (before, after)) in before
+                    for (row_index, (before, after)) in before
                         .iter()
-                        .zip(split.screen().visible_lines())
+                        .zip(split.screen().visible_rows())
                         .enumerate()
                     {
                         prop_assert!(
-                            before == after.cells() || dirty_rows.contains(&row),
-                            "missing repaint: row {}, function {:?}", row, function
+                            before == after.cells() || dirty_rows.contains(&row_index),
+                            "missing repaint: row {}, function {:?}", row_index, function
                         );
                     }
 
@@ -2861,8 +3126,8 @@ mod tests {
 
                 let before: Vec<_> = split
                     .screen()
-                    .visible_lines()
-                    .map(|line| line.cells().to_vec())
+                    .visible_rows()
+                    .map(|row| row.cells().to_vec())
                     .collect();
 
                 let dirty_rows = split.resize_with(cols, rows, &mut split_dirty);
@@ -2872,16 +3137,16 @@ mod tests {
                     &dirty_rows
                 );
 
-                for (row, line) in split.screen().visible_lines().enumerate() {
+                for (row_index, row) in split.screen().visible_rows().enumerate() {
                     prop_assert!(
-                        before.get(row).is_some_and(|cells| cells == line.cells())
-                            || dirty_rows.contains(&row),
+                        before.get(row_index).is_some_and(|cells| cells == row.cells())
+                            || dirty_rows.contains(&row_index),
                         "missing repaint: row {}, resize {:?} -> {:?}",
-                        row, before_size, (cols, rows)
+                        row_index, before_size, (cols, rows)
                     );
                 }
 
-                prop_assert!(dirty_rows.iter().all(|&row| row < rows));
+                prop_assert!(dirty_rows.iter().all(|&row_index| row_index < rows));
 
                 if before_size == (cols, rows) {
                     prop_assert!(dirty_rows.is_empty());

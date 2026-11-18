@@ -36,7 +36,7 @@ Requires Rust 1.86 or later:
 
 ```toml
 [dependencies]
-avt = "0.20"
+avt = "0.21"
 ```
 
 The library is unconditionally `no_std` with `alloc`, requiring an allocator and
@@ -50,9 +50,9 @@ fn main() -> Result<(), avt::InvalidSize> {
     let mut terminal = Terminal::new(80, 24)?;
     terminal.feed("hello\r\nworld");
 
-    let line = terminal.screen().line(1).unwrap();
+    let row = terminal.screen().row(1).unwrap();
 
-    assert_eq!(line.text().trim_end(), "world");
+    assert_eq!(row.text().trim_end(), "world");
     assert_eq!(terminal.cursor().position(), Some((5, 1)));
 
     Ok(())
@@ -77,11 +77,11 @@ use avt::Terminal;
 fn main() -> Result<(), avt::InvalidSize> {
     let mut terminal = Terminal::new(80, 24)?;
     let mut dirty = DirtyRows::new();
-    let rows = terminal.feed_with("hello\r\nworld", &mut dirty);
+    let row_indices = terminal.feed_with("hello\r\nworld", &mut dirty);
 
-    for row in rows {
-        let line = terminal.screen().line(row).unwrap();
-        // Render line.cells(), or inspect line.text().
+    for row_index in row_indices {
+        let row = terminal.screen().row(row_index).unwrap();
+        // Render row.cells(), or inspect row.text().
     }
 
     let cursor = terminal.cursor().position();
@@ -110,7 +110,7 @@ fn main() -> Result<(), avt::InvalidSize> {
 ```
 
 `Transcript` collects plain-text output from the primary screen, joining
-soft-wrapped lines and preserving text as it scrolls out of view. Call `finish`
+soft-wrapped rows and preserving text as it scrolls out of view. Call `finish`
 to collect the remaining content. Alternate-screen content is excluded.
 
 avt is still pre-1.0. The API is settling, but breaking changes remain

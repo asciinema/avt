@@ -95,6 +95,8 @@ pub enum Function<'a> {
     Decsc,
     /// DEC Set Mode.
     Decset(DecModes),
+    /// DEC Set Tab at Every 8 Columns: replace all tab stops with defaults.
+    Decst8c,
     /// DEC Set Top and Bottom Margins: `(top, bottom)`, inclusive.
     /// Zero selects the first row for `top` and the last for `bottom`.
     Decstbm(u16, u16),
@@ -186,6 +188,7 @@ impl Function<'_> {
             Self::Decrst(modes) => Function::Decrst(modes),
             Self::Decsc => Function::Decsc,
             Self::Decset(modes) => Function::Decset(modes),
+            Self::Decst8c => Function::Decst8c,
             Self::Decstbm(top, bottom) => Function::Decstbm(top, bottom),
             Self::Decstr => Function::Decstr,
             Self::Dl(n) => Function::Dl(n),
@@ -306,6 +309,7 @@ pub enum DecMode {
     AltScreenBuffer = 1047,           // xterm
     SaveCursor = 1048,                // xterm
     SaveCursorAltScreenBuffer = 1049, // xterm
+    BracketedPaste = 2004,            // xterm
 }
 
 /// The region selected by Erase in Display ([`Function::Ed`]).
@@ -317,7 +321,10 @@ pub enum EdScope {
     Above,
     /// The entire visible display.
     All,
-    /// Retained scrollback lines.
+    /// Move the occupied primary-screen prefix into scrollback, then erase the
+    /// entire display. On the alternate screen, erase the display.
+    ScrollAll,
+    /// Retained scrollback rows.
     SavedLines,
 }
 
@@ -755,7 +762,7 @@ impl Parser {
         let mut chars = input.chars();
 
         while let Some(ch) = chars.next() {
-            if let Some(function) = self.advance(ch) {
+            if let Some(function) = self.advance(ch, &mut chars) {
                 *input = chars.as_str();
 
                 return Some(function);
@@ -776,7 +783,11 @@ impl Parser {
     }
 
     #[inline(always)]
-    fn advance(&mut self, input: char) -> Option<Function<'static>> {
+    fn advance(
+        &mut self,
+        input: char,
+        chars: &mut core::str::Chars<'_>,
+    ) -> Option<Function<'static>> {
         use ParserState::*;
 
         // DCS framing is independent of the selected command's payload syntax.
@@ -817,7 +828,12 @@ impl Parser {
                 unreachable!("ground-state printing is handled in next_function");
             }
 
-            (CsiParam, '\u{30}'..='\u{3b}') => {
+            (CsiEntry | CsiParam, '0'..='9') => {
+                self.state = CsiParam;
+                self.csi_digits(input, chars);
+            }
+
+            (CsiParam, ':' | ';') => {
                 self.param(input);
             }
 
@@ -839,7 +855,7 @@ impl Parser {
                 return self.csi_dispatch(input);
             }
 
-            (CsiEntry, '\u{30}'..='\u{39}') | (CsiEntry, '\u{3b}') => {
+            (CsiEntry, ';') => {
                 self.state = CsiParam;
                 self.param(input);
             }
@@ -855,6 +871,11 @@ impl Parser {
             (Escape, '\u{20}'..='\u{2f}') => {
                 self.state = EscapeIntermediate;
                 self.collect(input);
+            }
+
+            // Legacy screen/tmux titles have the same framing as ignored strings.
+            (Escape, 'k') => {
+                self.state = SosPmApcString;
             }
 
             (EscapeIntermediate, '\u{30}'..='\u{7e}')
@@ -1077,6 +1098,26 @@ impl Parser {
         self.intermediate = Some(input);
     }
 
+    // The state machine handles the first digit; consume the rest without
+    // dispatching each byte. The first non-digit remains for normal parsing.
+    fn csi_digits(&mut self, first: char, chars: &mut core::str::Chars<'_>) {
+        let param = &mut self.params[self.cur_param];
+        param.add_digit(first as u8 - b'0');
+        let rest = chars.as_str();
+        let mut consumed = 0;
+
+        for byte in rest.bytes() {
+            if !byte.is_ascii_digit() {
+                break;
+            }
+
+            param.add_digit(byte - b'0');
+            consumed += 1;
+        }
+
+        *chars = rest[consumed..].chars();
+    }
+
     fn param(&mut self, input: char) {
         if input == ';' {
             self.cur_param += 1;
@@ -1151,6 +1192,7 @@ impl Parser {
                 1 => Some(Ed(EdScope::Above)),
                 2 => Some(Ed(EdScope::All)),
                 3 => Some(Ed(EdScope::SavedLines)),
+                22 => Some(Ed(EdScope::ScrollAll)),
                 _ => None,
             },
 
@@ -1230,6 +1272,8 @@ impl Parser {
             (None, 'u') => Some(Scorc),
 
             (Some('!'), 'p') => Some(Decstr),
+
+            (Some('?'), 'W') if self.cur_param == 0 && ps[0].parts() == [5] => Some(Decst8c),
 
             (Some('?'), 'h') => Some(Decset(DecModes::collect(
                 ps[..=self.cur_param].iter().filter_map(dec_mode),
@@ -1483,6 +1527,7 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
+                    BracketedPaste => 2004,
                 })
                 .map(|param| param.to_string())
                 .collect::<Vec<_>>();
@@ -1504,12 +1549,15 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
                     AltScreenBuffer => 1047,
                     SaveCursor => 1048,
                     SaveCursorAltScreenBuffer => 1049,
+                    BracketedPaste => 2004,
                 })
                 .map(|param| param.to_string())
                 .collect::<Vec<_>>();
 
             push_csi(seq, Some('?'), &params, 'h');
         }
+
+        Decst8c => push_csi(seq, Some('?'), &["5".to_owned()], 'W'),
 
         Decstbm(top, bottom) => {
             push_csi(seq, None, &[top.to_string(), bottom.to_string()], 'r');
@@ -1525,6 +1573,7 @@ fn encode_function(seq: &mut String, fun: &Function<'_>) {
                 Above => 1,
                 EdScope::All => 2,
                 SavedLines => 3,
+                ScrollAll => 22,
             };
 
             push_csi(seq, None, &[param.to_string()], 'J');
@@ -2019,6 +2068,7 @@ fn dec_mode(param: &Param) -> Option<DecMode> {
         1047 => Some(AltScreenBuffer),
         1048 => Some(SaveCursor),
         1049 => Some(SaveCursorAltScreenBuffer),
+        2004 => Some(BracketedPaste),
         _ => None,
     }
 }
@@ -2333,6 +2383,44 @@ mod tests {
         assert_eq!(parser.state, ParserState::Ground);
     }
 
+    #[test]
+    fn csi_digit_runs_match_character_feeds_and_resume() {
+        for input in [
+            "\x1b[123;456H",
+            "\u{9b}38:2::123:45:6m",
+            "\x1b[?1049;25h",
+            "\x1b[12\n34;56H",
+            "\x1b[123\x18abc",
+            "\x1b[123\x1b[45C",
+            "\x1b[123\x7f45C",
+            "\x1b[123é",
+            "\x1b[;000123;;45H",
+            "\x1b[65536;999999999999999999999999H",
+            "\x1b[12:34:56:78:90:12:34",
+            "\x1b[123;456",
+        ] {
+            let input: Vec<_> = input.chars().collect();
+            let mut scalar = Parser::new();
+            let mut expected = Vec::new();
+
+            for ch in &input {
+                expected.extend(emit(&mut scalar, core::slice::from_ref(ch)));
+            }
+
+            let expected = coalesce(expected);
+
+            for split in 0..=input.len() {
+                let mut parser = Parser::new();
+                let mut actual = emit(&mut parser, &input[..split]);
+                actual.extend(emit(&mut parser, &input[split..]));
+                assert_eq!(coalesce(actual), expected, "{input:?}, split {split}");
+                parser.assert_continuation_equivalent(&scalar);
+            }
+        }
+
+        assert_eq!(parse("\x1b[65536C"), [Cuf(0)]);
+    }
+
     fn sgr_ops<const N: usize>(ops: [super::SgrOp; N]) -> SgrOps {
         SgrOps::from(&ops[..])
     }
@@ -2372,8 +2460,8 @@ mod tests {
                 '\x1b', '\x18', '\x1a', '\u{9b}', '\u{9c}', '\u{9d}', '\u{90}', '\u{98}', '\u{9e}',
                 '\u{9f}', '[', ']', 'P', 'X', '^', '_', '?', '!', ';', ':', ' ', '#', '(', ')',
                 '@', 'A', 'B', 'C', 'D', 'H', 'J', 'K', 'L', 'M', 'P', 'S', 'T', 'W', 'X', 'Z',
-                '`', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'l', 'm', 'p', 'r', 's', 't', 'u', '0',
-                '1', '2', '3', '4', '5', '6', '7', '8', '9', '\x08', '\x09', '\x0a', '\x0d',
+                '`', 'a', 'b', 'd', 'e', 'f', 'g', 'h', 'k', 'l', 'm', 'p', 'r', 's', 't', 'u',
+                '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', '\x08', '\x09', '\x0a', '\x0d',
                 '\x0e', '\x0f',
             ]),
             (0x20u8..=0x7eu8).prop_map(|b| b as char),
@@ -2415,6 +2503,7 @@ mod tests {
             Just("\x1bP:".chars().collect()),
             Just("\x1bX".chars().collect()),
             Just("\x1bXabc".chars().collect()),
+            Just("\x1bk$ echo title".chars().collect()),
             Just("\u{9b}".chars().collect()),
             Just("\u{9b}12".chars().collect()),
             Just("\u{9d}title".chars().collect()),
@@ -2718,6 +2807,25 @@ mod tests {
     }
 
     #[test]
+    fn parse_decst8c_across_fragments() {
+        for input in ["\x1b[?5W", "\u{9b}?5W", "\x1b[?05W"] {
+            for (split, _) in input.char_indices() {
+                let mut parser = Parser::new();
+                feed(&mut parser, &input[..split]);
+
+                assert_eq!(parser.feed(&input[split..]).collect::<Vec<_>>(), [Decst8c]);
+            }
+        }
+    }
+
+    #[test]
+    fn parse_decst8c_rejects_unsupported_parameters() {
+        for params in ["", "0", "4", "5;0", "5;", "5:0"] {
+            assert_eq!(parse(&format!("\x1b[?{params}WX")), [print('X')]);
+        }
+    }
+
+    #[test]
     fn parse_csi_seq() {
         // Cursor movement and positioning.
         assert_eq!(parse("\x1b[A"), [Cuu(0)]);
@@ -2753,6 +2861,8 @@ mod tests {
         assert_eq!(parse("\x1b[2J"), [Ed(EdScope::All)]);
         assert_eq!(parse("\u{9b}2J"), [Ed(EdScope::All)]);
         assert_eq!(parse("\x1b[3J"), [Ed(EdScope::SavedLines)]);
+        assert_eq!(parse("\x1b[22J"), [Ed(EdScope::ScrollAll)]);
+        assert_eq!(parse("\u{9b}22J"), [Ed(EdScope::ScrollAll)]);
         assert_eq!(parse("\x1b[K"), [El(ElScope::ToRight)]);
         assert_eq!(parse("\x1b[0K"), [El(ElScope::ToRight)]);
         assert_eq!(parse("\x1b[1K"), [El(ElScope::ToLeft)]);
@@ -2988,6 +3098,54 @@ mod tests {
     }
 
     #[test]
+    fn bracketed_paste_modes_parse_and_encode() {
+        for (params, modes) in [
+            ("2004", dec_modes([DecMode::BracketedPaste])),
+            (
+                "1;2004;25",
+                dec_modes([
+                    DecMode::CursorKeys,
+                    DecMode::BracketedPaste,
+                    DecMode::TextCursorEnable,
+                ]),
+            ),
+            (
+                "2004;2004",
+                dec_modes([DecMode::BracketedPaste, DecMode::BracketedPaste]),
+            ),
+        ] {
+            for (final_char, function) in [('h', Decset(modes.clone())), ('l', Decrst(modes))] {
+                let encoded = format!("\x1b[?{params}{final_char}");
+                assert_eq!(super::encode(core::slice::from_ref(&function)), encoded);
+
+                for start in ["\x1b[", "\u{9b}"] {
+                    let input = format!("{start}?{params}{final_char}");
+                    assert_eq!(parse(&input), core::slice::from_ref(&function));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn legacy_titles_follow_ignored_string_framing() {
+        for (suffix, expected) in [
+            ("\x1b\\X", vec![print('X')]),
+            ("\u{9c}X", vec![print('X')]),
+            ("\x18X", vec![print('X')]),
+            ("\x1aX", vec![print('X')]),
+            ("\x1b[2;3HX", vec![Cup(2, 3), print('X')]),
+            ("\u{9b}2;3HX", vec![Cup(2, 3), print('X')]),
+            ("\u{84}X", vec![Lf, print('X')]),
+        ] {
+            for intro in ["\x1bk", "\x1b_"] {
+                let prefix = format!("{intro}$ echo '日'; pwd\x07\r\n\t\x08\x7fhidden");
+
+                assert_dump_continuation(&prefix, ParserState::SosPmApcString, suffix, &expected);
+            }
+        }
+    }
+
+    #[test]
     fn parse_string_seq() {
         assert_eq!(parse("\x1b]title\x07A"), [print('A')]);
         assert_eq!(parse("\x1b]title\x1b\\A"), [print('A')]);
@@ -3123,6 +3281,12 @@ mod tests {
     fn dump_restores_non_ground_state_continuations() {
         for (input, state, suffix, expected) in [
             ("\x1b", ParserState::Escape, "7X", vec![Decsc, print('X')]),
+            (
+                "\x1b[?5",
+                ParserState::CsiParam,
+                "WX",
+                vec![Decst8c, print('X')],
+            ),
             (
                 "\x1b(",
                 ParserState::EscapeIntermediate,
@@ -3276,6 +3440,7 @@ mod tests {
                 DecMode::SaveCursor,
                 DecMode::SaveCursorAltScreenBuffer,
             ])),
+            Decst8c,
             Decstbm(2, 5),
             Decstr,
             Dl(17),
@@ -3283,6 +3448,7 @@ mod tests {
             Ed(EdScope::Below),
             Ed(EdScope::Above),
             Ed(EdScope::All),
+            Ed(EdScope::ScrollAll),
             Ed(EdScope::SavedLines),
             El(ElScope::ToRight),
             El(ElScope::ToLeft),

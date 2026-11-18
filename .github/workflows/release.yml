@@ -1,0 +1,69 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v[0-9]+.[0-9]+.[0-9]+'
+
+permissions:
+  contents: read
+
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+    - uses: actions/checkout@v6
+    - uses: nixbuild/nix-quick-install-action@v34
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+    - uses: nix-community/cache-nix-action@v7
+      with:
+        primary-key: nix-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('**/*.nix', '**/flake.lock') }}
+        restore-prefixes-first-match: nix-${{ runner.os }}-${{ runner.arch }}
+    - name: Validate release version
+      run: |
+        version=$(nix develop --command cargo metadata --no-deps --format-version 1 \
+          | jq -r '.packages[] | select(.name == "avt") | .version')
+
+        if [[ "$RELEASE_TAG" != "v$version" ]]; then
+          echo "Release tag $RELEASE_TAG does not match Cargo.toml version $version" >&2
+          exit 1
+        fi
+    - name: Verify crate package
+      run: nix develop --command cargo publish --dry-run
+    - name: Authenticate with crates.io
+      id: auth
+      uses: rust-lang/crates-io-auth-action@v1
+    - name: Publish to crates.io
+      env:
+        CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+      run: nix develop --command cargo publish
+
+  github-release:
+    needs: publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      GH_REPO: ${{ github.repository }}
+
+    steps:
+    - name: Create the release if needed
+      run: |
+        if gh release view "$RELEASE_TAG" >/dev/null; then
+          echo "Reusing existing release $RELEASE_TAG"
+        else
+          gh release create "$RELEASE_TAG" --draft --verify-tag --title "$RELEASE_TAG"
+        fi
