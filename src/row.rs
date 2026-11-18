@@ -1,13 +1,11 @@
-use unicode_width::UnicodeWidthChar;
-
 use crate::anchor::{Anchor, Mark};
-use crate::cell::{Cell, Occupancy};
+use crate::cell::{Cell, Occupancy, display_width};
 use crate::pen::Pen;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec;
 use alloc::vec::Vec;
-use core::ops::{Index, Range, RangeFull};
+use core::ops::{Index, IndexMut, Range, RangeFull};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum CharWidth {
@@ -118,10 +116,15 @@ impl Row {
         self.cells[start..end].fill(Cell::blank(*pen));
     }
 
-    /// Replaces cells with one character, returning its cell width. Rejection
-    /// leaves the entire row untouched, including anchors and wrapping.
     pub(crate) fn replace_char(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
-        let char_width = self.char_display_width(ch);
+        let mut buf = [0u8; 4];
+        self.replace_cluster(col, ch.encode_utf8(&mut buf), pen)
+    }
+
+    /// Replaces cells with one grapheme cluster, returning its cell width.
+    /// Rejection leaves the entire row untouched, including anchors and wrapping.
+    pub(crate) fn replace_cluster(&mut self, col: usize, cluster: &str, pen: Pen) -> Option<usize> {
+        let char_width = self.cluster_display_width(cluster);
         let width = char_width.as_usize();
 
         if width > self.len().saturating_sub(col) {
@@ -133,23 +136,23 @@ impl Row {
             debug_assert!(col > 0);
             debug_assert_eq!(self.cells[col - 1].occupancy(), Occupancy::WideHead);
 
-            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+            self.cells[col - 1].set(" ", Occupancy::Single, pen);
         }
 
         if let Some(tail) = self.cells.get_mut(col + width) {
             if tail.occupancy() == Occupancy::WideTail {
-                tail.set(' ', Occupancy::Single, pen);
+                tail.set(" ", Occupancy::Single, pen);
             }
         }
 
         match char_width {
             CharWidth::Single => {
-                self.cells[col].set(ch, Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::Single, pen);
             }
 
             CharWidth::Double => {
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
         }
 
@@ -172,7 +175,12 @@ impl Row {
                 break;
             }
 
-            cell.set(char::from(byte), Occupancy::Single, pen);
+            // Printable ASCII is a single UTF-8 byte.
+            cell.set(
+                core::str::from_utf8(&[byte]).unwrap(),
+                Occupancy::Single,
+                pen,
+            );
             written += 1;
         }
 
@@ -183,22 +191,28 @@ impl Row {
         // Only pairs crossing the edges can have a surviving half. Inspect the
         // untouched neighbors after writing, preserving anchors and wrapping.
         if col > 0 && self.cells[col - 1].occupancy() == Occupancy::WideHead {
-            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+            self.cells[col - 1].set(" ", Occupancy::Single, pen);
         }
 
         if let Some(tail) = self.cells.get_mut(col + written) {
             if tail.occupancy() == Occupancy::WideTail {
-                tail.set(' ', Occupancy::Single, pen);
+                tail.set(" ", Occupancy::Single, pen);
             }
         }
 
         written
     }
 
-    /// Inserts one character, returning its cell width. Rejection leaves the
-    /// entire row untouched, including anchor registrations and wrapping.
+    #[cfg(test)]
     pub(crate) fn insert_char(&mut self, col: usize, ch: char, pen: Pen) -> Option<usize> {
-        let char_width = self.char_display_width(ch);
+        let mut buf = [0u8; 4];
+        self.insert_cluster(col, ch.encode_utf8(&mut buf), pen)
+    }
+
+    /// Inserts one grapheme cluster, returning its cell width. Rejection leaves
+    /// the entire row untouched, including anchor registrations and wrapping.
+    pub(crate) fn insert_cluster(&mut self, col: usize, cluster: &str, pen: Pen) -> Option<usize> {
+        let char_width = self.cluster_display_width(cluster);
         let width = char_width.as_usize();
 
         if width > self.len().saturating_sub(col) {
@@ -210,12 +224,12 @@ impl Row {
         // Insertion repairs wide pairs and leaves a gap of single-width blanks.
         match char_width {
             CharWidth::Single => {
-                self.cells[col].set(ch, Occupancy::Single, pen);
+                self.cells[col].set(cluster, Occupancy::Single, pen);
             }
 
             CharWidth::Double => {
-                self.cells[col].set(ch, Occupancy::WideHead, pen);
-                self.cells[col + 1].set(' ', Occupancy::WideTail, pen);
+                self.cells[col].set(cluster, Occupancy::WideHead, pen);
+                self.cells[col + 1].set(" ", Occupancy::WideTail, pen);
             }
         }
 
@@ -249,8 +263,8 @@ impl Row {
 
         if cur_cell.occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != col - 1);
-            cur_cell.set(' ', Occupancy::Single, pen);
-            self.cells[col - 1].set(' ', Occupancy::Single, pen);
+            cur_cell.set(" ", Occupancy::Single, pen);
+            self.cells[col - 1].set(" ", Occupancy::Single, pen);
         }
 
         self.cells[col..].rotate_right(n);
@@ -259,12 +273,12 @@ impl Row {
 
         if cur_cell.occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != width - 1);
-            cur_cell.set(' ', Occupancy::Single, pen);
+            cur_cell.set(" ", Occupancy::Single, pen);
 
             self.cells
                 .last_mut()
                 .unwrap()
-                .set(' ', Occupancy::Single, pen);
+                .set(" ", Occupancy::Single, pen);
         }
 
         // Preserve anchors at the insertion boundary when filling the gap.
@@ -290,7 +304,7 @@ impl Row {
 
         if self.cells[col].occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != col - 1);
-            self.cells[col - 1].set(' ', Occupancy::Single, *pen);
+            self.cells[col - 1].set(" ", Occupancy::Single, *pen);
         }
 
         self.cells[col..].rotate_left(n);
@@ -299,7 +313,7 @@ impl Row {
 
         if cur_cell.occupancy() == Occupancy::WideTail {
             self.marks.retain(|mark| mark.col != col);
-            cur_cell.set(' ', Occupancy::Single, *pen);
+            cur_cell.set(" ", Occupancy::Single, *pen);
         }
 
         let fill_start = self.cells.len() - n;
@@ -338,7 +352,7 @@ impl Row {
             if other[needed].occupancy() == Occupancy::WideTail {
                 needed -= 1;
                 let pen = self.cells[self.len() - 1].pen();
-                self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
+                self.cells.push(Cell::new(" ", Occupancy::Single, *pen));
             }
 
             let rest_marks = other.split_marks(needed);
@@ -467,7 +481,7 @@ impl Row {
 
             if wide_char_boundary {
                 let pen = self.cells[self.cells.len() - 1].pen();
-                self.cells.push(Cell::new(' ', Occupancy::Single, *pen));
+                self.cells.push(Cell::new(" ", Occupancy::Single, *pen));
             }
 
             self.wraps_to_next = true;
@@ -587,13 +601,10 @@ impl Row {
     }
 
     pub fn chars(&self) -> impl Iterator<Item = char> + '_ {
-        self.cells.iter().filter_map(|c| {
-            if c.occupancy() != Occupancy::WideTail {
-                Some(c.char())
-            } else {
-                None
-            }
-        })
+        self.cells
+            .iter()
+            .filter(|cell| cell.occupancy() != Occupancy::WideTail)
+            .flat_map(|cell| cell.contents().chars())
     }
 
     pub fn text(&self) -> String {
@@ -620,11 +631,11 @@ impl Row {
         self.cells.iter().all(|c| c.is_default())
     }
 
-    fn char_display_width(&self, ch: char) -> CharWidth {
-        if ch <= '\u{7e}' || ch.width().unwrap_or(1) != 2 {
-            CharWidth::Single
-        } else {
+    fn cluster_display_width(&self, cluster: &str) -> CharWidth {
+        if display_width(cluster) == 2 {
             CharWidth::Double
+        } else {
+            CharWidth::Single
         }
     }
 }
@@ -693,6 +704,12 @@ impl Index<usize> for Row {
 
     fn index(&self, index: usize) -> &Self::Output {
         &self.cells[index]
+    }
+}
+
+impl IndexMut<usize> for Row {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        &mut self.cells[index]
     }
 }
 
@@ -893,13 +910,13 @@ mod tests {
         assert_eq!(
             row.cells(),
             &[
-                Cell::new('a', Occupancy::Single, old_pen),
-                Cell::new('語', Occupancy::WideHead, pen),
-                Cell::new(' ', Occupancy::WideTail, pen),
-                Cell::new('界', Occupancy::WideHead, old_pen),
-                Cell::new(' ', Occupancy::WideTail, old_pen),
-                Cell::new('b', Occupancy::Single, old_pen),
-                Cell::new('c', Occupancy::Single, old_pen),
+                Cell::new("a", Occupancy::Single, old_pen),
+                Cell::new("語", Occupancy::WideHead, pen),
+                Cell::new(" ", Occupancy::WideTail, pen),
+                Cell::new("界", Occupancy::WideHead, old_pen),
+                Cell::new(" ", Occupancy::WideTail, old_pen),
+                Cell::new("b", Occupancy::Single, old_pen),
+                Cell::new("c", Occupancy::Single, old_pen),
             ]
         );
     }
@@ -981,15 +998,15 @@ mod tests {
         let pen = Pen::default();
 
         let cells = [
-            Cell::new('0', Occupancy::Single, pen),
-            Cell::new('a', Occupancy::Single, pen),
-            Cell::new('b', Occupancy::Single, pen),
-            Cell::new('C', Occupancy::Single, pen),
-            Cell::new('D', Occupancy::Single, pen),
-            Cell::new('E', Occupancy::Single, pen),
-            Cell::new('1', Occupancy::Single, pen),
-            Cell::new('F', Occupancy::Single, pen),
-            Cell::new('g', Occupancy::Single, pen),
+            Cell::new("0", Occupancy::Single, pen),
+            Cell::new("a", Occupancy::Single, pen),
+            Cell::new("b", Occupancy::Single, pen),
+            Cell::new("C", Occupancy::Single, pen),
+            Cell::new("D", Occupancy::Single, pen),
+            Cell::new("E", Occupancy::Single, pen),
+            Cell::new("1", Occupancy::Single, pen),
+            Cell::new("F", Occupancy::Single, pen),
+            Cell::new("g", Occupancy::Single, pen),
         ];
 
         let chunks: Vec<Vec<Cell>> = Chunks::new(cells.iter(), |c1, c2| {

@@ -4,11 +4,12 @@ use crate::ansi::{
     SgrOp, SgrOps, TbcScope,
 };
 use crate::buffer::{Buffer, EraseMode};
-use crate::cell::{Cell, Occupancy};
+use crate::cell::{Cell, Occupancy, clusters_form_one_grapheme, display_width};
 use crate::charset::Charset;
 use crate::pen::{Intensity, Pen};
 use crate::row::Row;
 use crate::tabs::Tabs;
+use alloc::borrow::ToOwned as _;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::cmp::Ordering;
@@ -47,6 +48,9 @@ pub(crate) struct Engine {
     bottom_margin: usize,
     primary_saved_cursor: Option<SavedCursorState>,
     alternate_saved_cursor: Option<SavedCursorState>,
+    // The previous function printed a graphic character, so a following
+    // combining mark or ZWJ sequence can extend that cell.
+    last_was_print: bool,
 }
 
 /// Identifies the primary or alternate screen.
@@ -237,6 +241,7 @@ impl Engine {
             bottom_margin: (rows - 1),
             primary_saved_cursor: None,
             alternate_saved_cursor: None,
+            last_was_print: false,
         }
     }
 
@@ -313,6 +318,10 @@ impl Engine {
 
     pub fn execute_with(&mut self, function: &Function<'_>, observer: &mut impl Effects) {
         use Function::*;
+
+        if !matches!(function, Print(_)) {
+            self.last_was_print = false;
+        }
 
         match *function {
             Bs => self.bs(),
@@ -604,6 +613,7 @@ impl Engine {
     // resizing
 
     pub fn resize_with(&mut self, cols: usize, rows: usize, observer: &mut impl Effects) {
+        self.last_was_print = false;
         debug_assert!(cols > 0 && rows > 0, "terminal size must be at least 1x1");
 
         if (cols, rows) == self.size() {
@@ -815,6 +825,17 @@ impl Engine {
             // A lone ASCII character cannot amortize the batch setup. In
             // particular, keep CJK interspersed with spaces on the char path.
             if matches!(ch, ' '..='~') && matches!(chars.as_str().as_bytes(), [b' '..=b'~', ..]) {
+                // ASCII never extends an ASCII cell, but it can complete a
+                // preceding prepend mark. Match the per-character path.
+                if self.previous_cluster_is_non_ascii() {
+                    let mut buf = [0u8; 4];
+
+                    if self.try_compose(ch.encode_utf8(&mut buf)) {
+                        dirty.end = self.cursor.row + 1;
+                        continue;
+                    }
+                }
+
                 let pos = (self.cursor.col, self.cursor.row);
                 let pen = self.pen;
 
@@ -825,6 +846,7 @@ impl Engine {
                 if written > 0 {
                     chars = text[written..].chars();
                     self.advance_cursor_after_print(written);
+                    self.last_was_print = true;
                     dirty.end = self.cursor.row + 1;
                     continue;
                 }
@@ -855,13 +877,75 @@ impl Engine {
     #[inline(always)] // Avoid measurable per-character call overhead.
     fn print_char(&mut self, ch: char, dirty: &mut Range<usize>) {
         let ch = self.charsets[self.active_charset].translate(ch);
+        let mut buf = [0u8; 4];
+        let cluster = ch.encode_utf8(&mut buf);
 
-        match self.try_print(ch) {
+        if self.try_compose(cluster) {
+            dirty.end = self.cursor.row + 1;
+            return;
+        }
+
+        self.place_cluster(cluster, dirty);
+        self.last_was_print = true;
+    }
+
+    fn previous_cluster_is_non_ascii(&self) -> bool {
+        if !self.last_was_print || self.cursor.col == 0 {
+            return false;
+        }
+
+        let row = self.cursor.row;
+        let mut col = self.cursor.col - 1;
+
+        while col > 0 && self.active_buffer()[(col, row)].occupancy() == Occupancy::WideTail {
+            col -= 1;
+        }
+
+        self.active_buffer()[(col, row)]
+            .contents()
+            .bytes()
+            .any(|byte| !matches!(byte, b' '..=b'~'))
+    }
+
+    fn try_compose(&mut self, cluster: &str) -> bool {
+        if !self.last_was_print || cluster.is_empty() || self.cursor.col == 0 {
+            return false;
+        }
+
+        let row = self.cursor.row;
+        let mut col = self.cursor.col - 1;
+
+        while col > 0 && self.active_buffer()[(col, row)].occupancy() == Occupancy::WideTail {
+            col -= 1;
+        }
+
+        let existing = self.active_buffer()[(col, row)].contents();
+
+        if !clusters_form_one_grapheme(existing, cluster) {
+            return false;
+        }
+
+        let mut combined = String::with_capacity(existing.len() + cluster.len());
+        combined.push_str(existing);
+        combined.push_str(cluster);
+
+        if display_width(&combined) != self.active_buffer()[(col, row)].width() as usize {
+            return false;
+        }
+
+        let occupancy = self.active_buffer()[(col, row)].occupancy();
+        let pen = *self.active_buffer()[(col, row)].pen();
+        self.active_buffer_mut()[row][col].set(&combined, occupancy, pen);
+        true
+    }
+
+    fn place_cluster(&mut self, cluster: &str, dirty: &mut Range<usize>) {
+        match self.try_print(cluster) {
             Some(width) => self.advance_cursor_after_print(width),
 
-            None if self.auto_wrap_mode => self.wrap_and_print_at_row_start(ch, dirty),
+            None if self.auto_wrap_mode => self.wrap_and_print_at_row_start(cluster, dirty),
 
-            None => self.print_at_row_end(ch),
+            None => self.print_at_row_end(cluster),
         }
 
         dirty.end = self.cursor.row + 1;
@@ -870,7 +954,7 @@ impl Engine {
     /// Attempts placement at the cursor without moving it. A rejected placement
     /// leaves all state untouched; wrapping is the caller's responsibility.
     #[inline]
-    fn try_print(&mut self, ch: char) -> Option<usize> {
+    fn try_print(&mut self, cluster: &str) -> Option<usize> {
         if self.cursor.col >= self.cols {
             return None;
         }
@@ -879,9 +963,9 @@ impl Engine {
         let pen = self.pen;
 
         if self.insert_mode {
-            self.active_buffer_mut().insert_char(pos, ch, pen)
+            self.active_buffer_mut().insert_cluster(pos, cluster, pen)
         } else {
-            self.active_buffer_mut().replace_char(pos, ch, pen)
+            self.active_buffer_mut().replace_cluster(pos, cluster, pen)
         }
     }
 
@@ -894,7 +978,7 @@ impl Engine {
     }
 
     #[inline]
-    fn wrap_and_print_at_row_start(&mut self, ch: char, dirty: &mut Range<usize>) {
+    fn wrap_and_print_at_row_start(&mut self, cluster: &str, dirty: &mut Range<usize>) {
         let row_index = self.cursor.row;
         let pen = self.pen;
 
@@ -911,21 +995,21 @@ impl Engine {
 
         self.cursor.col = 0;
 
-        if let Some(width) = self.try_print(ch) {
+        if let Some(width) = self.try_print(cluster) {
             self.cursor.col = width;
         }
     }
 
-    fn print_at_row_end(&mut self, ch: char) {
+    fn print_at_row_end(&mut self, cluster: &str) {
         // With autowrap disabled, back up enough to fit the character and leave
         // the cursor at the final column.
         if self.cursor.col > 0 {
             self.cursor.col -= 1;
-            let printed = self.try_print(ch).is_some();
+            let printed = self.try_print(cluster).is_some();
 
             if !printed && self.cursor.col > 0 {
                 self.cursor.col -= 1;
-                self.try_print(ch);
+                self.try_print(cluster);
             }
         }
 
@@ -1240,8 +1324,16 @@ impl Engine {
                 col -= 1;
             }
 
-            let char = self.active_buffer()[(col, row_index)].char();
-            self.print_chars(core::iter::repeat_n(char, n), observer);
+            let cluster = self.active_buffer()[(col, row_index)].contents().to_owned();
+            let mut dirty = self.cursor.row..self.cursor.row;
+
+            for _ in 0..n {
+                self.place_cluster(&cluster, &mut dirty);
+            }
+
+            if !dirty.is_empty() {
+                observer.dirty(dirty);
+            }
         }
     }
 
@@ -1650,8 +1742,23 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
     let cutoff = buffer.occupied_prefix_len(false);
     let last = buffer.height - 1;
     let mut pen = Pen::default();
+    let mut prev_wrap_cluster: Option<String> = None;
 
     for (i, row) in buffer.visible_rows().take(cutoff).enumerate() {
+        if let Some(prev) = prev_wrap_cluster.take() {
+            if let Some(first) = row
+                .cells()
+                .iter()
+                .find(|cell| cell.occupancy() != Occupancy::WideTail)
+            {
+                // A soft wrap prints the next row immediately after this one.
+                // Break composition when that would glue separate cells together.
+                if clusters_form_one_grapheme(&prev, first.contents()) {
+                    funs.push(to_sgr(&pen));
+                }
+            }
+        }
+
         // Wide tails share their head's pen, so grouping before filtering tails
         // in dump_cells preserves the same style boundaries.
         for cells in row.cells().chunk_by(|c1, c2| c1.pen() == c2.pen()) {
@@ -1663,10 +1770,17 @@ fn dump_buffer(buffer: &Buffer, funs: &mut Vec<Function<'static>>) {
                 pen = *cells[0].pen();
             }
 
-            dump_cells(cells, funs);
+            dump_cells(cells, &pen, funs);
         }
 
-        if i < last && !row.wraps_to_next() {
+        if row.wraps_to_next() {
+            prev_wrap_cluster = row
+                .cells()
+                .iter()
+                .rev()
+                .find(|cell| cell.occupancy() != Occupancy::WideTail)
+                .map(|cell| cell.contents().to_owned());
+        } else if i < last {
             funs.push(Function::Cr);
             funs.push(Function::Lf);
         }
@@ -1759,31 +1873,67 @@ fn push_attr_diff(ops: &mut SgrOps, from: bool, to: bool, set: SgrOp, reset: Sgr
     }
 }
 
-fn dump_cells(cells: &[Cell], funs: &mut Vec<Function<'static>>) {
-    let mut chars = cells
+fn dump_cells(cells: &[Cell], pen: &Pen, funs: &mut Vec<Function<'static>>) {
+    let visible: Vec<&Cell> = cells
         .iter()
         .filter(|cell| cell.occupancy() != Occupancy::WideTail)
-        .map(Cell::char)
-        .peekable();
-
+        .collect();
     let mut text = String::new();
+    // Last cluster appended to `text`. Empty when the pending run was flushed.
+    let mut pending_last = String::new();
+    let mut index = 0;
 
-    while let Some(ch) = chars.next() {
+    while index < visible.len() {
+        let cluster = visible[index].contents();
         let mut run_len = 1;
 
-        while chars.next_if_eq(&ch).is_some() {
+        while index + run_len < visible.len() && visible[index + run_len].contents() == cluster {
             run_len += 1;
         }
 
-        if run_len > 5 {
-            text.push(ch);
+        if !pending_last.is_empty() && clusters_form_one_grapheme(&pending_last, cluster) {
+            funs.push(Function::Print(core::mem::take(&mut text).into()));
+            pending_last.clear();
+            funs.push(to_sgr(pen));
+        }
+
+        let merges_within = run_len > 1 && clusters_form_one_grapheme(cluster, cluster);
+
+        if run_len > 5 && !merges_within {
+            text.push_str(cluster);
+            pending_last.clear();
             funs.push(Function::Print(core::mem::take(&mut text).into()));
             funs.push(Function::Rep(as_u16(run_len - 1)));
+        } else if merges_within {
+            if !text.is_empty() {
+                funs.push(Function::Print(core::mem::take(&mut text).into()));
+                pending_last.clear();
+            }
+
+            for n in 0..run_len {
+                funs.push(Function::Print(cluster.to_owned().into()));
+
+                if n + 1 < run_len {
+                    funs.push(to_sgr(pen));
+                }
+            }
+
+            // The last copy was a print, so a following cluster would extend it.
+            if index + run_len < visible.len()
+                && clusters_form_one_grapheme(cluster, visible[index + run_len].contents())
+            {
+                funs.push(to_sgr(pen));
+            }
         } else {
             for _ in 0..run_len {
-                text.push(ch);
+                text.push_str(cluster);
             }
+
+            pending_last.clear();
+            pending_last.push_str(cluster);
         }
+
+        index += run_len;
     }
 
     if !text.is_empty() {
@@ -2809,11 +2959,11 @@ mod tests {
             let width = cell.width() as usize;
 
             if offset + width <= cursor_col {
-                row_text.push(cell.char());
+                row_text.push_str(cell.contents());
                 offset += width;
             } else {
                 row_text.push('|');
-                row_text.push(cell.char());
+                row_text.push_str(cell.contents());
                 offset += width;
                 break;
             }
@@ -2823,7 +2973,9 @@ mod tests {
             row_text.push('|');
         }
 
-        row_text.extend(cells.map(|c| c.char()));
+        for cell in cells {
+            row_text.push_str(cell.contents());
+        }
         row_texts.push(row_text);
         row_texts.extend(view.map(|row| row.text()));
 
@@ -4069,7 +4221,7 @@ mod tests {
         let cursor = term.cursor();
         let head_pos = term.resolve(&head);
         let tail_pos = term.resolve(&tail);
-        assert_eq!(term.engine.try_print('界'), None);
+        assert_eq!(term.engine.try_print("界"), None);
         assert_eq!(term.screen().row(0).unwrap(), &before);
         assert_eq!(term.cursor(), cursor);
         assert_eq!(term.resolve(&head), head_pos);

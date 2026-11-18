@@ -80,6 +80,15 @@ impl Buffer {
         self[row_index].replace_char(col, ch, pen)
     }
 
+    pub fn replace_cluster(
+        &mut self,
+        (col, row_index): VisualPosition,
+        cluster: &str,
+        pen: Pen,
+    ) -> Option<usize> {
+        self[row_index].replace_cluster(col, cluster, pen)
+    }
+
     #[inline]
     pub fn replace_ascii_prefix(
         &mut self,
@@ -90,13 +99,13 @@ impl Buffer {
         self[row_index].replace_ascii_prefix(col, text, pen)
     }
 
-    pub fn insert_char(
+    pub fn insert_cluster(
         &mut self,
         (col, row_index): VisualPosition,
-        ch: char,
+        cluster: &str,
         pen: Pen,
     ) -> Option<usize> {
-        self[row_index].insert_char(col, ch, pen)
+        self[row_index].insert_cluster(col, cluster, pen)
     }
 
     pub fn wrap_to_next_row(&mut self, row_index: usize) {
